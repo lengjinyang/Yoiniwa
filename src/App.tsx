@@ -1401,6 +1401,7 @@ export default function App() {
         scene={history.scene}
         viewport={history.scene.viewport}
         selectedIds={selectedIds}
+        projectEpoch={history.projectEpoch}
         onSelectionChange={(ids) => { setSelectedIds(ids); setSelectedAnnotationIds([]); setSelectedGroupId(undefined); }}
         onItemsChanged={commitItemChanges}
         onViewportCommit={history.updateViewport}

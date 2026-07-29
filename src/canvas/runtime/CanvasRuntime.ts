@@ -8,6 +8,7 @@ import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
 import { SelectionController } from '../selection/SelectionController';
 import type { ImageItem } from '../../types';
+import { CommandManager } from '../commands/CommandManager';
 
 export interface CanvasRuntimeOptions {
   background: string;
@@ -26,6 +27,8 @@ export class CanvasRuntime {
   private started = false;
   private sceneStore?: SceneStore;
   private selectionController?: SelectionController;
+  private readonly commands = new CommandManager();
+  private projectEpoch = 0;
 
   constructor(private readonly container: HTMLElement, private readonly options: CanvasRuntimeOptions) {
     this.camera = new Camera(options.viewport);
@@ -55,7 +58,14 @@ export class CanvasRuntime {
         this.selectionController?.refresh();
         this.scheduleRender();
       },
-      commit: (changes) => this.options.onItemsChanged?.(changes),
+      commit: (changes) => {
+        const scene = this.commands.commitImageChanges(changes);
+        if (scene) {
+          this.sceneStore?.replace(scene);
+          this.renderer.setScene(scene);
+        }
+        this.options.onItemsChanged?.(changes);
+      },
       selectionChanged: (ids) => this.options.onSelectionChange?.(ids),
       drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
@@ -71,11 +81,17 @@ export class CanvasRuntime {
   setViewport(viewport: Viewport) { this.camera.set(viewport); this.scheduleRender(); }
   setScene(scene: Scene) {
     if (this.sceneStore) this.sceneStore.replace(scene); else this.sceneStore = new SceneStore(scene);
+    this.commands.sync(scene);
     this.renderer.setScene(scene);
     this.selectionController?.refresh();
     this.scheduleRender();
   }
   setSelection(ids: string[]) { this.selectionController?.setSelection(ids); }
+  setProjectEpoch(epoch: number) {
+    if (epoch === this.projectEpoch) return;
+    this.projectEpoch = epoch;
+    this.commands.reset(this.sceneStore?.snapshot());
+  }
   setBackground(background: string) { this.renderer.setBackground(background); }
   getViewport() { return this.camera.snapshot(); }
 

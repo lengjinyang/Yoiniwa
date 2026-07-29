@@ -5,8 +5,8 @@
 | 基线冻结与全面审计 | 已完成 | `39afdf5`, `6baf834` | Legacy smoke 已通过，五份迁移文档已建立 |
 | 1. Pixi Runtime 与 Camera | 已完成 | `5c47eae` | typecheck/lint，51 files/194 tests，production build |
 | 2. Scene 与真实图片 | 已完成 | `b961ba5` | typecheck/lint，53 files/196 tests，production build |
-| 3. 选择与变换 | 已完成 | 待本阶段提交 | typecheck/lint，55 files/199 tests，production build |
-| 4. Command/Undo/Redo | 未开始 | — | — |
+| 3. 选择与变换 | 已完成 | `71cab90` | typecheck/lint，55 files/199 tests，production build |
+| 4. Command/Undo/Redo | 已完成 | 待本阶段提交 | typecheck/lint，56 files/201 tests，production build |
 | 5. 图片流送与缓存 | 未开始 | — | — |
 | 6. 剩余功能 | 未开始 | — | — |
 | 7. 工程兼容 | 未开始 | — | — |
@@ -40,3 +40,11 @@
 - 支持单选、修饰键增减选、空白取消、框选、锁定对象不变换，以及多对象移动。
 - Pixi overlay 绘制选择边框、四角缩放点、旋转点和框选矩形；所有控制点保持屏幕恒定尺寸。
 - 移动/缩放/旋转在 Runtime SceneStore 内逐帧预览，pointerup 仅向 React 提交一次变更。
+
+## 阶段 4 结果
+
+- 新增不依赖 React 的 `CanvasCommand`、`CommandStack`、`CommandManager` 与 `ImageTransformCommand`。
+- 手势结束时用持久场景快照构造 before/after；逐帧 preview 从不进入 undo 栈。
+- Undo/Redo 执行不可变场景替换，并在执行新命令后清空 redo 分支。
+- 工程 epoch 改变时清空 Runtime 命令历史，防止跨工程撤销。
+- 应用层现有 history 仍负责项目级快捷键与保存 dirty 状态；新画布内部所有变换先经过 CommandManager 再提交应用快照。

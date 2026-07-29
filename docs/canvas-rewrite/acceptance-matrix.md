@@ -21,7 +21,7 @@
 | 框选/自动平移 | CanvasBoard | 可见相交节点、边缘平移 | box selection | unit + smoke | 进行中 | 框选已实现，边缘自动平移待阶段 6 |
 | 重叠命中 | imageIndex/zIndex | 返回最上层可交互节点 | hit test | unit | 已实现 | 已验收 |
 | 控制点/多对象变换 | Konva Transformer | bounds、pivot 和锁定正确 | overlay/transform | unit + smoke | 已实现 | unit 已验收，visual 待最终入口 |
-| Undo/Redo/合并 | useSceneHistory | 一次手势一条历史 | command stack | unit | 待迁移 | 待验收 |
+| Undo/Redo/合并 | useSceneHistory | 一次手势一条历史 | command stack | unit | 已实现 | 已验收（手势单命令、undo/redo、redo 分支清理） |
 | 分组/嵌套/解散 | GroupFrame/App | 成员和 bounds 正确 | groups/commands | unit + smoke | 待迁移 | 待验收 |
 | 分组样式/折叠/隐藏/锁定 | GroupFrame/Header | 外观和命中正确 | group renderer | unit + visual | 待迁移 | 待验收 |
 | 标注四工具/擦除 | AnnotationShape | 绘制、选择、移动、删除 | annotations | unit + smoke | 待迁移 | 待验收 |
