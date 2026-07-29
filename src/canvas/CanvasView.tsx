@@ -1,14 +1,15 @@
 import { useEffect, useRef } from 'react';
-import type { Viewport } from '../types';
+import type { Scene, Viewport } from '../types';
 import { CanvasRuntime } from './runtime/CanvasRuntime';
 
 interface CanvasViewProps {
   background: string;
+  scene: Scene;
   viewport: Viewport;
   onViewportCommit?(viewport: Viewport): void;
 }
 
-export function CanvasView({ background, viewport, onViewportCommit }: CanvasViewProps) {
+export function CanvasView({ background, scene, viewport, onViewportCommit }: CanvasViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<CanvasRuntime | undefined>(undefined);
   const initialOptionsRef = useRef({ background, viewport });
@@ -33,6 +34,7 @@ export function CanvasView({ background, viewport, onViewportCommit }: CanvasVie
   }, []); // Runtime owns high-frequency state for its complete mounted lifetime.
 
   useEffect(() => { runtimeRef.current?.setViewport(viewport); }, [viewport]);
+  useEffect(() => { runtimeRef.current?.setScene(scene); }, [scene]);
   useEffect(() => { runtimeRef.current?.setBackground(background); }, [background]);
   return <div ref={containerRef} className="canvas-runtime-root" data-canvas-runtime="pixi-v8" />;
 }
