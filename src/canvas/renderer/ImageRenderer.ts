@@ -1,30 +1,37 @@
-import { Assets, ColorMatrixFilter, Rectangle, Sprite, Texture, type Container } from 'pixi.js';
-import type { ImageItem, Scene } from '../../types';
-import { resolveCanvasImageUrl } from '../assets/AssetPathResolver';
+import { ColorMatrixFilter, Rectangle, Sprite, Texture, type Container } from 'pixi.js';
+import type { ImageItem, Scene, Viewport } from '../../types';
+import { imageRequestKey } from '../../shared/imagePipelineConfig';
+import { resolveCanvasMipUrl } from '../assets/AssetPathResolver';
+import { desiredImageMip, mipWithHysteresis, requiredImageEdge, type MipSelectionState } from '../textures/MipSelector';
+import type { GpuTextureEntry } from '../textures/GpuTextureCache';
+import type { TextureManager } from '../textures/TextureManager';
 import { RenderObjectRegistry } from './RenderObjectRegistry';
+import { TileRenderer } from './TileRenderer';
+import type { SceneBounds } from '../scene/SceneNode';
 
+interface PendingSwap { entry: GpuTextureEntry; mip: number; token: number }
 interface ImageRenderObject {
   sprite: Sprite;
-  url?: string;
+  grayscale: ColorMatrixFilter;
   loadToken: number;
+  targetKey?: string;
+  textureKey?: string;
+  currentMip?: number;
+  mipState: MipSelectionState;
   frameTexture?: Texture;
+  pendingSwap?: PendingSwap;
   destroy(): void;
 }
 
 function cropFrame(textureWidth: number, textureHeight: number, item: ImageItem) {
-  const sourceWidth = Math.max(1, item.naturalWidth);
-  const sourceHeight = Math.max(1, item.naturalHeight);
-  const scaleX = textureWidth / sourceWidth;
-  const scaleY = textureHeight / sourceHeight;
-  return new Rectangle(
-    item.crop.x * scaleX,
-    item.crop.y * scaleY,
-    Math.max(1, item.crop.width * scaleX),
-    Math.max(1, item.crop.height * scaleY),
-  );
+  const scaleX = textureWidth / Math.max(1, item.naturalWidth);
+  const scaleY = textureHeight / Math.max(1, item.naturalHeight);
+  return new Rectangle(item.crop.x * scaleX, item.crop.y * scaleY,
+    Math.max(1, item.crop.width * scaleX), Math.max(1, item.crop.height * scaleY));
 }
 
-function updateSprite(sprite: Sprite, item: ImageItem) {
+function updateSprite(object: ImageRenderObject, item: ImageItem) {
+  const { sprite } = object;
   sprite.visible = !item.hidden;
   sprite.position.set(item.x + item.width / 2, item.y + item.height / 2);
   sprite.anchor.set(0.5);
@@ -34,69 +41,155 @@ function updateSprite(sprite: Sprite, item: ImageItem) {
   sprite.rotation = item.rotation * Math.PI / 180;
   sprite.alpha = item.opacity;
   sprite.zIndex = item.zIndex;
-  if (item.grayscale) {
-    const grayscale = new ColorMatrixFilter();
-    grayscale.grayscale(1, false);
-    sprite.filters = [grayscale];
-  } else sprite.filters = [];
+  sprite.filters = item.grayscale ? [object.grayscale] : [];
 }
 
 export class ImageRenderer {
   private readonly objects = new RenderObjectRegistry<ImageRenderObject>();
   private scene?: Scene;
+  private readonly items = new Map<string, ImageItem>();
+  private readonly tiles: TileRenderer;
 
-  constructor(private readonly layer: Container, private readonly requestRender: () => void) {
+  constructor(private readonly layer: Container, private readonly textures: TextureManager, private readonly requestRender: () => void) {
     layer.sortableChildren = true;
+    this.tiles = new TileRenderer(layer, textures, requestRender);
   }
 
   sync(scene: Scene) {
     this.scene = scene;
-    const retained = new Set(scene.items.map((item) => item.id));
+    this.items.clear();
+    scene.items.forEach((item) => this.items.set(item.id, item));
+    this.tiles.sync(scene);
+    const retained = new Set(this.items.keys());
     this.objects.retain(retained);
-    scene.items.forEach((item) => this.syncItem(scene, item));
+    scene.items.forEach((item) => this.syncItem(item));
   }
 
-  private syncItem(scene: Scene, item: ImageItem) {
+  updateQuality(options: {
+    viewport: Viewport; visible: ReadonlySet<string>; prefetch: ReadonlySet<string>;
+    visibleBounds: SceneBounds; prefetchBounds: SceneBounds;
+    devicePixelRatio: number; cameraMoving: boolean; now: number;
+  }) {
+    if (!this.scene) return;
+    this.objects.forEach((object, id) => {
+      const item = this.items.get(id);
+      if (!item || item.hidden) return;
+      const isVisible = options.visible.has(id);
+      const isPrefetch = options.prefetch.has(id);
+      object.sprite.renderable = isVisible || isPrefetch;
+      if (!isVisible && !isPrefetch) { this.releaseObjectTextures(object); this.tiles.release(id); return; }
+      const desired = desiredImageMip(item, options.viewport, options.devicePixelRatio);
+      const required = requiredImageEdge(item, options.viewport, options.devicePixelRatio);
+      const selected = mipWithHysteresis({
+        desired, required, state: object.mipState, now: options.now,
+        cameraMoving: options.cameraMoving && !isVisible,
+      });
+      object.mipState = { ...selected.state, displayedMip: object.currentMip };
+      this.requestMip(object, item, selected.mip, isVisible ? 100 : 20);
+      this.tiles.update(item, required, isVisible ? options.visibleBounds : options.prefetchBounds, isVisible ? 120 : 15);
+    });
+  }
+
+  /** Called immediately before Pixi renders, so a completed upload never swaps mid-frame. */
+  commitPendingSwaps() {
+    this.objects.forEach((object, id) => {
+      const pending = object.pendingSwap;
+      const item = this.items.get(id);
+      if (!pending || !item || pending.token !== object.loadToken) return;
+      object.pendingSwap = undefined;
+      object.frameTexture?.destroy(false);
+      const source = pending.entry.texture.source;
+      const frame = new Texture({ source, frame: cropFrame(source.width, source.height, item) });
+      object.frameTexture = frame;
+      object.sprite.texture = frame;
+      const oldKey = object.textureKey;
+      object.textureKey = pending.entry.key;
+      object.currentMip = pending.mip;
+      object.mipState = { displayedMip: pending.mip };
+      object.targetKey = undefined;
+      updateSprite(object, item);
+      if (oldKey && oldKey !== object.textureKey) this.textures.release(oldKey);
+    });
+    this.tiles.commitPendingSwaps();
+  }
+
+  private syncItem(item: ImageItem) {
     let object = this.objects.get(item.id);
     if (!object) {
       const sprite = new Sprite(Texture.EMPTY);
+      const grayscale = new ColorMatrixFilter();
+      grayscale.grayscale(1, false);
+      const textures = this.textures;
       object = {
-        sprite, loadToken: 0,
+        sprite, grayscale, loadToken: 0, mipState: {},
         destroy() {
           this.loadToken += 1;
+          if (this.pendingSwap) textures.release(this.pendingSwap.entry.key);
+          if (this.textureKey) textures.release(this.textureKey);
           this.frameTexture?.destroy(false);
           this.sprite.destroy({ children: true, texture: false, textureSource: false });
+          this.grayscale.destroy();
         },
       };
       this.objects.set(item.id, object);
       this.layer.addChild(sprite);
     }
-    updateSprite(object.sprite, item);
-    const url = resolveCanvasImageUrl(scene, item, 'thumb1024');
-    if (!url || object.url === url) {
-      if (object.frameTexture) this.applyFrame(object, item, object.frameTexture.source);
-      return;
+    updateSprite(object, item);
+    if (object.frameTexture) {
+      const source = object.frameTexture.source;
+      object.frameTexture.destroy(false);
+      object.frameTexture = new Texture({ source, frame: cropFrame(source.width, source.height, item) });
+      object.sprite.texture = object.frameTexture;
+      updateSprite(object, item);
     }
-    object.url = url;
+  }
+
+  private requestMip(object: ImageRenderObject, item: ImageItem, mip: number, priority: number) {
+    if (!this.scene || !item.assetId) return;
+    const key = imageRequestKey(item.assetId, mip);
+    if (object.textureKey === key || object.targetKey === key) return;
+    const url = resolveCanvasMipUrl(this.scene, item, mip);
+    if (!url) return;
+    object.targetKey = key;
     const token = ++object.loadToken;
-    void Assets.load<Texture>(url).then((texture) => {
-      if (object?.loadToken !== token || object.url !== url) return;
-      const currentItem = this.scene?.items.find((candidate) => candidate.id === item.id);
-      if (!currentItem) return;
-      this.applyFrame(object, currentItem, texture.source);
+    void this.textures.request({ assetId: item.assetId, mip, url, priority }).then((entry) => {
+      if (object.loadToken !== token || object.targetKey !== key || !this.items.has(item.id)) {
+        this.textures.release(entry.key);
+        return;
+      }
+      if (object.pendingSwap) this.textures.release(object.pendingSwap.entry.key);
+      object.pendingSwap = { entry, mip, token };
       this.requestRender();
     }).catch((error: unknown) => {
-      if (object?.loadToken === token) console.error(`Failed to load canvas image ${item.id}`, error);
+      if (object.loadToken === token) {
+        object.targetKey = undefined;
+        window.dispatchEvent(new CustomEvent('refcanvas-resource-error', { detail: { itemId: item.id, error } }));
+      }
     });
   }
 
-  private applyFrame(object: ImageRenderObject, item: ImageItem, source: Texture['source']) {
+  private releaseObjectTextures(object: ImageRenderObject) {
+    object.loadToken += 1;
+    object.targetKey = undefined;
+    if (object.pendingSwap) { this.textures.release(object.pendingSwap.entry.key); object.pendingSwap = undefined; }
+    if (object.textureKey) { this.textures.release(object.textureKey); object.textureKey = undefined; }
     object.frameTexture?.destroy(false);
-    const base = new Texture({ source, frame: cropFrame(source.width, source.height, item) });
-    object.frameTexture = base;
-    object.sprite.texture = base;
-    updateSprite(object.sprite, item);
+    object.frameTexture = undefined;
+    object.currentMip = undefined;
+    object.mipState = {};
+    object.sprite.texture = Texture.EMPTY;
   }
 
-  destroy() { this.objects.destroy(); }
+  displayedMips() {
+    const mips = new Set<number>();
+    this.objects.forEach((object) => { if (object.currentMip) mips.add(object.currentMip); });
+    return [...mips].sort((a, b) => a - b).join(', ') || '-';
+  }
+
+  invalidateTextures() {
+    this.tiles.invalidateAll();
+    this.objects.forEach((object) => this.releaseObjectTextures(object));
+  }
+
+  destroy() { this.tiles.destroy(); this.objects.destroy(); }
 }
