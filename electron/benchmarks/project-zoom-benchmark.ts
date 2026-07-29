@@ -62,10 +62,10 @@ async function takeHeapSnapshot(webContents, outputPath) {
 
 const rendererScript = `
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const host = () => document.querySelector('.canvas-host');
-  const stageCanvas = () => host()?.querySelector('.konvajs-content canvas');
+  const host = () => document.querySelector('canvas.pixi-canvas');
+  const stageCanvas = () => host();
   const numberAttr = (name) => Number(host()?.getAttribute(name) || 0);
-  const renderedViewportAttr = (name) => Number(host()?.querySelector('.pixel-render-plane')?.getAttribute(name) || 0);
+  const renderedViewportAttr = (name) => Number(host()?.getAttribute(name) || 0);
   const snapshot = () => ({
     ...(window.__refCanvasPerformanceSnapshot?.() || {}),
     backend: host()?.getAttribute('data-render-backend'),
@@ -336,7 +336,7 @@ export async function runProjectZoomBenchmark({ mainWindow, rootDir, app, projec
       await wait(100);
       const runAltPan = async (startOverride) => {
         const canvas = stageCanvas();
-        if (!canvas) throw new Error('Konva input canvas is unavailable');
+        if (!canvas) throw new Error('Pixi input canvas is unavailable');
         const start = startOverride || { x: Math.round(width * .48), y: Math.round(height * .52) };
         const before = snapshot();
         const intervals = [];

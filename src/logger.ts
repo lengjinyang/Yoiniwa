@@ -18,9 +18,7 @@ function rendererLog(level: LogLevel, event: string, data?: unknown) {
   else if (flushTimer === undefined) flushTimer = window.setTimeout(flush, 250);
 }
 
-export const rendererInfo = (event: string, data?: unknown) => rendererLog('info', event, data);
-export const rendererWarn = (event: string, data?: unknown) => rendererLog('warn', event, data);
-export const rendererError = (event: string, error: unknown, data?: unknown) => rendererLog('error', event, {
+const rendererError = (event: string, error: unknown, data?: unknown) => rendererLog('error', event, {
   ...(data && typeof data === 'object' ? data : {}),
   error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
 });

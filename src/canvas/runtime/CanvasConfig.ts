@@ -1,4 +1,4 @@
-export const CANVAS_DPR_MAX = 2;
+const CANVAS_DPR_MAX = 2;
 export const CAMERA_MIN_SCALE = 0.02;
 export const CAMERA_MAX_SCALE = 32;
 export const CAMERA_ZOOM_STEP = 1.12;

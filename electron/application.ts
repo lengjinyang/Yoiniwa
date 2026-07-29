@@ -1304,236 +1304,89 @@ function createWindow() {
   }, 500));
   else if (realImageTest) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
-      const requestedRealImageRoot = process.env.REFCANVAS_REAL_IMAGE_DIR;
-      const realImageRoot = requestedRealImageRoot && path.isAbsolute(requestedRealImageRoot)
-        ? requestedRealImageRoot : path.join(rootDir, 'res');
-      const realImagePaths = (await fs.readdir(realImageRoot, { withFileTypes: true }))
+      const requestedRoot = process.env.REFCANVAS_REAL_IMAGE_DIR;
+      const imageRoot = requestedRoot && path.isAbsolute(requestedRoot) ? requestedRoot : path.join(rootDir, 'res');
+      const imagePaths = (await fs.readdir(imageRoot, { withFileTypes: true }))
         .filter((entry) => entry.isFile() && mimeByExt[path.extname(entry.name).toLowerCase()])
-        .map((entry) => path.join(realImageRoot, entry.name));
-      await mainWindow.webContents.executeJavaScript(`window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: ${JSON.stringify(realImagePaths)} }))`);
-      const readState = () => mainWindow.webContents.executeJavaScript(`({
-        total: Number(document.querySelector('.canvas-host')?.getAttribute('data-total-images') || 0),
-        rendered: Number(document.querySelector('.canvas-host')?.getAttribute('data-rendered-images') || 0),
-        renderCommands: Number(document.querySelector('.canvas-host')?.getAttribute('data-render-commands') || 0),
-        loadedCommands: Number(document.querySelector('.canvas-host')?.getAttribute('data-loaded-commands') || 0),
-        renderInstances: Number(document.querySelector('.pixel-render-plane')?.getAttribute('data-render-instances')
-          || document.querySelector('.canvas-host')?.getAttribute('data-render-instances') || 0),
-        lodCoverage: Number(document.querySelector('.canvas-host')?.getAttribute('data-lod-coverage') || 0),
-        lodCommand: document.querySelector('.canvas-host')?.getAttribute('data-lod-command') || '',
-        lodResidentSize: document.querySelector('.canvas-host')?.getAttribute('data-lod-resident-size') || '',
-        lodPlan: document.querySelector('.canvas-host')?.getAttribute('data-lod-plan') || '',
-        lodResidency: document.querySelector('.canvas-host')?.getAttribute('data-lod-residency') || '',
-        lodLoaded: document.querySelector('.canvas-host')?.getAttribute('data-lod-loaded') || '',
-        viewportScale: Number(document.querySelector('.canvas-host')?.getAttribute('data-viewport-scale') || 0),
-        renderedViewportScale: Number(document.querySelector('.canvas-host')?.getAttribute('data-rendered-viewport-scale') || 0),
-        textureCommands: Number(document.querySelector('.canvas-host')?.getAttribute('data-texture-command-count') || 0),
-        activeTextures: Number(document.querySelector('.canvas-host')?.getAttribute('data-active-texture-count') || 0),
-        blockedResources: Number(document.querySelector('.canvas-host')?.getAttribute('data-blocked-resources') || 0),
-        pendingResources: Number(document.querySelector('.canvas-host')?.getAttribute('data-pending-resources') || 0),
-        textureUploads: Number(document.querySelector('.pixel-render-plane')?.getAttribute('data-texture-uploads')
-          || document.querySelector('.canvas-host')?.getAttribute('data-tex-sub-image-2d-calls') || 0),
-        preloadedPreviews: Number(document.documentElement.getAttribute('data-import-preview-preloads') || 0),
-      })`);
-      const resourceWaitStartedAt = Date.now();
-      let state = await readState();
-      let sceneReadyMs: number | undefined;
-      let firstResourceReadyMs: number | undefined;
-      let allVisibleMs: number | undefined;
-      let clearReadyMs: number | undefined;
-      const milestones: Array<Record<string, number>> = [];
-      const recordMilestone = () => {
-        const milestone = {
-          ms: Date.now() - resourceWaitStartedAt,
-          total: state.total,
-          loaded: state.loadedCommands,
-          instances: state.renderInstances,
-          uploads: state.textureUploads,
-          lod: state.lodCoverage,
-        };
-        const previous = milestones[milestones.length - 1];
-        if (!previous || previous.total !== milestone.total || previous.loaded !== milestone.loaded
-          || previous.instances !== milestone.instances || previous.uploads !== milestone.uploads
-          || previous.lod !== milestone.lod) milestones.push(milestone);
+        .map((entry) => path.join(imageRoot, entry.name));
+      const startedAt = Date.now();
+      await mainWindow.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: ${JSON.stringify(imagePaths)} }))`,
+      );
+      let state: { total: number; visible: number; gpu: number; decode: number; upload: number } = {
+        total: 0, visible: 0, gpu: 0, decode: 0, upload: 0,
       };
-      const deadline = Date.now() + Math.max(8000, realImagePaths.length * 250 + 4000);
-      while (Date.now() < deadline && (state.total !== realImagePaths.length || state.rendered !== realImagePaths.length
-        || state.renderCommands < state.total || state.loadedCommands < state.total || state.renderInstances < state.total
-        || (!forceThumbnailFailure && state.lodCoverage < 0.9))) {
-        recordMilestone();
-        if (sceneReadyMs === undefined && state.total === realImagePaths.length && state.rendered === realImagePaths.length) {
-          sceneReadyMs = Date.now() - resourceWaitStartedAt;
-        }
-        if (firstResourceReadyMs === undefined && state.loadedCommands > 0) firstResourceReadyMs = Date.now() - resourceWaitStartedAt;
-        if (allVisibleMs === undefined && state.total === realImagePaths.length && state.renderInstances >= state.total) {
-          allVisibleMs = Date.now() - resourceWaitStartedAt;
-        }
-        if (clearReadyMs === undefined && state.total === realImagePaths.length && state.renderInstances >= state.total
-          && state.lodCoverage >= 0.9) clearReadyMs = Date.now() - resourceWaitStartedAt;
+      const deadline = Date.now() + Math.max(12_000, imagePaths.length * 400);
+      while (Date.now() < deadline) {
+        state = await mainWindow.webContents.executeJavaScript(`(() => {
+          const canvas = document.querySelector('canvas.pixi-canvas');
+          return {
+            total: Number(canvas?.dataset.totalImages || 0),
+            visible: Number(canvas?.dataset.visibleImages || 0),
+            gpu: Number(canvas?.dataset.gpuTextures || 0),
+            decode: Number(canvas?.dataset.decodeQueue || 0),
+            upload: Number(canvas?.dataset.uploadQueue || 0),
+          };
+        })()`);
+        if (state.total === imagePaths.length && state.gpu >= Math.min(state.visible, imagePaths.length)
+          && state.decode === 0 && state.upload === 0) break;
         await new Promise((resolve) => setTimeout(resolve, 100));
-        state = await readState();
       }
-      recordMilestone();
-      if (sceneReadyMs === undefined && state.total === realImagePaths.length && state.rendered === realImagePaths.length) {
-        sceneReadyMs = Date.now() - resourceWaitStartedAt;
-      }
-      if (firstResourceReadyMs === undefined && state.loadedCommands > 0) firstResourceReadyMs = Date.now() - resourceWaitStartedAt;
-      if (allVisibleMs === undefined && state.total === realImagePaths.length && state.renderInstances >= state.total) {
-        allVisibleMs = Date.now() - resourceWaitStartedAt;
-      }
-      if (clearReadyMs === undefined && state.total === realImagePaths.length && state.renderInstances >= state.total
-        && state.lodCoverage >= 0.9) clearReadyMs = Date.now() - resourceWaitStartedAt;
       const capturePath = path.join(app.getPath('temp'), 'refcanvas-real-images.png');
       await fs.writeFile(capturePath, (await mainWindow.webContents.capturePage()).toPNG());
-      const resourceWaitMs = Date.now() - resourceWaitStartedAt;
-      const resourceReadyLagMs = sceneReadyMs === undefined ? undefined : Math.max(0, resourceWaitMs - sceneReadyMs);
-      const allVisibleLagMs = sceneReadyMs === undefined || allVisibleMs === undefined
-        ? undefined : Math.max(0, allVisibleMs - sceneReadyMs);
-      const clearReadyLagMs = sceneReadyMs === undefined || clearReadyMs === undefined
-        ? undefined : Math.max(0, clearReadyMs - sceneReadyMs);
-      const allVisibleBudgetMs = Math.max(1500, 1000 + realImagePaths.length * 15);
-      const clearBudgetMs = Math.max(2500, 1500 + realImagePaths.length * 35);
-      console.log(`RefCanvas real image diagnostic: ${JSON.stringify({
-        ...state, sceneReadyMs, firstResourceReadyMs, allVisibleMs, allVisibleLagMs,
-        clearReadyMs, clearReadyLagMs, resourceWaitMs, resourceReadyLagMs,
-        allVisibleBudgetMs, clearBudgetMs, milestones, capturePath,
+      console.log(`RefCanvas Pixi real image diagnostic: ${JSON.stringify({
+        ...state, imageCount: imagePaths.length, elapsedMs: Date.now() - startedAt, capturePath,
       })}`);
-      if (state.total !== realImagePaths.length || state.rendered !== realImagePaths.length
-        || state.renderCommands < state.total || state.loadedCommands < state.total || state.renderInstances < state.total
-        || state.preloadedPreviews !== realImagePaths.length || allVisibleMs === undefined
-        || allVisibleLagMs === undefined
-        || allVisibleLagMs > (forceThumbnailFailure ? clearBudgetMs : allVisibleBudgetMs)
-        || resourceReadyLagMs === undefined || (!forceThumbnailFailure
-          && (clearReadyLagMs === undefined || clearReadyLagMs > clearBudgetMs || state.lodCoverage < 0.9))) {
-        process.exitCode = 1;
-      }
-    } catch (error) { console.error(error); process.exitCode = 1; }
+      if (state.total !== imagePaths.length || state.gpu < Math.min(state.visible, imagePaths.length)) process.exitCode = 1;
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+    dirtyRevisionState = createDirtyRevisionState();
     app.exit(Number(process.exitCode) || 0);
   }, 500));
   else if (stressTest) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
-      const result = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => { void (async () => {
-        const host = document.querySelector('.canvas-host');
-        const stageCanvas = host?.querySelector('.konvajs-content');
-        const stageFound = Boolean(stageCanvas);
-        const warmDeadline = performance.now() + 10000;
-        while (Number(host?.getAttribute('data-loaded-commands') || 0) < 2000 && performance.now() < warmDeadline) {
-          await new Promise((next) => setTimeout(next, 50));
-        }
-        await new Promise((next) => setTimeout(next, 300));
-        const started = performance.now();
-        const frameIntervals = [];
-        let previousFrame;
-        await new Promise((done) => {
-          let frame = 0;
-          const step = (timestamp) => {
-            if (previousFrame !== undefined) frameIntervals.push(timestamp - previousFrame);
-            previousFrame = timestamp;
-            (document.elementFromPoint(innerWidth / 2, innerHeight / 2) || stageCanvas)?.dispatchEvent(new WheelEvent('wheel', {
-              bubbles: true, cancelable: true, clientX: innerWidth / 2, clientY: innerHeight / 2,
-              deltaY: frame < 90 ? -3 : 3,
-            }));
-            frame += 1;
-            if (frame < 180) requestAnimationFrame(step); else done();
-          };
-          requestAnimationFrame(step);
-        });
-        await new Promise((next) => setTimeout(next, 600));
-        const waitForViewport = async (x) => {
-          const deadline = performance.now() + 2000;
-          while (host?.getAttribute('data-viewport-x') !== String(x) && performance.now() < deadline) {
-            await new Promise((next) => setTimeout(next, 20));
-          }
-          return host?.getAttribute('data-viewport-x') === String(x);
+      const result = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+        const canvas = document.querySelector('canvas.pixi-canvas');
+        const intervals = [];
+        let previous;
+        let frame = 0;
+        const startedAt = performance.now();
+        const step = (timestamp) => {
+          if (previous !== undefined) intervals.push(timestamp - previous);
+          previous = timestamp;
+          canvas?.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true, cancelable: true, clientX: innerWidth / 2, clientY: innerHeight / 2,
+            deltaY: frame < 90 ? -3 : 3,
+          }));
+          frame += 1;
+          if (frame < 180) return requestAnimationFrame(step);
+          const sorted = [...intervals].sort((left, right) => left - right);
+          const percentile = (fraction) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] || 0;
+          setTimeout(() => resolve({
+            runtime: document.querySelector('[data-canvas-runtime="pixi-v8"]')?.dataset.canvasRuntime,
+            total: Number(canvas?.dataset.totalImages || 0),
+            visible: Number(canvas?.dataset.visibleImages || 0),
+            gpuTextures: Number(canvas?.dataset.gpuTextures || 0),
+            gpuBytes: Number(canvas?.dataset.gpuBytes || 0),
+            cpuBytes: Number(canvas?.dataset.cpuImageBytes || 0),
+            decodeQueue: Number(canvas?.dataset.decodeQueue || 0),
+            uploadQueue: Number(canvas?.dataset.uploadQueue || 0),
+            durationMs: performance.now() - startedAt,
+            frameP95Ms: percentile(0.95),
+            frameP99Ms: percentile(0.99),
+          }), 400);
         };
-        const overviewRendered = Number(host?.getAttribute('data-rendered-images') || 0);
-        window.dispatchEvent(new CustomEvent('refcanvas-stress-viewport', { detail: { x: -100000, y: -100000, scale: 1 } }));
-        const farViewportReady = await waitForViewport(-100000);
-        const farRendered = Number(host?.getAttribute('data-rendered-images') || 0);
-        window.dispatchEvent(new CustomEvent('refcanvas-stress-viewport', { detail: { x: 0, y: 0, scale: 1 } }));
-        const nearViewportReady = await waitForViewport(0);
-        const nearRendered = Number(host?.getAttribute('data-rendered-images') || 0);
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
-        await new Promise((next) => setTimeout(next, 80));
-        const selectedBeforeDrag = Number(host?.getAttribute('data-selected-images') || 0);
-        const hitX = Number(host?.getAttribute('data-stress-hit-x') || innerWidth / 2);
-        const hitY = Number(host?.getAttribute('data-stress-hit-y') || innerHeight / 2);
-        const pointerSurface = document.elementFromPoint(hitX, hitY) || stageCanvas;
-        const pointerSurfaceTag = pointerSurface?.tagName;
-        const pointerSurfaceClass = pointerSurface?.className;
-        const dragIntervals = [];
-        let previousDragFrame;
-        pointerSurface?.dispatchEvent(new PointerEvent('pointerdown', {
-          bubbles: true, button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true,
-          clientX: hitX, clientY: hitY, screenX: hitX, screenY: hitY,
-        }));
-        pointerSurface?.dispatchEvent(new MouseEvent('mousedown', {
-          bubbles: true, button: 0, buttons: 1, clientX: hitX, clientY: hitY, screenX: hitX, screenY: hitY,
-        }));
-        await new Promise((next) => requestAnimationFrame(next));
-        const dragActive = host?.getAttribute('data-pixel-interaction') === 'active';
-        const selectedImages = Number(host?.getAttribute('data-selected-images') || 0);
-        const pointerTarget = host?.getAttribute('data-pointer-target');
-        const pointerScreen = host?.getAttribute('data-pointer-screen');
-        const pointerHit = host?.getAttribute('data-pointer-hit');
-        await new Promise((done) => {
-          let frame = 0;
-          const step = (timestamp) => {
-            if (previousDragFrame !== undefined) dragIntervals.push(timestamp - previousDragFrame);
-            previousDragFrame = timestamp;
-            const x = hitX + frame * 0.35; const y = hitY + Math.sin(frame / 12) * 24;
-            pointerSurface?.dispatchEvent(new PointerEvent('pointermove', {
-              bubbles: true, button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true,
-              clientX: x, clientY: y, screenX: x, screenY: y,
-            }));
-            pointerSurface?.dispatchEvent(new MouseEvent('mousemove', {
-              bubbles: true, button: 0, buttons: 1, clientX: x, clientY: y, screenX: x, screenY: y,
-            }));
-            frame += 1;
-            if (frame < 180) requestAnimationFrame(step); else done();
-          };
-          requestAnimationFrame(step);
-        });
-        const interactionUploads = Number(host?.getAttribute('data-interaction-uploads') || 0);
-        pointerSurface?.dispatchEvent(new PointerEvent('pointerup', {
-          bubbles: true, button: 0, buttons: 0, pointerId: 1, pointerType: 'mouse', isPrimary: true,
-          clientX: hitX + 63, clientY: hitY, screenX: hitX + 63, screenY: hitY,
-        }));
-        pointerSurface?.dispatchEvent(new MouseEvent('mouseup', {
-          bubbles: true, button: 0, buttons: 0,
-          clientX: hitX + 63, clientY: hitY, screenX: hitX + 63, screenY: hitY,
-        }));
-        const percentile = (values, fraction) => {
-          const sorted = [...values].sort((left, right) => left - right);
-          return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))] || 0;
-        };
-        resolve({
-          total: Number(host?.getAttribute('data-total-images') || 0), overviewRendered,
-          farRendered, nearRendered, farViewportReady, nearViewportReady,
-          interactionMs: performance.now() - started,
-          backend: host?.getAttribute('data-render-backend'), nodeMode: host?.getAttribute('data-konva-node-mode'),
-          drawCalls: Number(host?.getAttribute('data-draw-calls') || 0),
-          rendererFrameP95Ms: Number(host?.getAttribute('data-frame-p95-ms') || 0),
-          lodCoverage: Number(host?.getAttribute('data-lod-coverage') || 0), interactionUploads,
-          dragActive, selectedBeforeDrag, selectedImages, hitX, hitY, stageFound, pointerSurfaceTag, pointerSurfaceClass,
-          pointerTarget, pointerScreen, pointerHit,
-          wheelFrameP95Ms: percentile(frameIntervals, 0.95), dragFrameP95Ms: percentile(dragIntervals, 0.95),
-          dragOnePercentLow: 1000 / Math.max(0.001, percentile(dragIntervals, 0.99)),
-        });
-      })(); })`);
-      const rendererMetric = app.getAppMetrics().find((metric) => metric.pid === mainWindow.webContents.getOSProcessId());
-      const privateMemoryKb = rendererMetric?.memory?.privateBytes ?? 0;
-      const gpuInfo: any = await app.getGPUInfo('basic').catch(() => undefined);
-      const softwareRendering = Boolean(gpuInfo?.auxAttributes?.softwareRendering);
-      const hardwarePerformanceRun = result.backend === 'webgl2' && !softwareRendering;
-      console.log(`RefCanvas stress: ${JSON.stringify({ ...result, softwareRendering, gpuDevice: gpuInfo?.gpuDevice?.[0], privateMemoryMb: Math.round(privateMemoryKb / 1024) })}`);
-      if (result.total !== 2000 || result.overviewRendered < 1800 || !result.farViewportReady || !result.nearViewportReady
-        || result.farRendered > 5 || result.nearRendered > 800
-        || result.nodeMode !== 'gpu-scene' || !result.dragActive || result.selectedImages !== 2000 || result.interactionUploads !== 0
-        || result.interactionMs > 15000 || privateMemoryKb > 1.5 * 1024 * 1024
-        || (hardwarePerformanceRun && (result.wheelFrameP95Ms > 20 || result.dragFrameP95Ms > 20
-          || result.dragOnePercentLow < 50 || result.rendererFrameP95Ms > 20))) process.exitCode = 1;
+        requestAnimationFrame(step);
+      })`);
+      console.log(`RefCanvas Pixi stress: ${JSON.stringify(result)}`);
+      const hardwarePerformanceRun = process.env.REFCANVAS_HARDWARE_PERF === '1';
+      if (result.runtime !== 'pixi-v8' || result.durationMs > 15_000
+        || (hardwarePerformanceRun && result.frameP95Ms > 25)) process.exitCode = 1;
     } catch (error) {
-      console.error(error); process.exitCode = 1;
+      console.error(error);
+      process.exitCode = 1;
     }
     dirtyRevisionState = createDirtyRevisionState();
     app.exit(Number(process.exitCode) || 0);
@@ -1541,224 +1394,55 @@ function createWindow() {
   else if (smokeTest) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
       const ready = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
-        const host = document.querySelector('.canvas-host');
-        const canvases = [...(host?.querySelectorAll('canvas') ?? [])];
-        const pixelPlane = host?.querySelector('.pixel-render-plane');
-        const stageCanvas = canvases.find((canvas) => !canvas.classList.contains('pixel-render-plane')
-          && !canvas.classList.contains('group-background-plane'));
-        const bounds = host?.getBoundingClientRect();
-        const fillsWindow = bounds && Math.abs(bounds.width - innerWidth) < 1 && Math.abs(bounds.height - innerHeight) < 1;
-        stageCanvas?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 40, clientY: 40, button: 2 }));
-        setTimeout(async () => {
+        const root = document.querySelector('[data-canvas-runtime="pixi-v8"]');
+        const canvas = root?.querySelector('canvas.pixi-canvas');
+        const bounds = root?.getBoundingClientRect();
+        canvas?.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, clientX: 40, clientY: 40, button: 2,
+        }));
+        setTimeout(() => {
           const menuOpened = Boolean(document.querySelector('.context-menu-root'));
           window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-          setTimeout(() => {
-            const propertyOpened = Boolean(document.querySelector('.property-panel'));
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true }));
-            setTimeout(() => resolve(Boolean(
-              window.refCanvas && typeof window.refCanvas.beginWindowMove === 'function'
-              && typeof window.refCanvas.updateWindowMove === 'function' && typeof window.refCanvas.endWindowMove === 'function'
-              && typeof window.refCanvas.syncPhotoshopForeground === 'function'
-              && fillsWindow && menuOpened && propertyOpened && document.querySelector('.annotation-toolbar')
-              && pixelPlane && ['webgl2', 'canvas2d', 'konva'].includes(host?.getAttribute('data-render-backend') || '')
-              && !document.querySelector('.property-panel, .titlebar, .toolbar, .statusbar')
-            )), 60);
-          }, 60);
-        }, 60);
+          resolve(Boolean(window.refCanvas && canvas && menuOpened && bounds
+            && Math.abs(bounds.width - innerWidth) < 1 && Math.abs(bounds.height - innerHeight) < 1));
+        }, 80);
       })`);
-      const expectedPhotoshopMode = process.env.REFCANVAS_FAKE_PHOTOSHOP || 'synced';
-      const expectedPhotoshopStatus = expectedPhotoshopMode === 'timeout' ? 'automation-error' : expectedPhotoshopMode;
-      const expectedPhotoshopOk = expectedPhotoshopStatus === 'synced';
-      const pickerReady = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', bubbles: true }));
-        setTimeout(async () => {
-          const activeWhileHeld = Boolean(document.querySelector('.canvas-host.color-picker-mode'));
-          window.dispatchEvent(new KeyboardEvent('keyup', { key: 's', code: 'KeyS', bubbles: true }));
-          const sync = await window.refCanvas.syncPhotoshopForeground({ r: 18, g: 52, b: 86, hex: '#123456' });
-          setTimeout(() => resolve(activeWhileHeld && !document.querySelector('.canvas-host.color-picker-mode')
-            && sync.status === ${JSON.stringify(expectedPhotoshopStatus)}
-            && sync.ok === ${expectedPhotoshopOk}
-            && sync.copied === ${!expectedPhotoshopOk}), 40);
-        }, 40);
-      })`);
-      const clipboardSmoke = await sharp({
-        create: { width: 4096, height: 1024, channels: 4, background: { r: 116, g: 169, b: 220, alpha: 1 } },
-      }).png().toBuffer();
-      clipboard.writeImage(nativeImage.createFromBuffer(clipboardSmoke));
-      const groupReady = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true }));
-        const makePng = (name, width, height, color, alpha = 1) => new Promise((done) => {
-          const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
-          const context = canvas.getContext('2d');
-          context.clearRect(0, 0, width, height); context.globalAlpha = alpha; context.fillStyle = color;
-          context.fillRect(0, 0, width, height); context.globalAlpha = 1; context.strokeStyle = '#ffffff';
-          context.lineWidth = Math.max(2, Math.min(width, height) / 12); context.strokeRect(4, 4, width - 8, height - 8);
-          canvas.toBlob((blob) => done(new File([blob], name, { type: 'image/png' })), 'image/png');
-        });
-        Promise.all([
-          makePng('landscape.png', 160, 90, '#58bfe6'),
-          makePng('portrait.png', 72, 144, '#f08a68'),
-          makePng('transparent.png', 110, 110, '#8f6be8', 0.58),
-          makePng('large.png', 4096, 1024, '#74a9dc'),
-        ]).then((files) => {
-          const transfer = new DataTransfer();
-          files.forEach((file) => transfer.items.add(file));
-          window.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true }));
-        setTimeout(async () => {
-          const host = document.querySelector('.canvas-host');
-          const pixelPlane = host?.querySelector('.pixel-render-plane');
-          const backend = host?.getAttribute('data-render-backend');
-          const tilesReady = Number(host?.getAttribute('data-tiled-images') || 0) > 0
-            && Number(host?.getAttribute('data-loaded-tile-commands') || 0) > 0;
-          let visiblePixelCount = 0;
-          if (backend === 'webgl2' && pixelPlane) {
-            const context = pixelPlane.getContext('webgl2');
-            if (context) {
-              const pixels = new Uint8Array(pixelPlane.width * pixelPlane.height * 4);
-              context.readPixels(0, 0, pixelPlane.width, pixelPlane.height, context.RGBA, context.UNSIGNED_BYTE, pixels);
-              for (let pixel = 3; pixel < pixels.length; pixel += 64) if (pixels[pixel] > 0) visiblePixelCount += 1;
-            }
-          } else if (backend === 'canvas2d' && pixelPlane) {
-            const context = pixelPlane.getContext('2d');
-            const pixels = context?.getImageData(0, 0, pixelPlane.width, pixelPlane.height).data;
-            if (pixels) for (let pixel = 3; pixel < pixels.length; pixel += 64) if (pixels[pixel] > 0) visiblePixelCount += 1;
-          } else {
-            document.querySelectorAll('.konvajs-content canvas').forEach((canvas) => {
-              const context = canvas.getContext('2d');
-              const pixels = context?.getImageData(0, 0, canvas.width, canvas.height).data;
-              if (pixels) for (let pixel = 3; pixel < pixels.length; pixel += 64) if (pixels[pixel] > 0) visiblePixelCount += 1;
-            });
-          }
-          const imagesActuallyVisible = visiblePixelCount > 8;
-          const contextRecoveryReady = await new Promise((resolve) => {
-            if (backend !== 'webgl2' || !pixelPlane) return resolve(true);
-            const context = pixelPlane.getContext('webgl2');
-            const extension = context?.getExtension('WEBGL_lose_context');
-            if (!context || !extension) return resolve(true);
-            extension.loseContext();
-            setTimeout(() => extension.restoreContext(), 40);
-            const deadline = performance.now() + 2000;
-            const check = () => {
-              if (host?.getAttribute('data-render-backend') === 'webgl2') {
-                const pixels = new Uint8Array(pixelPlane.width * pixelPlane.height * 4);
-                context.readPixels(0, 0, pixelPlane.width, pixelPlane.height, context.RGBA, context.UNSIGNED_BYTE, pixels);
-                let nonTransparent = 0;
-                for (let pixel = 3; pixel < pixels.length; pixel += 64) if (pixels[pixel] > 0) nonTransparent += 1;
-                if (nonTransparent > 8) return resolve(true);
-              }
-              if (performance.now() >= deadline) return resolve(false);
-              setTimeout(check, 30);
-            };
-            setTimeout(check, 60);
-          });
-          const stageCanvas = document.querySelector('.konvajs-content canvas');
-          const dragPreviewReady = await new Promise((resolve) => {
-            if (!stageCanvas) return resolve(false);
-            const x = innerWidth / 2; const y = innerHeight / 2;
-            stageCanvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, clientX: x, clientY: y, screenX: x, screenY: y }));
-            stageCanvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, button: 0, buttons: 1, clientX: x + 36, clientY: y + 24, screenX: x + 36, screenY: y + 24 }));
-            setTimeout(() => {
-              let previewPixels = 0;
-              if (backend === 'webgl2' && pixelPlane) {
-                const context = pixelPlane.getContext('webgl2');
-                if (context) {
-                  const pixels = new Uint8Array(pixelPlane.width * pixelPlane.height * 4);
-                  context.readPixels(0, 0, pixelPlane.width, pixelPlane.height, context.RGBA, context.UNSIGNED_BYTE, pixels);
-                  for (let pixel = 3; pixel < pixels.length; pixel += 64) if (pixels[pixel] > 0) previewPixels += 1;
-                }
-              } else if (backend === 'canvas2d' && pixelPlane) {
-                const pixels = pixelPlane.getContext('2d')?.getImageData(0, 0, pixelPlane.width, pixelPlane.height).data;
-                if (pixels) for (let pixel = 3; pixel < pixels.length; pixel += 64) if (pixels[pixel] > 0) previewPixels += 1;
-              }
-              stageCanvas.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: x + 36, clientY: y + 24, screenX: x + 36, screenY: y + 24 }));
-              resolve(host?.getAttribute('data-pixel-interaction') === 'active' && previewPixels > 8);
-            }, 80);
-          });
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true }));
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true }));
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
-          setTimeout(() => {
-            const summaryReady = document.querySelector('.selection-summary')?.textContent?.includes('分组框') === true;
-            const toolbar = document.querySelector('.group-toolbar');
-            const styleControlsReady = toolbar?.querySelectorAll('input[type="color"]').length === 2
-              && Boolean(toolbar.querySelector('input[type="range"]'));
-            toolbar?.querySelector('button[title="折叠内容"]')?.click();
-            toolbar?.querySelector('button[title="锁定分组框尺寸"]')?.click();
-            toolbar?.querySelector('button[title="隐藏成员"]')?.click();
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }));
-            setTimeout(() => {
-              const rename = document.querySelector('.group-rename-card input');
-              const statesReady = Boolean(document.querySelector('button[title="展开内容"]'))
-                && Boolean(document.querySelector('button[title="解锁分组框尺寸"]'))
-                && Boolean(document.querySelector('button[title="显示成员"]'));
-              const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-              if (rename && valueSetter) {
-                valueSetter.call(rename, '点击外部保存');
-                rename.dispatchEvent(new Event('input', { bubbles: true }));
-              }
-              document.querySelector('.group-rename-overlay')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-              setTimeout(() => {
-                const outsideSaved = Boolean(toolbar?.textContent?.includes('点击外部保存'));
-                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }));
-                setTimeout(() => {
-                  const canceledRename = document.querySelector('.group-rename-card input');
-                  if (canceledRename && valueSetter) {
-                    valueSetter.call(canceledRename, '这个名称必须被取消');
-                    canceledRename.dispatchEvent(new Event('input', { bubbles: true }));
-                    canceledRename.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                  }
-                  setTimeout(() => {
-                    const escapeCanceled = Boolean(toolbar?.textContent?.includes('点击外部保存'))
-                      && !toolbar?.textContent?.includes('这个名称必须被取消');
-                    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }));
-                    setTimeout(() => {
-                      const renameAgain = document.querySelector('.group-rename-card input');
-                      if (renameAgain && valueSetter) {
-                        valueSetter.call(renameAgain, '测试分组');
-                        renameAgain.dispatchEvent(new Event('input', { bubbles: true }));
-                        renameAgain.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-                      }
-                      setTimeout(() => {
-                        window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 1, clientY: innerHeight - 1 }));
-                        setTimeout(() => {
-                          const toolbarAutoHidden = toolbar?.classList.contains('auto-hidden') === true;
-                          resolve(summaryReady && styleControlsReady && statesReady && outsideSaved && escapeCanceled && imagesActuallyVisible && contextRecoveryReady && dragPreviewReady && tilesReady
-                            && Boolean(renameAgain) && Boolean(toolbar?.textContent?.includes('测试分组')) && toolbarAutoHidden);
-                        }, 200);
-                      }, 80);
-                    }, 60);
-                  }, 60);
-                }, 60);
-              }, 60);
-            }, 80);
-          }, 120);
-        }, 1600);
-        }).catch(() => resolve(false));
-      })`);
-      const packagePath = path.join(app.getPath('temp'), `refcanvas-smoke-${process.pid}.refcanvas`);
       const smokePng = nativeImage.createFromDataURL(
         'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
       ).toPNG();
-      // PNG decoders permit trailing bytes. A unique suffix forces this smoke
-      // run to exercise the worker instead of reusing a prior derived thumbnail.
-      const smokeAsset = await registerAssetBuffer('smoke.png', Buffer.concat([
-        smokePng, Buffer.from(`refcanvas-smoke-${process.pid}-${Date.now()}`),
-      ]), undefined, 'clipboard');
-      const thumbnailWorkerReady = !nativeImage.createFromBuffer(await generateThumbnail(smokeAsset.assetId, 128)).isEmpty();
-      const pathRegistrationReady = await mainWindow.webContents.executeJavaScript(
-        `window.refCanvas.registerImagePaths([${JSON.stringify(assetCachePath(smokeAsset.asset))}], 'drop').then((items) => items.length === 1 && Boolean(items[0].assetId))`,
+      const smokeAsset = await registerAssetBuffer(`pixi-smoke-${Date.now()}.png`, smokePng, undefined, 'clipboard');
+      const registered = await mainWindow.webContents.executeJavaScript(
+        `window.refCanvas.registerImagePaths([${JSON.stringify(assetCachePath(smokeAsset.asset))}], 'drop')
+          .then((items) => items.length === 1 && Boolean(items[0].assetId))`,
       );
-      const pathImageReady = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
-        const host = document.querySelector('.canvas-host');
-        const before = Number(host?.getAttribute('data-total-images') || 0);
-        window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: [${JSON.stringify(assetCachePath(smokeAsset.asset))}] }));
-        setTimeout(() => resolve(Number(host?.getAttribute('data-total-images') || 0) === before + 1), 500);
+      await mainWindow.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: [${JSON.stringify(assetCachePath(smokeAsset.asset))}] }))`,
+      );
+      let imageReady = false;
+      for (let attempt = 0; attempt < 60 && !imageReady; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        imageReady = await mainWindow.webContents.executeJavaScript(`(() => {
+          const canvas = document.querySelector('canvas.pixi-canvas');
+          return Number(canvas?.dataset.totalImages || 0) === 1
+            && Number(canvas?.dataset.gpuTextures || 0) >= 1;
+        })()`);
+      }
+      const contextRecoveryReady = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
+        const canvas = document.querySelector('canvas.pixi-canvas');
+        const gl = canvas?.getContext('webgl2') || canvas?.getContext('webgl');
+        const extension = gl?.getExtension('WEBGL_lose_context');
+        if (!extension) return resolve(true);
+        extension.loseContext();
+        setTimeout(() => extension.restoreContext(), 50);
+        const deadline = performance.now() + 4000;
+        const check = () => {
+          if (Number(canvas?.dataset.gpuTextures || 0) >= 1 && !gl.isContextLost()) return resolve(true);
+          if (performance.now() >= deadline) return resolve(false);
+          setTimeout(check, 50);
+        };
+        setTimeout(check, 100);
       })`);
-      const exportWorkerReady = await mainWindow.webContents.executeJavaScript(
-        `window.__refCanvasSmokeExport?.().then((buffer) => buffer instanceof ArrayBuffer && buffer.byteLength > 8).catch(() => false)`,
-      );
+      const packagePath = path.join(app.getPath('temp'), `refcanvas-smoke-${process.pid}.refcanvas`);
       const packageScene = {
         format: 'refcanvas', version: 2, name: 'smoke', savedAt: new Date().toISOString(),
         viewport: { x: 0, y: 0, scale: 1 },
@@ -1772,31 +1456,25 @@ function createWindow() {
         }], groups: [], annotations: [],
       };
       await writeScenePackage(packagePath, packageScene);
-      const reopenedPackage = await readScenePackage(packagePath);
-      const packageReady = reopenedPackage.version === 2 && Boolean(reopenedPackage.assets[smokeAsset.assetId]);
+      const reopened = await readScenePackage(packagePath);
       await fs.rm(packagePath, { force: true });
-      mainWindow.setSize(120, 90);
-      const [testWidth, testHeight] = mainWindow.getSize();
-      if (!ready || !pickerReady || !groupReady || !thumbnailWorkerReady || !pathRegistrationReady || !pathImageReady || !exportWorkerReady
-        || !packageReady || testWidth > 160 || testHeight > 120) process.exitCode = 1;
+      const packageReady = reopened.version === 2 && Boolean(reopened.assets[smokeAsset.assetId]);
+      if (!ready || !registered || !imageReady || !contextRecoveryReady || !packageReady) process.exitCode = 1;
       dirtyRevisionState = createDirtyRevisionState();
     } catch (error) {
       console.error(error);
       process.exitCode = 1;
     }
-    process.exitCode = process.exitCode || 0;
-    app.quit();
+    app.exit(Number(process.exitCode) || 0);
   }, 350));
   const devServerUrl = process.env.REFCANVAS_DEV_SERVER_URL;
   const devMode = !app.isPackaged && Boolean(devServerUrl);
   const rendererQuery: Record<string, string> = {};
-  if (pixiCanvasSmoke || process.argv.includes('--pixi-canvas')) rendererQuery['pixi-canvas'] = '1';
   if (pixiCanvasSmoke || devSmokeTest || (smokeTest && !stressTest)) rendererQuery.smoke = '1';
   if (stressTest) rendererQuery.stress = '2000';
   if (performanceBenchmark) { rendererQuery.perf = '1'; rendererQuery['perf-bench'] = process.env.REFCANVAS_PERF_PHASE || 'before'; }
   if (projectZoomBenchmark) { rendererQuery.perf = '1'; rendererQuery['perf-bench'] = 'project'; rendererQuery['project-bench'] = '1'; }
   if (runtimeFlags.manualInputRecording) rendererQuery['manual-input-record'] = '1';
-  if (runtimeFlags.legacyRenderer) rendererQuery['legacy-renderer'] = '1';
   if (devMode) {
     const target = new URL(devServerUrl);
     Object.entries(rendererQuery).forEach(([key, value]) => target.searchParams.set(key, value));

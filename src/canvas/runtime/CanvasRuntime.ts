@@ -29,6 +29,8 @@ export interface CanvasRuntimeOptions {
   onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>): void;
   onAnnotationsChanged?(changes: Array<{ id: string; deltaX: number; deltaY: number }>): void;
   onGroupMoved?(id: string, deltaX: number, deltaY: number): void;
+  onGroupHeaderDragChange?(dragging: boolean): void;
+  onGroupPreview?(id: string, x?: number, y?: number): void;
   onFocusItem?(item: ImageItem): void;
   onContextMenu?(position: { x: number; y: number }): void;
   annotationState?: AnnotationToolState;
@@ -80,7 +82,7 @@ export class CanvasRuntime {
       this.scheduleRender();
       this.selectionController?.refresh();
       if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
-    });
+    }, () => this.colorPickerHeld);
     cameraController.start();
     this.selectionController = new SelectionController({
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
@@ -99,7 +101,7 @@ export class CanvasRuntime {
         }
         this.options.onItemsChanged?.(changes);
       },
-      selectionChanged: (ids) => this.options.onSelectionChange?.(ids),
+      selectionChanged: (ids) => { this.renderer.setSelectedImageCount(ids.length); this.options.onSelectionChange?.(ids); },
       annotationSelectionChanged: (ids) => this.options.onAnnotationSelectionChange?.(ids),
       groupSelectionChanged: (id) => { this.renderer.setSelectedGroup(id); this.options.onGroupSelectionChange?.(id); },
       previewAnnotation: (ids, deltaX, deltaY) => {
@@ -111,9 +113,12 @@ export class CanvasRuntime {
       previewGroup: (id, deltaX, deltaY) => {
         this.sceneStore?.previewGroupMove(id, deltaX, deltaY);
         if (this.sceneStore) this.renderer.setScene(this.sceneStore.renderScene());
+        const group = this.sceneStore?.groups().find((value) => value.id === id);
+        this.options.onGroupPreview?.(id, group?.x, group?.y);
         this.scheduleRender();
       },
       commitGroup: (id, deltaX, deltaY) => this.options.onGroupMoved?.(id, deltaX, deltaY),
+      groupDragChanged: (dragging) => this.options.onGroupHeaderDragChange?.(dragging),
       drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       interactionBlocked: () => this.annotationState.enabled || this.colorPickerHeld,
@@ -124,6 +129,7 @@ export class CanvasRuntime {
     });
     this.selectionController.start();
     this.selectionController.setSelection(this.options.selectedIds ?? []);
+    this.renderer.setSelectedImageCount(this.options.selectedIds?.length ?? 0);
     this.selectionController.setAnnotationSelection(this.options.selectedAnnotationIds ?? []);
     this.selectionController.setGroupSelection(this.options.selectedGroupId);
     this.renderer.setSelectedGroup(this.options.selectedGroupId);
@@ -167,7 +173,7 @@ export class CanvasRuntime {
     this.selectionController?.refresh();
     this.scheduleRender();
   }
-  setSelection(ids: string[]) { this.selectionController?.setSelection(ids); }
+  setSelection(ids: string[]) { this.selectionController?.setSelection(ids); this.renderer.setSelectedImageCount(ids.length); }
   setAnnotationSelection(ids: string[]) { this.selectionController?.setAnnotationSelection(ids); }
   setGroupSelection(id?: string) { this.selectionController?.setGroupSelection(id); this.renderer.setSelectedGroup(id); }
   setAnnotationState(state: { enabled: boolean; tool: AnnotationTool; color: string; width: number }) { this.annotationState = state; }

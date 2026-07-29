@@ -9,13 +9,13 @@
 | 4. Command/Undo/Redo | 已完成 | `53fe3ef` | typecheck/lint，56 files/201 tests，production build |
 | 5. 图片流送与缓存 | 已完成 | `b2234b7` | typecheck/lint，62 files/209 tests，production build，Pixi 真图片 smoke |
 | 6. 剩余功能 | 已完成 | `2d48f0f` | 62 files/210 tests，production build，Pixi smoke，quick benchmark |
-| 7. 工程兼容 | 已完成 | 待本阶段提交 | 63 files/213 tests，production build，persistence integration，Pixi smoke |
-| 唯一入口与删除 Legacy | 未开始 | — | — |
+| 7. 工程兼容 | 已完成 | `48bf833` | persistence integration，production build，Pixi smoke |
+| 唯一入口与删除 Legacy | 已完成 | 待本阶段提交 | 46 files/151 tests，typecheck/lint/knip/build，normal + Pixi smoke |
 
 ## 当前约束
 
 - 当前分支：`refactor/pixi-canvas`。
-- Legacy 只作为对照，不接受新补丁。
+- Legacy 冻结点保留在 tag `canvas-legacy-freeze`，生产工作树已删除旧画布源码。
 - 每阶段完成后运行 typecheck、lint、test、build 并独立提交。
 
 ## 阶段 1 结果
@@ -23,7 +23,7 @@
 - PixiJS v8 `Application` 具有独立挂载、ResizeObserver 和显式销毁生命周期。
 - Camera 成为唯一坐标变换来源，支持屏幕/世界坐标往返、指针锚点缩放、平移、缩放上下限。
 - 连续输入只请求一帧；React 只接收手势结束后的 viewport 提交，不参与逐帧渲染。
-- 当前通过 `?pixi-canvas` 临时迁移开关进入新画布；最终阶段删除该开关与 Legacy 路径。
+- Pixi Runtime 现为唯一入口；迁移期 `?pixi-canvas` 与 legacy renderer 环境开关已删除。
 
 ## 阶段 2 结果
 
@@ -79,3 +79,11 @@
 - 新增安全 autosave IPC：只有已有 `currentScenePath` 时才原子覆盖工程；未命名工程不会弹保存对话框或暗自选路径。
 - `AutosaveCoordinator` 在 2 秒稳定边界序列化最新 revision；新改动取消旧计时，工程/组件卸载取消任务，保存 revision 仍经过 dirty revision 边界。
 - 手动保存、打开与工程导入也统一经过新 serializer/loader；现有 scene package、最近打开、资产注册和缓存引用格式保持不变。
+
+## 唯一入口与删除 Legacy 结果
+
+- `App` 无条件挂载 `CanvasView`；CanvasBoard、Konva、旧 WebGL2/Canvas2D 后端、Pixel loader/plan 和旧 tile/atlas 代码已删除。
+- `konva`、`react-konva` 依赖与 `REFCANVAS_LEGACY_RENDERER`、`pixi-canvas` 迁移开关已删除；生产源码扫描无旧运行时引用。
+- Electron 正常 smoke 验证 Pixi 唯一入口、真实资产注册、GPU 驻留、WebGL context loss/restore 和 `.refcanvas` 往返；专用 Pixi smoke 亦通过。
+- Benchmark 与真实图片诊断改为读取 `canvas.pixi-canvas` 的版本化数据集，不再依赖旧 DOM 或后端属性。
+- 最终 quick 图片管线：5 个混合资源首次导入 740.51ms，二次打开 1.23ms，峰值 RSS 155,361,280 bytes，稳定 RSS 84,750,336 bytes，缓存命中 100%，重复并发解码 0。

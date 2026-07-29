@@ -29,8 +29,6 @@ const VARIANT_RANK: Record<ImageVariant, number> = {
 const thumbnailRevisions = new Map<string, number>();
 const thumbnailListeners = new Map<string, Set<() => void>>();
 let thumbnailReadyUnsubscribe: (() => void) | undefined;
-let cacheHits = 0;
-let cacheMisses = 0;
 
 function thumbnailRevisionKey(assetId: string | undefined, variant: ImageVariant) {
   return `${assetId ?? ''}:${variant}`;
@@ -175,7 +173,6 @@ function retainImage(src: string, onReady: (image: HTMLImageElement) => void, on
   src = canonicalImageResourceKey(src);
   let entry = cache.get(src);
   if (!entry) {
-    cacheMisses += 1;
     const decodeStartedAt = performanceMonitor.enabled ? performance.now() : 0;
     const image = new Image();
     image.decoding = 'async';
@@ -195,7 +192,6 @@ function retainImage(src: string, onReady: (image: HTMLImageElement) => void, on
     };
     image.src = src;
   } else {
-    cacheHits += 1;
     if (entry.image.complete && entry.image.naturalWidth) queueMicrotask(() => onReady(entry!.image));
   }
   entry.listeners.add(onReady);
@@ -222,19 +218,9 @@ function retainImage(src: string, onReady: (image: HTMLImageElement) => void, on
   };
 }
 
-export function readyCachedImage(src: string) {
+function readyCachedImage(src: string) {
   const image = cache.get(canonicalImageResourceKey(src))?.image;
   return image?.complete && image.naturalWidth > 0 ? image : undefined;
-}
-
-export function getImageResourceCacheStats() {
-  const attempts = cacheHits + cacheMisses;
-  return {
-    bytes: [...cache.values()].reduce((total, entry) => total + entry.bytes, 0),
-    entries: cache.size,
-    decodeQueueLength: [...cache.values()].filter((entry) => !entry.image.complete).length + preloadPromises.size,
-    hitRate: attempts ? cacheHits / attempts : 0,
-  };
 }
 
 export function boundedPreviewSize(width: number, height: number, maximumEdge = 128) {
@@ -245,18 +231,6 @@ export function boundedPreviewSize(width: number, height: number, maximumEdge = 
     width: Math.max(1, Math.round(safeWidth * scale)),
     height: Math.max(1, Math.round(safeHeight * scale)),
   };
-}
-
-export function useImageSource(src: string, onError?: () => void, enabled = true, retryToken = 0) {
-  const [image, setImage] = useState<HTMLImageElement | undefined>(() => (
-    enabled ? readyCachedImage(src) : undefined
-  ));
-  useEffect(() => {
-    setImage(enabled ? readyCachedImage(src) : undefined);
-    if (!enabled) return undefined;
-    return retainImage(src, setImage, onError);
-  }, [enabled, onError, retryToken, src]);
-  return image;
 }
 
 function preloadImageSource(src: string) {

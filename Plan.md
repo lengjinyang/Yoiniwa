@@ -21,12 +21,12 @@
 13. **Renderer 主线程禁重任务：已完成** — 文件/剪贴板登记不再经过 Renderer data URL；取色在图片 Worker 提取单像素，导出在专用 Web Worker 以 ImageBitmap/OffscreenCanvas 完成解码、合成和 PNG 编码。
 14. **缓存迁移修复：已完成** — 暂停、generation 推进、Worker 关闭、复制、重建注册、验证新路径、最后删除旧目录的顺序已实现。
 15. **并发和任务取消：已完成** — 队列使用 AbortSignal 取消待执行和活跃任务；Renderer 离开工作集会中止未完成请求，Worker 在解码、每个 Mip/Tile、写入和提交点检查取消，旧结果不能落盘或写回新 generation。
-16. **单一画布渲染：已完成** — 主图片场景使用单一 WebGL2 Canvas 和 Instancing，Konva 只保留交互覆盖层。
+16. **单一画布渲染：已完成** — PixiJS v8 单一 Canvas 负责图片、分组、标注、评论、选择和交互层；Konva 与旧 WebGL2/Canvas2D 画布后端已从生产源码和依赖中删除。
 17. **图像质量：已完成** — EXIF rotate、Lanczos3、统一 WebP/Alpha、线性过滤、straight-alpha Blend 和 WebGL pixel-store 参数已落实。
 18. **缓存清理：已完成** — 10 GiB 预算、当前工程保护、孤立 LRU、临时目录和分批后台删除已完成；最近工程持久保存 assetId 索引，旧记录在后台只读 manifest 补建，清理顺序为孤立资源优先、最近工程资源最后。
 19. **开发性能监控：已完成** — F10 面板包含 FPS、帧耗时、可见/预加载数、CPU/GPU 字节、队列、上传字节、命中率和 Mip。
-20. **自动化测试：已完成** — 当前 49 个文件、189 项测试全部通过；10 个集成场景由磁盘金字塔、Worker 生命周期、调度/稳定纹理、WebGL 释放和 Electron smoke 逐项覆盖。
-21. **性能基准：已完成** — 完整 620 Asset 档和 Electron project-zoom 均已实测；Node 不具备 GPU 上下文的字段明确由 Electron 数据补充，不伪造指标。
+20. **自动化测试：已完成** — 删除旧画布测试后，当前 46 个文件、151 项有效测试全部通过；磁盘金字塔、Worker 生命周期、调度/稳定纹理、预算、迁移和 Pixi Electron smoke 均有覆盖。
+21. **性能基准：已完成** — 当前分支重新运行 quick 混合格式档；完整 620 Asset 与硬件 project-zoom 未在本轮重跑，GPU/帧分位明确标记为“未测量”，不沿用 Legacy 数值。
 22. **六阶段实施顺序：已完成** — 已按审计、P1 迁移、磁盘金字塔、调度、预算、测试收尾顺序实施。
 23. **禁止伪优化：已完成** — 没有以 CSS、淡入、无限预载或永久显存驻留代替架构修复。
 24. **代码质量：已完成** — 新职责已拆分为配置、路径、Manifest、Mip Generator、generation、注册、上传队列、LRU、选择和清理模块；typecheck/lint/dead-code 均通过。
