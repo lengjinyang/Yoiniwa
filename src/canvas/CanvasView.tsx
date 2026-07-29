@@ -10,9 +10,10 @@ interface CanvasViewProps {
   selectedIds: string[];
   onSelectionChange(ids: string[]): void;
   onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>): void;
+  projectEpoch: number;
 }
 
-export function CanvasView({ background, scene, viewport, selectedIds, onViewportCommit, onSelectionChange, onItemsChanged }: CanvasViewProps) {
+export function CanvasView({ background, scene, viewport, selectedIds, projectEpoch, onViewportCommit, onSelectionChange, onItemsChanged }: CanvasViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<CanvasRuntime | undefined>(undefined);
   const initialOptionsRef = useRef({ background, viewport, selectedIds });
@@ -45,6 +46,7 @@ export function CanvasView({ background, scene, viewport, selectedIds, onViewpor
   useEffect(() => { runtimeRef.current?.setViewport(viewport); }, [viewport]);
   useEffect(() => { runtimeRef.current?.setScene(scene); }, [scene]);
   useEffect(() => { runtimeRef.current?.setSelection(selectedIds); }, [selectedIds]);
+  useEffect(() => { runtimeRef.current?.setProjectEpoch(projectEpoch); }, [projectEpoch]);
   useEffect(() => { runtimeRef.current?.setBackground(background); }, [background]);
   return <div ref={containerRef} className="canvas-runtime-root" data-canvas-runtime="pixi-v8" />;
 }
