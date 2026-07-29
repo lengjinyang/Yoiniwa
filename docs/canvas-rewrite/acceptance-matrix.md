@@ -9,13 +9,13 @@
 | 锚点缩放/上下限 | onWheel/interactions | 鼠标世界点不漂移 | camera | unit | 已实现 | 已验收 |
 | Fit/Focus/Reset/恢复 | App + CanvasBoard | bounds 与 viewport 正确 | camera commands | unit + smoke | 待迁移 | 待验收 |
 | 图片导入/拖放/粘贴 | App IPC | 导入后可见且有进度 | App + runtime adapter | integration | 待迁移 | 待验收 |
-| 图片比例/EXIF/Alpha | image pipeline | 方向颜色透明正确 | renderer/assets | image smoke | 待迁移 | 待验收 |
+| 图片比例/EXIF/Alpha | image pipeline | 方向颜色透明正确 | renderer/assets | image smoke | 已实现 | 代码/构建已验收，真实图片 smoke 待阶段 5 |
 | 图片移动 | BoardImage/GPU gesture | 实时预览、一次提交 | transform + command | unit + smoke | 待迁移 | 待验收 |
 | 图片缩放/旋转 | Transformer/rotation | 单/多对象正确 | transform | unit + smoke | 待迁移 | 待验收 |
-| 裁切/翻转/透明/灰度 | App properties | 非破坏、显示一致 | image renderer | unit + visual | 待迁移 | 待验收 |
+| 裁切/翻转/透明/灰度 | App properties | 非破坏、显示一致 | image renderer | unit + visual | 已实现 | unit/build 已验收，visual 待最终入口 |
 | 删除/重复/复制粘贴 | AppCommand | Scene 与资源正确 | commands | unit + integration | 待迁移 | 待验收 |
-| 层级顺序 | App moveLayer | 命中和绘制同步 | reorder command | unit | 待迁移 | 待验收 |
-| 锁定/隐藏 | App/Outline | 不命中或不绘制 | scene/hit test | unit | 待迁移 | 待验收 |
+| 层级顺序 | App moveLayer | 命中和绘制同步 | reorder command | unit | 进行中 | 绘制顺序已实现，Command/命中待阶段 3-4 |
+| 锁定/隐藏 | App/Outline | 不命中或不绘制 | scene/hit test | unit | 进行中 | 隐藏渲染已实现，命中待阶段 3 |
 | 单选/取消 | CanvasBoard | 顶层命中、空白清空 | selection | unit | 待迁移 | 待验收 |
 | 多选增减/全选 | CanvasBoard/App | 修饰键语义一致 | selection/keyboard | unit | 待迁移 | 待验收 |
 | 框选/自动平移 | CanvasBoard | 可见相交节点、边缘平移 | box selection | unit + smoke | 待迁移 | 待验收 |

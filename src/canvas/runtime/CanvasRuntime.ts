@@ -1,4 +1,4 @@
-import type { Viewport } from '../../types';
+import type { Scene, Viewport } from '../../types';
 import { Camera } from '../camera/Camera';
 import { CameraController } from '../camera/CameraController';
 import { PixiRenderer } from '../renderer/PixiRenderer';
@@ -14,7 +14,7 @@ export interface CanvasRuntimeOptions {
 export class CanvasRuntime {
   private readonly lifecycle = new RuntimeLifecycle();
   private readonly frames = new FrameScheduler();
-  private readonly renderer = new PixiRenderer();
+  private readonly renderer = new PixiRenderer(() => this.scheduleRender());
   private readonly camera: Camera;
   private started = false;
 
@@ -42,6 +42,7 @@ export class CanvasRuntime {
   }
 
   setViewport(viewport: Viewport) { this.camera.set(viewport); this.scheduleRender(); }
+  setScene(scene: Scene) { this.renderer.setScene(scene); this.scheduleRender(); }
   setBackground(background: string) { this.renderer.setBackground(background); }
   getViewport() { return this.camera.snapshot(); }
 

@@ -1398,6 +1398,7 @@ export default function App() {
     <section className="workspace">
       {pixiCanvasPreview ? <CanvasView
         background={history.scene.canvas.background}
+        scene={history.scene}
         viewport={history.scene.viewport}
         onViewportCommit={history.updateViewport}
       /> : <CanvasBoard
