@@ -2040,6 +2040,11 @@ handleIpc('scene:save', async (_event, scene, saveAs = false, revision) => {
   return enqueueSceneSave(filePath, scene, revision);
 });
 
+handleIpc('scene:autosave', async (_event, scene, revision) => {
+  if (!currentScenePath) return { skipped: true };
+  return enqueueSceneSave(currentScenePath, scene, revision);
+});
+
 handleIpc('scene:open', async (_event, requestedPath) => {
   let filePath = requestedPath;
   if (!filePath) {

@@ -185,6 +185,7 @@ interface RefCanvasAPI {
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
   pathForFile(file: File): string | undefined;
   saveScene(scene: Scene, saveAs?: boolean, revision?: number): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number }>;
+  autosaveScene(scene: Scene, revision?: number): Promise<{ skipped?: boolean; path?: string; scene?: Scene; revision?: number }>;
   resetScenePath(): void;
   consumeStartupPath(): Promise<string | null>;
   onExternalOpen(callback: (path: string) => void): () => void;
