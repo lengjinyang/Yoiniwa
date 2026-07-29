@@ -10,7 +10,7 @@ const contractAssertions: [
 
 const invokeChannels = [
   'images:import', 'images:register-paths', 'images:register-urls', 'images:register-clipboard', 'images:prewarm',
-  'images:performance-stats', 'images:sample-pixel', 'scene:save', 'scene:open', 'scene:import', 'scene:recent',
+  'images:performance-stats', 'images:sample-pixel', 'scene:save', 'scene:autosave', 'scene:open', 'scene:import', 'scene:recent',
   'scene:startup-path', 'cache:info', 'cache:choose-location', 'cache:reset-location', 'image:export',
   'image:copy', 'image:show-source', 'photoshop:set-foreground', 'window:set-mode', 'window:get-mode',
   'logs:write', 'logs:open-folder', 'logs:copy-diagnostics', 'performance:record-manual-wheel',

@@ -3,6 +3,9 @@ import Konva from 'konva';
 import { eraseAnnotationsAt } from './annotationEraser';
 import { CanvasBoard } from './CanvasBoard';
 import { CanvasView } from './canvas/CanvasView';
+import { AutosaveCoordinator } from './canvas/persistence/AutosaveCoordinator';
+import { loadProjectScene } from './canvas/persistence/ProjectLoader';
+import { serializeProjectScene } from './canvas/persistence/ProjectSerializer';
 import { ContextMenu, type ContextMenuEntry, type MenuPosition } from './ContextMenu';
 import { annotationBounds, renderItems } from './exportScene';
 import { applyLayout, type LayoutAction } from './layout';
@@ -86,11 +89,27 @@ export default function App() {
   const sceneClipboardRef = useRef<SceneClipboardPayload | undefined>(undefined);
   const lastPointerRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const api = window.refCanvas;
+  const autosaveExecuteRef = useRef<(scene: typeof history.scene, revision: number) => Promise<void>>(async () => undefined);
+  const autosaveCoordinatorRef = useRef<AutosaveCoordinator | undefined>(undefined);
+  if (!autosaveCoordinatorRef.current) {
+    autosaveCoordinatorRef.current = new AutosaveCoordinator((scene, revision) => autosaveExecuteRef.current(scene, revision));
+  }
+  autosaveExecuteRef.current = async (scene, revision) => {
+    const result = await api?.autosaveScene(scene, revision);
+    if (result?.scene) history.markSaved(result.scene, result.revision ?? revision);
+  };
   const pixiCanvasPreview = new URLSearchParams(window.location.search).has('pixi-canvas');
   const performanceSceneRef = useRef(history.scene);
   const liveViewportRef = useRef(history.scene.viewport);
   performanceSceneRef.current = history.scene;
   useEffect(() => { liveViewportRef.current = history.scene.viewport; }, [history.scene.viewport]);
+  useEffect(() => {
+    const autosave = autosaveCoordinatorRef.current;
+    if (!history.dirty) autosave?.cancel();
+    else autosave?.schedule(history.scene, history.revision);
+    return () => autosave?.cancel();
+  }, [history.dirty, history.revision, history.scene]);
+  useEffect(() => () => autosaveCoordinatorRef.current?.destroy(), []);
 
   useEffect(() => {
     if (!new URLSearchParams(window.location.search).has('smoke')) return undefined;
@@ -446,7 +465,7 @@ export default function App() {
     const saveRevision = flushed.revision;
     const requestId = beginOperation('save', '正在保存…');
     try {
-      const result = await api.saveScene(flushed.scene, saveAs, saveRevision);
+      const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision);
       if (!result.canceled) {
         const savedCurrentRevision = history.markSaved(result.scene, result.revision ?? saveRevision);
         setSceneNameVisible(true);
@@ -467,8 +486,9 @@ export default function App() {
     const requestId = beginOperation('open', '正在打开画板…');
     try {
       const result = await api.openScene(path);
-      if (!result.canceled && validateScene(result.scene)) {
-        history.load(result.scene);
+      const loaded = loadProjectScene(result.scene);
+      if (!result.canceled && validateScene(loaded)) {
+        history.load(loaded);
         setSelectedIds([]);
         setSelectedAnnotationIds([]);
         setSelectedGroupId(undefined);
@@ -505,14 +525,15 @@ export default function App() {
         clearCurrentOperation(requestId);
         return;
       }
-      if (!validateScene(result.scene)) {
+      const imported = loadProjectScene(result.scene);
+      if (!validateScene(imported)) {
         settleCurrentOperation(requestId, 'error', '无法导入：不是有效的 RefCanvas 场景');
         return;
       }
       const viewport = history.scene.viewport;
       let merged: ReturnType<typeof mergeSceneInto> | undefined;
       history.commit((scene) => {
-        merged = mergeSceneInto(scene, result.scene!, {
+        merged = mergeSceneInto(scene, imported, {
           x: (window.innerWidth / 2 - viewport.x) / viewport.scale,
           y: (window.innerHeight / 2 - viewport.y) / viewport.scale,
         });

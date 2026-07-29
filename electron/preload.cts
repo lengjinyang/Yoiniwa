@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('refCanvas', {
   },
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || undefined; } catch { return undefined; } },
   saveScene: (scene, saveAs, revision) => invoke('scene:save', scene, saveAs, revision),
+  autosaveScene: (scene, revision) => invoke('scene:autosave', scene, revision),
   resetScenePath: () => ipcRenderer.send('scene:reset-path'),
   consumeStartupPath: () => invoke('scene:startup-path'),
   onExternalOpen: (callback) => {

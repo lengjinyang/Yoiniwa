@@ -17,6 +17,7 @@ export interface IpcContractMap {
   'images:performance-stats': IpcContract<[], ImagePipelinePerformanceStats>;
   'images:sample-pixel': IpcContract<[assetId: string, x: number, y: number], { r: number; g: number; b: number; a: number }>;
   'scene:save': IpcContract<[scene: Scene, saveAs?: boolean, revision?: number], { canceled: boolean; path?: string; scene?: Scene; revision?: number }>;
+  'scene:autosave': IpcContract<[scene: Scene, revision?: number], { skipped?: boolean; path?: string; scene?: Scene; revision?: number }>;
   'scene:open': IpcContract<[path?: string], { canceled: boolean; path?: string; scene?: Scene }>;
   'scene:import': IpcContract<[], { canceled: boolean; path?: string; scene?: Scene }>;
   'scene:recent': IpcContract<[], RecentScene[]>;

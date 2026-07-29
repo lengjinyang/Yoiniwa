@@ -36,9 +36,9 @@
 | GPU 分帧上传 | WebGL renderer | 4项/8MiB/约2ms | upload scheduler | unit + benchmark | 已实现 | unit/Electron smoke 已验收，benchmark 待阶段 6 |
 | 上下文菜单/快捷键 | App | 命令与 enable 状态一致 | Canvas bridge/App | smoke | 已实现 | 应用 Command registry 保留，Pixi context bridge 已验收 |
 | 性能诊断 | CanvasBoard data attrs | 稳定版本化 snapshot | debug | unit + benchmark | 已实现 | Pixi runtime 指标已接入，benchmark 待阶段 6 |
-| 旧工程打开 | scene-packages | 无需重新导入 | persistence adapter | integration | 待迁移 | 待验收 |
-| 保存/重开/viewport/zIndex | App/history | 往返无损 | persistence adapter | integration | 待迁移 | 待验收 |
-| 自动保存/dirty 边界 | App/history | 高频预览不写历史 | command bridge | integration | 待迁移 | 待验收 |
-| 缺失资源 | protocol/registry | 明确错误、不崩溃 | asset adapter | integration | 待迁移 | 待验收 |
+| 旧工程打开 | scene-packages | 无需重新导入 | persistence adapter | integration | 已实现 | v1→v2 migration/scene package 既有集成已验收 |
+| 保存/重开/viewport/zIndex | App/history | 往返无损 | persistence adapter | integration | 已实现 | round-trip 已验收 |
+| 自动保存/dirty 边界 | App/history | 高频预览不写历史 | command bridge | integration | 已实现 | latest revision/debounce 单元与 IPC build 已验收 |
+| 缺失资源 | protocol/registry | 明确错误、不崩溃 | asset adapter | integration | 已实现 | 缺源 asset round-trip 与资源错误事件已验收 |
 | WebGL context loss/销毁 | legacy renderer | 可恢复且释放资源 | runtime/renderer | smoke | 已实现 | 销毁 smoke 已验收，强制 context-loss 待最终 smoke |
 | Legacy 删除 | 全仓库 | 生产源码无 Legacy/V2 路径 | final cleanup | rg + knip | 待迁移 | 待验收 |

@@ -8,8 +8,8 @@
 | 3. 选择与变换 | 已完成 | `71cab90` | typecheck/lint，55 files/199 tests，production build |
 | 4. Command/Undo/Redo | 已完成 | `53fe3ef` | typecheck/lint，56 files/201 tests，production build |
 | 5. 图片流送与缓存 | 已完成 | `b2234b7` | typecheck/lint，62 files/209 tests，production build，Pixi 真图片 smoke |
-| 6. 剩余功能 | 已完成 | 待本阶段提交 | 62 files/210 tests，production build，Pixi smoke，quick benchmark |
-| 7. 工程兼容 | 未开始 | — | — |
+| 6. 剩余功能 | 已完成 | `2d48f0f` | 62 files/210 tests，production build，Pixi smoke，quick benchmark |
+| 7. 工程兼容 | 已完成 | 待本阶段提交 | 63 files/213 tests，production build，persistence integration，Pixi smoke |
 | 唯一入口与删除 Legacy | 未开始 | — | — |
 
 ## 当前约束
@@ -70,3 +70,12 @@
 - 对齐/分布/Pack、裁切/翻转/透明/灰度、标签、属性面板、Outline、导入/拖放/粘贴、保存/打开仍由保留的应用服务操作同一 Scene，Pixi 通过低频快照同步。
 - Quick 图片管线实测：5 个混合 JPEG/PNG/WebP 资源首次构建 739.15ms，二次 manifest 打开 1.31ms，峰值 RSS 131,330,048 bytes，稳定 RSS 83,058,688 bytes，命中率 100%，重复并发解码 0。
 - Quick Node benchmark 没有 GPU 上下文，因此 GPU 占用、zoom 平均/P95/P99 和 Long Task 明确为“未测量”；完整 100×4K/500×2K/20×8K 场景命令为 `node tools/benchmarks/image-pipeline-benchmark.mjs --profile=full`。
+
+## 阶段 7 结果
+
+- `ProjectLoader`、`ProjectMigration`、`ProjectSerializer` 明确隔离 Runtime 状态与 `.refcanvas` Scene v2；选择、GPU handle、请求与 preview 不会进入文件。
+- Round-trip 自动化覆盖 viewport、zIndex、crop、assetId，以及原始文件缺失但资产记录仍存在的缓存恢复模型。
+- version 1 基础字段安全迁移到 version 2；非法 viewport/节点数值在进入 Runtime 前拒绝。
+- 新增安全 autosave IPC：只有已有 `currentScenePath` 时才原子覆盖工程；未命名工程不会弹保存对话框或暗自选路径。
+- `AutosaveCoordinator` 在 2 秒稳定边界序列化最新 revision；新改动取消旧计时，工程/组件卸载取消任务，保存 revision 仍经过 dirty revision 边界。
+- 手动保存、打开与工程导入也统一经过新 serializer/loader；现有 scene package、最近打开、资产注册和缓存引用格式保持不变。
