@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Konva from 'konva';
 import { eraseAnnotationsAt } from './annotationEraser';
 import { CanvasBoard } from './CanvasBoard';
+import { CanvasView } from './canvas/CanvasView';
 import { ContextMenu, type ContextMenuEntry, type MenuPosition } from './ContextMenu';
 import { annotationBounds, renderItems } from './exportScene';
 import { applyLayout, type LayoutAction } from './layout';
@@ -85,6 +86,7 @@ export default function App() {
   const sceneClipboardRef = useRef<SceneClipboardPayload | undefined>(undefined);
   const lastPointerRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const api = window.refCanvas;
+  const pixiCanvasPreview = new URLSearchParams(window.location.search).has('pixi-canvas');
   const performanceSceneRef = useRef(history.scene);
   const liveViewportRef = useRef(history.scene.viewport);
   performanceSceneRef.current = history.scene;
@@ -1394,7 +1396,11 @@ export default function App() {
 
   return <main className="app-shell">
     <section className="workspace">
-      <CanvasBoard
+      {pixiCanvasPreview ? <CanvasView
+        background={history.scene.canvas.background}
+        viewport={history.scene.viewport}
+        onViewportCommit={history.updateViewport}
+      /> : <CanvasBoard
         scene={history.scene}
         projectEpoch={history.projectEpoch}
         selectedIds={selectedIds}
@@ -1433,7 +1439,7 @@ export default function App() {
         onGroupDeleted={(id) => deleteGroupById(id, false)}
         onRenameGroup={renameGroupById}
         stageRef={stageRef}
-      />
+      />}
 
       {propertiesOpen && <aside className="property-panel no-drag">
         <div className="property-header"><div><strong>属性</strong><span>{selectedGroup ? '分组框' : selectedObjectCount ? `${selectedObjectCount} 项` : '画板'}</span></div><button title="关闭属性面板 (Tab)" onClick={() => setPropertiesOpen(false)}>×</button></div>

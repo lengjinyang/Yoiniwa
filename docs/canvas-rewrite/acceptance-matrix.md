@@ -4,9 +4,9 @@
 
 | 功能 | 旧实现入口 | 预期行为 | 新实现模块 | 测试方式 | 迁移状态 | 验收状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Runtime 启停/Resize/DPR | CanvasBoard effects | 无泄漏、尺寸正确 | runtime | unit + smoke | 待迁移 | 待验收 |
-| 平移 | CanvasBoard pointer | 连续、释放不回滚 | camera/interaction | unit + benchmark | 待迁移 | 待验收 |
-| 锚点缩放/上下限 | onWheel/interactions | 鼠标世界点不漂移 | camera | unit | 待迁移 | 待验收 |
+| Runtime 启停/Resize/DPR | CanvasBoard effects | 无泄漏、尺寸正确 | runtime | unit + smoke | 已实现 | unit 已验收，smoke 待最终入口 |
+| 平移 | CanvasBoard pointer | 连续、释放不回滚 | camera/interaction | unit + benchmark | 已实现 | unit 已验收，benchmark 待阶段 6 |
+| 锚点缩放/上下限 | onWheel/interactions | 鼠标世界点不漂移 | camera | unit | 已实现 | 已验收 |
 | Fit/Focus/Reset/恢复 | App + CanvasBoard | bounds 与 viewport 正确 | camera commands | unit + smoke | 待迁移 | 待验收 |
 | 图片导入/拖放/粘贴 | App IPC | 导入后可见且有进度 | App + runtime adapter | integration | 待迁移 | 待验收 |
 | 图片比例/EXIF/Alpha | image pipeline | 方向颜色透明正确 | renderer/assets | image smoke | 待迁移 | 待验收 |
