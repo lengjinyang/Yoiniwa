@@ -8,6 +8,9 @@ export const IMAGE_TILE_GUTTER = 1;
 // The atlas needs headroom for concurrent stable/target LODs. 2048 is the
 // measured cross-device safe edge even when MAX_TEXTURE_SIZE is much larger.
 export const IMAGE_TILE_THRESHOLD_EDGE = 2048;
+// Whole-image uploads stay below the 8 MiB frame budget. Larger display
+// requirements use the committed 512px tile pyramid.
+export const IMAGE_WHOLE_TEXTURE_EDGE = 1024;
 export const LARGE_IMAGE_TILE_EDGE = 8192;
 export const MIP_OVERSAMPLE = 1.25;
 

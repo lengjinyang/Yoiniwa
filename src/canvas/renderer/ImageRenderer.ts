@@ -1,6 +1,6 @@
 import { ColorMatrixFilter, Rectangle, Sprite, Texture, type Container } from 'pixi.js';
 import type { ImageItem, Scene, Viewport } from '../../types';
-import { imageRequestKey } from '../../shared/imagePipelineConfig';
+import { imageRequestKey, IMAGE_WHOLE_TEXTURE_EDGE } from '../../shared/imagePipelineConfig';
 import { resolveCanvasMipUrl } from '../assets/AssetPathResolver';
 import { desiredImageMip, mipWithHysteresis, requiredImageEdge, type MipSelectionState } from '../textures/MipSelector';
 import type { GpuTextureEntry } from '../textures/GpuTextureCache';
@@ -8,6 +8,7 @@ import type { TextureManager } from '../textures/TextureManager';
 import { RenderObjectRegistry } from './RenderObjectRegistry';
 import { TileRenderer } from './TileRenderer';
 import type { SceneBounds } from '../scene/SceneNode';
+import { shouldUseTiledImage } from '../textures/TileSelector';
 
 interface PendingSwap { entry: GpuTextureEntry; mip: number; token: number }
 interface ImageRenderObject {
@@ -20,6 +21,7 @@ interface ImageRenderObject {
   mipState: MipSelectionState;
   frameTexture?: Texture;
   pendingSwap?: PendingSwap;
+  lastRelevantAt: number;
   destroy(): void;
 }
 
@@ -77,15 +79,32 @@ export class ImageRenderer {
       const isVisible = options.visible.has(id);
       const isPrefetch = options.prefetch.has(id);
       object.sprite.renderable = isVisible || isPrefetch;
-      if (!isVisible && !isPrefetch) { this.releaseObjectTextures(object); this.tiles.release(id); return; }
+      if (!isVisible && !isPrefetch) {
+        object.sprite.renderable = false;
+        // A short grace period prevents a fast pan out-and-back from discarding
+        // the only stable texture and briefly showing an empty sprite.
+        if (options.now - object.lastRelevantAt >= 1500) {
+          this.releaseObjectTextures(object);
+          this.tiles.release(id);
+        }
+        return;
+      }
+      object.lastRelevantAt = options.now;
       const desired = desiredImageMip(item, options.viewport, options.devicePixelRatio);
       const required = requiredImageEdge(item, options.viewport, options.devicePixelRatio);
       const selected = mipWithHysteresis({
         desired, required, state: object.mipState, now: options.now,
-        cameraMoving: options.cameraMoving && !isVisible,
+        cameraMoving: options.cameraMoving,
       });
       object.mipState = { ...selected.state, displayedMip: object.currentMip };
-      this.requestMip(object, item, selected.mip, isVisible ? 100 : 20);
+      const tiled = shouldUseTiledImage(item, required);
+      // Keep an already displayed whole texture as the stable safety plane.
+      // A direct high-zoom entry starts with a bounded 1024px plane while its
+      // complete visible tile set is decoded and uploaded in later frames.
+      const wholeMip = tiled
+        ? object.currentMip ?? Math.min(selected.mip, IMAGE_WHOLE_TEXTURE_EDGE)
+        : selected.mip;
+      this.requestMip(object, item, wholeMip, isVisible ? 100 : 20);
       this.tiles.update(item, required, isVisible ? options.visibleBounds : options.prefetchBounds, isVisible ? 120 : 15);
     });
   }
@@ -111,6 +130,9 @@ export class ImageRenderer {
       if (oldKey && oldKey !== object.textureKey) this.textures.release(oldKey);
     });
     this.tiles.commitPendingSwaps();
+    this.objects.forEach((object, id) => {
+      if (this.tiles.hasCurrent(id)) object.sprite.renderable = false;
+    });
   }
 
   private syncItem(item: ImageItem) {
@@ -121,7 +143,7 @@ export class ImageRenderer {
       grayscale.grayscale(1, false);
       const textures = this.textures;
       object = {
-        sprite, grayscale, loadToken: 0, mipState: {},
+        sprite, grayscale, loadToken: 0, mipState: {}, lastRelevantAt: performance.now(),
         destroy() {
           this.loadToken += 1;
           if (this.pendingSwap) textures.release(this.pendingSwap.entry.key);

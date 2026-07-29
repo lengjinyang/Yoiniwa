@@ -64,6 +64,13 @@ afterEach(async () => {
 });
 
 describe('scene package extraction limits', () => {
+  it('accepts a version-one package so the renderer migration boundary can upgrade it', async () => {
+    const directory = await temporaryDirectory();
+    const filePath = path.join(directory, 'version-one.refcanvas');
+    await writePackage(filePath, manifest([], { version: 1 }));
+    await expect(packageReader(path.join(directory, 'cache'))(filePath)).resolves.toMatchObject({ version: 1 });
+  });
+
   it('reads the recent-project asset index without extracting source images', async () => {
     const directory = await temporaryDirectory();
     const cacheDirectory = path.join(directory, 'cache');
@@ -137,5 +144,23 @@ describe('scene package extraction limits', () => {
     await writePackage(filePath, manifest([record]), [{ record, buffer }]);
     await packageReader(cacheDirectory)(filePath);
     await expect(fs.readFile(cachePath)).resolves.toEqual(buffer);
+  });
+
+  it('preserves an existing project and removes temporary output when packaging fails', async () => {
+    const directory = await temporaryDirectory();
+    const filePath = path.join(directory, 'existing.refcanvas');
+    const original = Buffer.from('original-project');
+    await fs.writeFile(filePath, original);
+    const record = assetRecord(Buffer.from('asset'));
+    const packages = createScenePackages({
+      assetRegistry: new Map(),
+      assetCachePath: (value) => path.join(directory, `${value.id}.bin`),
+      ensureAssetFile: async () => { throw new Error('source unavailable'); },
+      extByMime: { 'application/octet-stream': '.bin' }, limits: defaultLimits,
+    });
+    const failingScene = manifest([record], { items: [{ id: 'image', assetId: 'asset-0' }] });
+    await expect(packages.writeScenePackage(filePath, failingScene)).rejects.toThrow('source unavailable');
+    await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    await expect(fs.stat(`${filePath}.${process.pid}.tmp`)).rejects.toThrow();
   });
 });

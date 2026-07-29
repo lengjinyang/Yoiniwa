@@ -18,6 +18,7 @@ export class TextureManager {
   cacheHits = 0;
   cacheMisses = 0;
   lastError = '';
+  private peaks = { cpuBytes: 0, gpuBytes: 0, decodeQueueLength: 0, uploadQueueLength: 0, frameUploadBytes: 0 };
 
   constructor(
     private readonly renderer: TextureUploadRenderer,
@@ -62,17 +63,28 @@ export class TextureManager {
     this.requests.advanceGeneration();
     this.uploads.clear(new StaleTextureRequestError('Canvas texture generation changed'));
     this.inFlight.clear();
-    this.cpu.clear();
     this.gpu.clear();
+    this.cpu.clear();
+    this.peaks = { cpuBytes: 0, gpuBytes: 0, decodeQueueLength: 0, uploadQueueLength: 0, frameUploadBytes: 0 };
   }
 
   stats() {
-    return {
+    const current = {
       cpuBytes: this.cpu.bytes, gpuBytes: this.gpu.bytes, gpuTextures: this.gpu.size,
       decodeQueueLength: this.requests.queueLength, uploadQueueLength: this.uploads.length,
       uploadedBytesThisFrame: this.uploads.lastFrameBytes, cacheHits: this.cacheHits, cacheMisses: this.cacheMisses,
       lastError: this.lastError,
     };
+    this.peaks = {
+      cpuBytes: Math.max(this.peaks.cpuBytes, current.cpuBytes),
+      gpuBytes: Math.max(this.peaks.gpuBytes, current.gpuBytes),
+      decodeQueueLength: Math.max(this.peaks.decodeQueueLength, current.decodeQueueLength),
+      uploadQueueLength: Math.max(this.peaks.uploadQueueLength, current.uploadQueueLength),
+      frameUploadBytes: Math.max(this.peaks.frameUploadBytes, current.uploadedBytesThisFrame),
+    };
+    return { ...current, peakCpuBytes: this.peaks.cpuBytes, peakGpuBytes: this.peaks.gpuBytes,
+      peakDecodeQueueLength: this.peaks.decodeQueueLength, peakUploadQueueLength: this.peaks.uploadQueueLength,
+      peakFrameUploadBytes: this.peaks.frameUploadBytes };
   }
 
   destroy() {
@@ -101,7 +113,9 @@ export class TextureManager {
       this.requestFrame();
       return await upload;
     } finally {
-      this.cpu.delete(key);
+      // The decoded bitmap remains in the byte-budgeted CPU LRU after upload.
+      // Only its temporary upload pin is released here.
+      this.cpu.unpin(key);
     }
   }
 

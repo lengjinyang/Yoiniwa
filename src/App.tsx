@@ -583,8 +583,9 @@ export default function App() {
     });
   }, [history]);
 
-  const eraseAnnotations = useCallback((x: number, y: number, radius: number) => {
-    history.preview((scene) => {
+  const eraseAnnotations = useCallback((samples: readonly { x: number; y: number; radius: number }[]) => {
+    if (!samples.length) return;
+    history.commit((scene) => samples.forEach(({ x, y, radius }) => {
       const result = eraseAnnotationsAt(scene.annotations, x, y, radius);
       if (!result.changed) return;
       scene.annotations = result.annotations;
@@ -597,7 +598,7 @@ export default function App() {
           }
         });
       });
-    });
+    }));
   }, [history]);
 
   const clearAnnotations = useCallback(() => {
@@ -1439,9 +1440,7 @@ export default function App() {
         colorPickerHeld={colorPickerHeld}
         onColorPicked={(color) => { void syncPickedColor(color); }}
         onAddAnnotation={addAnnotation}
-        onEraseStart={history.beginTransaction}
-        onEraseAt={eraseAnnotations}
-        onEraseEnd={history.commitTransaction}
+        onErase={eraseAnnotations}
         onFocusItem={focusItem}
         onContextMenu={(position) => { setPropertiesOpen(false); setContextMenu(position); }}
         windowLocked={windowMode.locked}

@@ -1,4 +1,5 @@
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
+import { performanceMonitor } from '../../performanceMonitor';
 
 type PointerHandler = (event: PointerEvent) => void;
 type WheelHandler = (event: WheelEvent) => void;
@@ -14,7 +15,10 @@ export class InputRouter {
 
   constructor(element: HTMLElement, lifecycle: RuntimeLifecycle) {
     const pointerDown = (event: PointerEvent) => this.down.forEach((handler) => handler(event));
-    const pointerMove = (event: PointerEvent) => this.move.forEach((handler) => handler(event));
+    const pointerMove = (event: PointerEvent) => {
+      performanceMonitor.markPointerMove();
+      this.move.forEach((handler) => handler(event));
+    };
     const pointerUp = (event: PointerEvent) => this.up.forEach((handler) => handler(event));
     const mouseWheel = (event: WheelEvent) => {
       event.preventDefault();

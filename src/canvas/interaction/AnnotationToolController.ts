@@ -5,16 +5,18 @@ import type { InputRouter } from './InputRouter';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
 
 export interface AnnotationToolState { enabled: boolean; tool: AnnotationTool; color: string; width: number }
+export interface EraserSample { x: number; y: number; radius: number }
 
 export class AnnotationToolController {
   private readonly preview = new Graphics();
   private pointerId?: number;
   private points: number[] = [];
+  private eraserSamples: EraserSample[] = [];
 
   constructor(private readonly options: {
     element: HTMLElement; input: InputRouter; camera: Camera; lifecycle: RuntimeLifecycle; layer: Container;
     state(): AnnotationToolState; add(annotation: AnnotationItem): void;
-    eraseStart(): void; eraseAt(x: number, y: number, radius: number): void; eraseEnd(): void;
+    erase(samples: readonly EraserSample[]): void;
     requestRender(): void;
   }) { options.layer.addChild(this.preview); }
 
@@ -25,8 +27,9 @@ export class AnnotationToolController {
       this.pointerId = event.pointerId;
       const point = this.world(event);
       this.points = [point.x, point.y];
-      this.options.element.setPointerCapture(event.pointerId);
-      if (state.tool === 'eraser') { this.options.eraseStart(); this.options.eraseAt(point.x, point.y, state.width * 3); }
+      this.eraserSamples = [];
+      try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic test events have no native capture target. */ }
+      if (state.tool === 'eraser') this.eraserSamples.push({ x: point.x, y: point.y, radius: state.width * 3 });
       this.drawPreview();
     };
     const move = (event: PointerEvent) => {
@@ -35,19 +38,20 @@ export class AnnotationToolController {
       const state = this.options.state();
       if (state.tool === 'pen') this.points.push(point.x, point.y);
       else this.points.splice(2, 2, point.x, point.y);
-      if (state.tool === 'eraser') this.options.eraseAt(point.x, point.y, state.width * 3);
+      if (state.tool === 'eraser') this.eraserSamples.push({ x: point.x, y: point.y, radius: state.width * 3 });
       this.drawPreview();
     };
     const up = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
       const state = this.options.state();
-      if (state.tool === 'eraser') this.options.eraseEnd();
+      if (state.tool === 'eraser') this.options.erase(this.eraserSamples);
       else {
         const annotation = this.createAnnotation(state);
         if (annotation) this.options.add(annotation);
       }
       this.pointerId = undefined;
       this.points = [];
+      this.eraserSamples = [];
       this.preview.clear();
       this.options.requestRender();
       if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);

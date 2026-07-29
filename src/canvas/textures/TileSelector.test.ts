@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ImageItem } from '../../types';
-import { selectVisibleTiles } from './TileSelector';
+import { selectVisibleTiles, shouldUseTiledImage } from './TileSelector';
 
 describe('selectVisibleTiles', () => {
   it('selects only the tile workset intersecting the visible image region', () => {
@@ -12,5 +12,12 @@ describe('selectVisibleTiles', () => {
     expect(result.level).toBe(1);
     expect(result.tiles.length).toBeGreaterThan(0);
     expect(result.tiles.length).toBeLessThan(128);
+  });
+
+  it('routes high-resolution display requests through bounded tile uploads', () => {
+    const large = { naturalWidth: 3840, naturalHeight: 2160 } as ImageItem;
+    expect(shouldUseTiledImage(large, 1024)).toBe(false);
+    expect(shouldUseTiledImage(large, 1025)).toBe(true);
+    expect(shouldUseTiledImage({ naturalWidth: 2048, naturalHeight: 2048 }, 2048)).toBe(false);
   });
 });

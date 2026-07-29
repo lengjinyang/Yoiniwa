@@ -83,7 +83,7 @@ export class SelectionController {
     const selected = scene.images().filter((item) => this.selection.has(item.id) && !item.locked);
     const selectionBounds = unionImageBounds(selected);
     this.pointer.begin(event);
-    this.options.element.setPointerCapture(event.pointerId);
+    try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic benchmark events have no native capture target. */ }
     if (handle && selected.length && selectionBounds) {
       this.drag = { kind: 'transform', start: world, originals: selected.map((item) => ({ ...item })), bounds: selectionBounds, handle };
       return;
@@ -146,7 +146,6 @@ export class SelectionController {
       const box = boxFromPoints(this.drag.start, world);
       const ids = imagesInSelectionBox(scene.images(), box);
       this.selection.replace([...this.drag.additive, ...ids]);
-      this.options.selectionChanged(this.selection.values());
       this.options.drawOverlay(scene.images().filter((item) => this.selection.has(item.id)), this.options.camera.snapshot().scale, box);
     } else if (this.drag.kind === 'transform') {
       this.pendingChanges = transformImageSelection({ ...this.drag, current: world });
@@ -164,6 +163,7 @@ export class SelectionController {
     if (!this.drag || !this.pointer.end(event)) return;
     if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);
     if (this.drag.kind === 'box') this.options.cameraChanged(true);
+    if (this.drag.kind === 'box') this.options.selectionChanged(this.selection.values());
     if (this.pendingChanges.length) this.options.commit(this.pendingChanges);
     if (this.drag.kind === 'annotation') this.options.commitAnnotation(this.drag.ids, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
     if (this.drag.kind === 'group') this.options.commitGroup(this.drag.id, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);

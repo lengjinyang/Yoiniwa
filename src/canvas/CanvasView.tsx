@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { AnnotationItem, AnnotationTool, ImageItem, PickedColor, Scene, Viewport } from '../types';
 import { CanvasRuntime } from './runtime/CanvasRuntime';
+import type { EraserSample } from './interaction/AnnotationToolController';
 
 interface CanvasViewProps {
   background: string;
@@ -26,9 +27,7 @@ interface CanvasViewProps {
   colorPickerHeld: boolean;
   onColorPicked(color: PickedColor): void;
   onAddAnnotation(annotation: AnnotationItem): void;
-  onEraseStart(): void;
-  onEraseAt(x: number, y: number, radius: number): void;
-  onEraseEnd(): void;
+  onErase(samples: readonly EraserSample[]): void;
   onFocusItem(item: ImageItem): void;
   onContextMenu(position: { x: number; y: number }): void;
   windowLocked: boolean;
@@ -42,7 +41,7 @@ export function CanvasView({
   onViewportCommit, onSelectionChange, onAnnotationSelectionChange, onGroupSelectionChange,
   onItemsChanged, onAnnotationsChanged, onGroupMoved, onGroupHeaderDragChange, onGroupPreview,
   annotationMode, annotationTool, annotationColor, annotationWidth, colorPickerHeld,
-  onColorPicked, onAddAnnotation, onEraseStart, onEraseAt, onEraseEnd, onFocusItem, onContextMenu,
+  onColorPicked, onAddAnnotation, onErase, onFocusItem, onContextMenu,
   windowLocked, onWindowMoveStart, onWindowMove, onWindowMoveEnd,
 }: CanvasViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,7 +60,7 @@ export function CanvasView({
   const groupMovedRef = useRef(onGroupMoved);
   const groupDragRef = useRef(onGroupHeaderDragChange); const groupPreviewRef = useRef(onGroupPreview);
   const colorPickedRef = useRef(onColorPicked); const addAnnotationRef = useRef(onAddAnnotation);
-  const eraseStartRef = useRef(onEraseStart); const eraseAtRef = useRef(onEraseAt); const eraseEndRef = useRef(onEraseEnd);
+  const eraseRef = useRef(onErase);
   const focusItemRef = useRef(onFocusItem); const contextMenuRef = useRef(onContextMenu);
   const windowMoveStartRef = useRef(onWindowMoveStart); const windowMoveRef = useRef(onWindowMove); const windowMoveEndRef = useRef(onWindowMoveEnd);
   viewportCommitRef.current = onViewportCommit;
@@ -73,7 +72,7 @@ export function CanvasView({
   groupMovedRef.current = onGroupMoved;
   groupDragRef.current = onGroupHeaderDragChange; groupPreviewRef.current = onGroupPreview;
   colorPickedRef.current = onColorPicked; addAnnotationRef.current = onAddAnnotation;
-  eraseStartRef.current = onEraseStart; eraseAtRef.current = onEraseAt; eraseEndRef.current = onEraseEnd;
+  eraseRef.current = onErase;
   focusItemRef.current = onFocusItem; contextMenuRef.current = onContextMenu;
   windowMoveStartRef.current = onWindowMoveStart; windowMoveRef.current = onWindowMove; windowMoveEndRef.current = onWindowMoveEnd;
 
@@ -92,8 +91,7 @@ export function CanvasView({
       onGroupHeaderDragChange: (dragging) => groupDragRef.current(dragging),
       onGroupPreview: (id, x, y) => groupPreviewRef.current(id, x, y),
       onColorPicked: (color) => colorPickedRef.current(color), onAddAnnotation: (annotation) => addAnnotationRef.current(annotation),
-      onEraseStart: () => eraseStartRef.current(), onEraseAt: (x, y, radius) => eraseAtRef.current(x, y, radius),
-      onEraseEnd: () => eraseEndRef.current(), onFocusItem: (item) => focusItemRef.current(item),
+      onErase: (samples) => eraseRef.current(samples), onFocusItem: (item) => focusItemRef.current(item),
       onContextMenu: (position) => contextMenuRef.current(position),
       onWindowMoveStart: () => windowMoveStartRef.current(), onWindowMove: () => windowMoveRef.current(),
       onWindowMoveEnd: () => windowMoveEndRef.current(),
