@@ -3,7 +3,7 @@ import { parseRuntimeFlags } from './runtime-flags.js';
 
 describe('runtime flags', () => {
   it('keeps normal mode free of test renderer flags', () => {
-    expect(parseRuntimeFlags({}, ['electron'])).toMatchObject({ smokeTest: false, cleanTestSession: false, legacyRenderer: false });
+    expect(parseRuntimeFlags({}, ['electron'])).toMatchObject({ smokeTest: false, cleanTestSession: false });
   });
 
   it('treats project benchmark as an isolated smoke session', () => {

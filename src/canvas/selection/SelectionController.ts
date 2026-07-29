@@ -33,6 +33,7 @@ interface SelectionControllerOptions {
   commitAnnotation(ids: string[], deltaX: number, deltaY: number): void;
   previewGroup(id: string, deltaX: number, deltaY: number): void;
   commitGroup(id: string, deltaX: number, deltaY: number): void;
+  groupDragChanged(dragging: boolean): void;
   drawOverlay(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }): void;
   hitHandle(point: { x: number; y: number }): TransformHandle | undefined;
   interactionBlocked(): boolean;
@@ -112,6 +113,7 @@ export class SelectionController {
         this.selection.clear(); this.annotationSelection.clear();
         this.options.selectionChanged([]); this.options.annotationSelectionChanged([]); this.options.groupSelectionChanged(group.id);
         this.drag = { kind: 'group', start: world, last: world, id: group.id };
+        this.options.groupDragChanged(true);
         return;
       }
       const additive = event.shiftKey || event.ctrlKey || event.metaKey ? this.selection.values() : [];
@@ -165,6 +167,7 @@ export class SelectionController {
     if (this.pendingChanges.length) this.options.commit(this.pendingChanges);
     if (this.drag.kind === 'annotation') this.options.commitAnnotation(this.drag.ids, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
     if (this.drag.kind === 'group') this.options.commitGroup(this.drag.id, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
+    if (this.drag.kind === 'group') this.options.groupDragChanged(false);
     this.pendingChanges = [];
     this.drag = undefined;
     this.refresh();

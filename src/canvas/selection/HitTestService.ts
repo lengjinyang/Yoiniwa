@@ -41,7 +41,7 @@ export function unionImageBounds(items: ImageItem[]) {
   return { x, y, width: right - x, height: bottom - y };
 }
 
-export function annotationBounds(annotation: AnnotationItem): SceneBounds {
+function annotationBounds(annotation: AnnotationItem): SceneBounds {
   const padding = Math.max(4, annotation.strokeWidth * 2);
   if (annotation.points?.length) {
     const xs = annotation.points.filter((_, index) => index % 2 === 0);

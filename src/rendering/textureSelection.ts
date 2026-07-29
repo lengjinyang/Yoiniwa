@@ -10,12 +10,6 @@ export interface DesiredMipParams {
   oversample?: number;
 }
 
-export interface MipHysteresisState {
-  displayedMip?: number;
-  downgradeCandidate?: number;
-  downgradeSince?: number;
-}
-
 export function rotatedScreenBounds(
   width: number,
   height: number,
@@ -31,7 +25,7 @@ export function rotatedScreenBounds(
   };
 }
 
-export function requiredMipEdge(params: DesiredMipParams) {
+function requiredMipEdge(params: DesiredMipParams) {
   const oversample = params.oversample ?? MIP_OVERSAMPLE;
   const requiredWidth = Math.max(1, params.screenWidthCss * params.devicePixelRatio * oversample);
   const requiredHeight = Math.max(1, params.screenHeightCss * params.devicePixelRatio * oversample);
@@ -49,30 +43,4 @@ export function calculateDesiredMip(params: DesiredMipParams) {
     .sort((left, right) => left - right);
   const required = requiredMipEdge(params);
   return available.find((edge) => edge >= required) ?? available.at(-1) ?? sourceEdge;
-}
-
-/** Upgrades immediately; downgrade requires 2x excess coverage and a settled camera. */
-export function selectMipWithHysteresis(
-  desiredMip: number,
-  requiredEdge: number,
-  state: MipHysteresisState,
-  options: { now: number; cameraMoving: boolean; downgradeDelayMs?: number },
-): { mip: number; state: MipHysteresisState } {
-  const current = state.displayedMip;
-  if (current === undefined || desiredMip >= current) {
-    return { mip: desiredMip, state: { displayedMip: desiredMip } };
-  }
-  if (options.cameraMoving || current < requiredEdge * 2) {
-    return { mip: current, state: { displayedMip: current } };
-  }
-  const candidateSince = state.downgradeCandidate === desiredMip
-    ? state.downgradeSince ?? options.now
-    : options.now;
-  if (options.now - candidateSince < (options.downgradeDelayMs ?? 300)) {
-    return {
-      mip: current,
-      state: { displayedMip: current, downgradeCandidate: desiredMip, downgradeSince: candidateSince },
-    };
-  }
-  return { mip: desiredMip, state: { displayedMip: desiredMip } };
 }

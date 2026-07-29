@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Konva from 'konva';
 import { eraseAnnotationsAt } from './annotationEraser';
-import { CanvasBoard } from './CanvasBoard';
 import { CanvasView } from './canvas/CanvasView';
 import { AutosaveCoordinator } from './canvas/persistence/AutosaveCoordinator';
 import { loadProjectScene } from './canvas/persistence/ProjectLoader';
@@ -79,7 +77,6 @@ export default function App() {
     catch { return 's'; }
   });
   const [focusReturn, setFocusReturn] = useState<typeof history.scene.viewport>();
-  const stageRef = useRef<Konva.Stage>(null);
   const groupToolbarRef = useRef<HTMLDivElement>(null);
   const groupToolbarHideTimerRef = useRef<number | undefined>(undefined);
   const groupToolbarPointerInsideRef = useRef(false);
@@ -98,7 +95,6 @@ export default function App() {
     const result = await api?.autosaveScene(scene, revision);
     if (result?.scene) history.markSaved(result.scene, result.revision ?? revision);
   };
-  const pixiCanvasPreview = new URLSearchParams(window.location.search).has('pixi-canvas');
   const performanceSceneRef = useRef(history.scene);
   const liveViewportRef = useRef(history.scene.viewport);
   performanceSceneRef.current = history.scene;
@@ -1417,7 +1413,7 @@ export default function App() {
 
   return <main className="app-shell">
     <section className="workspace">
-      {pixiCanvasPreview ? <CanvasView
+      <CanvasView
         background={history.scene.canvas.background}
         scene={history.scene}
         viewport={history.scene.viewport}
@@ -1431,63 +1427,29 @@ export default function App() {
         onItemsChanged={commitItemChanges}
         onAnnotationsChanged={commitAnnotationChanges}
         onGroupMoved={moveGroup}
-        annotationMode={annotationMode}
-        annotationTool={annotationTool}
-        annotationColor={annotationColor}
-        annotationWidth={annotationWidth}
-        colorPickerHeld={colorPickerHeld}
-        onColorPicked={(color) => { void syncPickedColor(color); }}
-        onAddAnnotation={addAnnotation}
-        onEraseStart={history.beginTransaction}
-        onEraseAt={eraseAnnotations}
-        onEraseEnd={history.commitTransaction}
-        onFocusItem={focusItem}
-        onContextMenu={(position) => { setPropertiesOpen(false); setContextMenu(position); }}
-        windowLocked={windowMode.locked}
-        onWindowMoveStart={() => api?.beginWindowMove()}
-        onWindowMove={() => api?.updateWindowMove()}
-        onWindowMoveEnd={() => api?.endWindowMove()}
-        onViewportCommit={history.updateViewport}
-      /> : <CanvasBoard
-        scene={history.scene}
-        projectEpoch={history.projectEpoch}
-        selectedIds={selectedIds}
-        selectedAnnotationIds={selectedAnnotationIds}
-        selectedGroupId={selectedGroupId}
-        onSelectionChange={(imageIds, annotationIds = []) => { setSelectedIds(imageIds); setSelectedAnnotationIds(annotationIds); }}
-        onGroupSelectionChange={setSelectedGroupId}
-        onViewportChange={history.updateViewport}
-        onViewportPreview={(viewport) => { liveViewportRef.current = viewport; }}
-        onItemsChanged={commitItemChanges}
-        onFocusItem={focusItem}
-        onContextMenu={(position) => { setPropertiesOpen(false); setContextMenu(position); }}
-        onWindowMoveStart={() => api?.beginWindowMove()}
-        onWindowMove={() => api?.updateWindowMove()}
-        onWindowMoveEnd={() => api?.endWindowMove()}
-        windowLocked={windowMode.locked}
-        annotationMode={annotationMode}
-        colorPickerHeld={colorPickerHeld}
-        colorPickerShortcut={colorPickerShortcut}
-        onColorPicked={(color) => { void syncPickedColor(color); }}
-        annotationTool={annotationTool}
-        annotationColor={annotationColor}
-        annotationWidth={annotationWidth}
-        onAddAnnotation={addAnnotation}
-        onEraseStart={history.beginTransaction}
-        onEraseAt={eraseAnnotations}
-        onEraseEnd={history.commitTransaction}
-        onAnnotationsChanged={commitAnnotationChanges}
-        onGroupMoved={moveGroup}
         onGroupHeaderDragChange={setGroupHeaderDragging}
         onGroupPreview={(id, x, y) => {
           const group = history.scene.groups.find((value) => value.id === id);
           if (group) { positionGroupToolbar(group, x, y); showGroupToolbar(); }
         }}
-        onGroupChanged={changeGroup}
-        onGroupDeleted={(id) => deleteGroupById(id, false)}
-        onRenameGroup={renameGroupById}
-        stageRef={stageRef}
-      />}
+        annotationMode={annotationMode}
+        annotationTool={annotationTool}
+        annotationColor={annotationColor}
+        annotationWidth={annotationWidth}
+        colorPickerHeld={colorPickerHeld}
+        onColorPicked={(color) => { void syncPickedColor(color); }}
+        onAddAnnotation={addAnnotation}
+        onEraseStart={history.beginTransaction}
+        onEraseAt={eraseAnnotations}
+        onEraseEnd={history.commitTransaction}
+        onFocusItem={focusItem}
+        onContextMenu={(position) => { setPropertiesOpen(false); setContextMenu(position); }}
+        windowLocked={windowMode.locked}
+        onWindowMoveStart={() => api?.beginWindowMove()}
+        onWindowMove={() => api?.updateWindowMove()}
+        onWindowMoveEnd={() => api?.endWindowMove()}
+        onViewportCommit={(viewport) => { liveViewportRef.current = viewport; history.updateViewport(viewport); }}
+      />
 
       {propertiesOpen && <aside className="property-panel no-drag">
         <div className="property-header"><div><strong>属性</strong><span>{selectedGroup ? '分组框' : selectedObjectCount ? `${selectedObjectCount} 项` : '画板'}</span></div><button title="关闭属性面板 (Tab)" onClick={() => setPropertiesOpen(false)}>×</button></div>

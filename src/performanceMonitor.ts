@@ -1,5 +1,11 @@
-import type { ImageRenderStats } from './rendering/ImageRenderBackend';
 import type { ImagePipelinePerformanceStats } from './types';
+
+interface ImageRenderStats {
+  drawCalls: number; instances: number; gpuBytes: number; textureUploads: number; textureCount: number;
+  bindTextureCalls: number; bufferDataCalls: number; bufferSubDataCalls: number;
+  texImage2DCalls: number; texSubImage2DCalls: number; textureUploadMs: number;
+  renderedViewportX: number; renderedViewportY: number; renderedViewportScale: number;
+}
 
 export interface PerformanceSnapshot {
   fps: number;

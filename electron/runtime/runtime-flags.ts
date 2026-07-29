@@ -8,7 +8,6 @@ export interface RuntimeFlags {
   smokeTest: boolean;
   cleanTestSession: boolean;
   manualInputRecording: boolean;
-  legacyRenderer: boolean;
 }
 
 export function parseRuntimeFlags(env: NodeJS.ProcessEnv, argv: readonly string[]): RuntimeFlags {
@@ -25,6 +24,5 @@ export function parseRuntimeFlags(env: NodeJS.ProcessEnv, argv: readonly string[
     forceThumbnailFailure, smokeTest,
     cleanTestSession: smokeTest || env.REFCANVAS_CLEAN_TEST_SESSION === '1',
     manualInputRecording: env.REFCANVAS_MANUAL_INPUT_RECORD === '1',
-    legacyRenderer: env.REFCANVAS_LEGACY_RENDERER === '1',
   };
 }

@@ -16,6 +16,8 @@ interface CanvasViewProps {
   onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>): void;
   onAnnotationsChanged(changes: Array<{ id: string; deltaX: number; deltaY: number }>): void;
   onGroupMoved(id: string, deltaX: number, deltaY: number): void;
+  onGroupHeaderDragChange(dragging: boolean): void;
+  onGroupPreview(id: string, x?: number, y?: number): void;
   projectEpoch: number;
   annotationMode: boolean;
   annotationTool: AnnotationTool;
@@ -38,7 +40,7 @@ interface CanvasViewProps {
 export function CanvasView({
   background, scene, viewport, selectedIds, selectedAnnotationIds, selectedGroupId, projectEpoch,
   onViewportCommit, onSelectionChange, onAnnotationSelectionChange, onGroupSelectionChange,
-  onItemsChanged, onAnnotationsChanged, onGroupMoved,
+  onItemsChanged, onAnnotationsChanged, onGroupMoved, onGroupHeaderDragChange, onGroupPreview,
   annotationMode, annotationTool, annotationColor, annotationWidth, colorPickerHeld,
   onColorPicked, onAddAnnotation, onEraseStart, onEraseAt, onEraseEnd, onFocusItem, onContextMenu,
   windowLocked, onWindowMoveStart, onWindowMove, onWindowMoveEnd,
@@ -57,6 +59,7 @@ export function CanvasView({
   const groupSelectionRef = useRef(onGroupSelectionChange);
   const annotationsChangedRef = useRef(onAnnotationsChanged);
   const groupMovedRef = useRef(onGroupMoved);
+  const groupDragRef = useRef(onGroupHeaderDragChange); const groupPreviewRef = useRef(onGroupPreview);
   const colorPickedRef = useRef(onColorPicked); const addAnnotationRef = useRef(onAddAnnotation);
   const eraseStartRef = useRef(onEraseStart); const eraseAtRef = useRef(onEraseAt); const eraseEndRef = useRef(onEraseEnd);
   const focusItemRef = useRef(onFocusItem); const contextMenuRef = useRef(onContextMenu);
@@ -68,6 +71,7 @@ export function CanvasView({
   groupSelectionRef.current = onGroupSelectionChange;
   annotationsChangedRef.current = onAnnotationsChanged;
   groupMovedRef.current = onGroupMoved;
+  groupDragRef.current = onGroupHeaderDragChange; groupPreviewRef.current = onGroupPreview;
   colorPickedRef.current = onColorPicked; addAnnotationRef.current = onAddAnnotation;
   eraseStartRef.current = onEraseStart; eraseAtRef.current = onEraseAt; eraseEndRef.current = onEraseEnd;
   focusItemRef.current = onFocusItem; contextMenuRef.current = onContextMenu;
@@ -85,6 +89,8 @@ export function CanvasView({
       onItemsChanged: (changes) => itemsChangedRef.current(changes),
       onAnnotationsChanged: (changes) => annotationsChangedRef.current(changes),
       onGroupMoved: (id, deltaX, deltaY) => groupMovedRef.current(id, deltaX, deltaY),
+      onGroupHeaderDragChange: (dragging) => groupDragRef.current(dragging),
+      onGroupPreview: (id, x, y) => groupPreviewRef.current(id, x, y),
       onColorPicked: (color) => colorPickedRef.current(color), onAddAnnotation: (annotation) => addAnnotationRef.current(annotation),
       onEraseStart: () => eraseStartRef.current(), onEraseAt: (x, y, radius) => eraseAtRef.current(x, y, radius),
       onEraseEnd: () => eraseEndRef.current(), onFocusItem: (item) => focusItemRef.current(item),
@@ -112,5 +118,15 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setColorPickerHeld(colorPickerHeld); }, [colorPickerHeld]);
   useEffect(() => { runtimeRef.current?.setWindowLocked(windowLocked); }, [windowLocked]);
   useEffect(() => { runtimeRef.current?.setBackground(background); }, [background]);
+  useEffect(() => {
+    const setBenchmarkViewport = (event: Event) => {
+      const next = (event as CustomEvent<Viewport>).detail;
+      if (!next || !Number.isFinite(next.x) || !Number.isFinite(next.y) || !Number.isFinite(next.scale)) return;
+      runtimeRef.current?.setViewport(next);
+      viewportCommitRef.current?.(next);
+    };
+    window.addEventListener('refcanvas-stress-viewport', setBenchmarkViewport);
+    return () => window.removeEventListener('refcanvas-stress-viewport', setBenchmarkViewport);
+  }, []);
   return <div ref={containerRef} className="canvas-runtime-root" data-canvas-runtime="pixi-v8" />;
 }

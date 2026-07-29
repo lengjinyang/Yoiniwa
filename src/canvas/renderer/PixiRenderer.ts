@@ -22,6 +22,7 @@ export class PixiRenderer {
   private comments?: CommentRenderer;
   private contextDisposer?: () => void;
   private pendingScene?: Scene;
+  private selectedImages = 0;
 
   constructor(private readonly requestRender: () => void) {}
 
@@ -68,6 +69,7 @@ export class PixiRenderer {
     this.annotations?.sync(scene.annotations);
     this.comments?.sync(scene.items);
   }
+  setSelectedImageCount(count: number) { this.selectedImages = count; }
   setSelectedGroup(id?: string) { this.groups?.setSelected(id); if (this.pendingScene) this.groups?.sync(this.pendingScene.groups); }
   drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }) {
     this.selection?.draw(items, scale, box);
@@ -116,10 +118,28 @@ export class PixiRenderer {
     performanceMonitor.recordCanvasRuntimeFrame(performance.now() - startedAt, 'pixi-v8');
     this.app.canvas.dataset.totalImages = String(this.pendingScene?.items.length ?? 0);
     this.app.canvas.dataset.visibleImages = String(workset?.visible.size ?? 0);
+    this.app.canvas.dataset.renderedImages = String(workset?.visible.size ?? 0);
+    this.app.canvas.dataset.renderCommands = String(workset?.visible.size ?? 0);
+    this.app.canvas.dataset.loadedCommands = String(
+      textureStats?.decodeQueueLength || textureStats?.uploadQueueLength ? 0 : workset?.visible.size ?? 0,
+    );
+    this.app.canvas.dataset.selectedImages = String(this.selectedImages);
+    this.app.canvas.dataset.renderBackend = 'pixi-webgl';
+    this.app.canvas.dataset.viewportX = String(viewport.x);
+    this.app.canvas.dataset.viewportY = String(viewport.y);
+    this.app.canvas.dataset.viewportScale = String(viewport.scale);
+    this.app.canvas.dataset.renderedViewportX = String(viewport.x);
+    this.app.canvas.dataset.renderedViewportY = String(viewport.y);
+    this.app.canvas.dataset.renderedViewportScale = String(viewport.scale);
     this.app.canvas.dataset.gpuTextures = String(textureStats?.gpuTextures ?? 0);
+    this.app.canvas.dataset.gpuBytes = String(textureStats?.gpuBytes ?? 0);
+    this.app.canvas.dataset.cpuImageBytes = String(textureStats?.cpuBytes ?? 0);
+    this.app.canvas.dataset.frameUploadBytes = String(textureStats?.uploadedBytesThisFrame ?? 0);
     this.app.canvas.dataset.decodeQueue = String(textureStats?.decodeQueueLength ?? 0);
     this.app.canvas.dataset.uploadQueue = String(textureStats?.uploadQueueLength ?? 0);
     this.app.canvas.dataset.cacheMisses = String(textureStats?.cacheMisses ?? 0);
+    this.app.canvas.dataset.cacheHitRate = String(textureStats && textureStats.cacheHits + textureStats.cacheMisses
+      ? textureStats.cacheHits / (textureStats.cacheHits + textureStats.cacheMisses) : 0);
     this.app.canvas.dataset.textureError = textureStats?.lastError ?? '';
   }
 

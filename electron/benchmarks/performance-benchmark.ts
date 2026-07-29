@@ -95,8 +95,8 @@ const rendererHelpers = `
       await wait(50);
     }
   };
-  const host = () => document.querySelector('.canvas-host');
-  const stageCanvas = () => host()?.querySelector('.konvajs-content canvas');
+  const host = () => document.querySelector('canvas.pixi-canvas');
+  const stageCanvas = () => host();
   const snapshot = () => ({
     ...(window.__refCanvasPerformanceSnapshot?.() || {}),
     backend: host()?.getAttribute('data-render-backend'),
@@ -249,7 +249,7 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
       const rendererResult = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
         window.__refCanvasPerf.loadScene(${JSON.stringify(reopened)});
         const started = performance.now();
-        const poll = () => Number(document.querySelector('.canvas-host')?.getAttribute('data-total-images') || 0) === 500
+        const poll = () => Number(document.querySelector('canvas.pixi-canvas')?.getAttribute('data-total-images') || 0) === 500
           ? setTimeout(() => resolve(window.__refCanvasPerformanceSnapshot?.() || {}), 500)
           : performance.now() - started > 30000 ? resolve({ timeout: true }) : setTimeout(poll, 50);
         poll();
