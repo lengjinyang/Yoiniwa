@@ -1,4 +1,4 @@
-import type { ImageItem } from '../../types';
+import type { AnnotationItem, ImageGroup, ImageItem } from '../../types';
 import type { SceneBounds } from '../scene/SceneNode';
 
 export function imageBounds(item: ImageItem): SceneBounds {
@@ -39,4 +39,29 @@ export function unionImageBounds(items: ImageItem[]) {
   const right = Math.max(...bounds.map((value) => value.x + value.width));
   const bottom = Math.max(...bounds.map((value) => value.y + value.height));
   return { x, y, width: right - x, height: bottom - y };
+}
+
+export function annotationBounds(annotation: AnnotationItem): SceneBounds {
+  const padding = Math.max(4, annotation.strokeWidth * 2);
+  if (annotation.points?.length) {
+    const xs = annotation.points.filter((_, index) => index % 2 === 0);
+    const ys = annotation.points.filter((_, index) => index % 2 === 1);
+    const x = Math.min(...xs) - padding; const y = Math.min(...ys) - padding;
+    return { x, y, width: Math.max(1, Math.max(...xs) + padding - x), height: Math.max(1, Math.max(...ys) + padding - y) };
+  }
+  return { x: (annotation.x ?? 0) - padding, y: (annotation.y ?? 0) - padding,
+    width: Math.max(1, (annotation.width ?? 0) + padding * 2), height: Math.max(1, (annotation.height ?? 0) + padding * 2) };
+}
+
+export function topmostAnnotationAtPoint(annotations: AnnotationItem[], point: { x: number; y: number }) {
+  return [...annotations].reverse().find((annotation) => {
+    if (annotation.hidden) return false;
+    const bounds = annotationBounds(annotation);
+    return point.x >= bounds.x && point.x <= bounds.x + bounds.width && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+  });
+}
+
+export function groupHeaderAtPoint(groups: ImageGroup[], point: { x: number; y: number }) {
+  return [...groups].reverse().find((group) => !group.hidden && point.x >= group.x && point.x <= group.x + group.width
+    && point.y >= group.y && point.y <= group.y + Math.min(28, group.height));
 }

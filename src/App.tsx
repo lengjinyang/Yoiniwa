@@ -1401,9 +1401,31 @@ export default function App() {
         scene={history.scene}
         viewport={history.scene.viewport}
         selectedIds={selectedIds}
+        selectedAnnotationIds={selectedAnnotationIds}
+        selectedGroupId={selectedGroupId}
         projectEpoch={history.projectEpoch}
         onSelectionChange={(ids) => { setSelectedIds(ids); setSelectedAnnotationIds([]); setSelectedGroupId(undefined); }}
+        onAnnotationSelectionChange={(ids) => { setSelectedAnnotationIds(ids); setSelectedIds([]); setSelectedGroupId(undefined); }}
+        onGroupSelectionChange={(id) => { setSelectedGroupId(id); if (id) { setSelectedIds([]); setSelectedAnnotationIds([]); } }}
         onItemsChanged={commitItemChanges}
+        onAnnotationsChanged={commitAnnotationChanges}
+        onGroupMoved={moveGroup}
+        annotationMode={annotationMode}
+        annotationTool={annotationTool}
+        annotationColor={annotationColor}
+        annotationWidth={annotationWidth}
+        colorPickerHeld={colorPickerHeld}
+        onColorPicked={(color) => { void syncPickedColor(color); }}
+        onAddAnnotation={addAnnotation}
+        onEraseStart={history.beginTransaction}
+        onEraseAt={eraseAnnotations}
+        onEraseEnd={history.commitTransaction}
+        onFocusItem={focusItem}
+        onContextMenu={(position) => { setPropertiesOpen(false); setContextMenu(position); }}
+        windowLocked={windowMode.locked}
+        onWindowMoveStart={() => api?.beginWindowMove()}
+        onWindowMove={() => api?.updateWindowMove()}
+        onWindowMoveEnd={() => api?.endWindowMove()}
         onViewportCommit={history.updateViewport}
       /> : <CanvasBoard
         scene={history.scene}

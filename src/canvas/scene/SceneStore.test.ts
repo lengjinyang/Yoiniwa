@@ -24,4 +24,13 @@ describe('SceneStore', () => {
     expect(store.node('a')).toBeUndefined();
     expect(store.node('next')?.id).toBe('next');
   });
+
+  it('hides group contents in the render snapshot without mutating persisted nodes', () => {
+    const source = scene(['inside']);
+    source.groups = [{ id: 'group', name: 'g', x: 0, y: 0, width: 10, height: 10, color: '#fff', titleColor: '#fff',
+      opacity: 1, collapsed: false, sizeLocked: false, contentsHidden: true, members: [{ type: 'image', id: 'inside' }] }];
+    const store = new SceneStore(source);
+    expect(store.renderScene().items[0].hidden).toBe(true);
+    expect(store.snapshot().items[0].hidden).toBeUndefined();
+  });
 });
