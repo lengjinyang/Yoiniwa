@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+*.log
+.vite/
+dist-electron/
+performance-results/
+.dev-smoke-user-data/
+.project-bench-user-data*/
+.refcanvas-test-session/
