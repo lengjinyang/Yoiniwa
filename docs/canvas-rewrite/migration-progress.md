@@ -7,8 +7,8 @@
 | 2. Scene 与真实图片 | 已完成 | `b961ba5` | typecheck/lint，53 files/196 tests，production build |
 | 3. 选择与变换 | 已完成 | `71cab90` | typecheck/lint，55 files/199 tests，production build |
 | 4. Command/Undo/Redo | 已完成 | `53fe3ef` | typecheck/lint，56 files/201 tests，production build |
-| 5. 图片流送与缓存 | 已完成 | 待本阶段提交 | typecheck/lint，62 files/209 tests，production build，Pixi 真图片 smoke |
-| 6. 剩余功能 | 未开始 | — | — |
+| 5. 图片流送与缓存 | 已完成 | `b2234b7` | typecheck/lint，62 files/209 tests，production build，Pixi 真图片 smoke |
+| 6. 剩余功能 | 已完成 | 待本阶段提交 | 62 files/210 tests，production build，Pixi smoke，quick benchmark |
 | 7. 工程兼容 | 未开始 | — | — |
 | 唯一入口与删除 Legacy | 未开始 | — | — |
 
@@ -61,3 +61,12 @@
 - 超过 8192 的资源只用最大 4096 整图作稳定底图；放大需求超过 4096 时按 512 tile 建立完整目标集合，全部上传后整组切换。
 - 开发性能面板接入 Pixi CPU/GPU 字节、队列、上传字节、命中率、可见/预加载数和当前 Mip。
 - `npm run smoke:pixi` 已在 Electron production bundle 中导入真实 PNG、完成磁盘金字塔命中、GPU 上传并确认 Pixi canvas 数据。
+
+## 阶段 6 结果
+
+- Pixi 原生绘制分组框/标题/折叠态/锁定提示、pen/arrow/rectangle/ellipse 标注和图片评论气泡。
+- 分组 contentsHidden 由 SceneStore 生成只读 render snapshot，不污染持久 Scene；嵌套成员递归隐藏。
+- 新 Runtime 接管标注创建/擦除、标注拖动、分组头拖动、框选边缘自动平移、右键菜单、右键窗口移动、双击聚焦和异步源像素取色。
+- 对齐/分布/Pack、裁切/翻转/透明/灰度、标签、属性面板、Outline、导入/拖放/粘贴、保存/打开仍由保留的应用服务操作同一 Scene，Pixi 通过低频快照同步。
+- Quick 图片管线实测：5 个混合 JPEG/PNG/WebP 资源首次构建 739.15ms，二次 manifest 打开 1.31ms，峰值 RSS 131,330,048 bytes，稳定 RSS 83,058,688 bytes，命中率 100%，重复并发解码 0。
+- Quick Node benchmark 没有 GPU 上下文，因此 GPU 占用、zoom 平均/P95/P99 和 Long Task 明确为“未测量”；完整 100×4K/500×2K/20×8K 场景命令为 `node tools/benchmarks/image-pipeline-benchmark.mjs --profile=full`。

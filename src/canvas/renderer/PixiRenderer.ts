@@ -7,6 +7,9 @@ import { SelectionOverlay, type TransformHandle } from '../selection/SelectionOv
 import type { ImageItem } from '../../types';
 import { TextureManager } from '../textures/TextureManager';
 import { performanceMonitor } from '../../performanceMonitor';
+import { GroupRenderer } from './GroupRenderer';
+import { AnnotationRenderer } from './AnnotationRenderer';
+import { CommentRenderer } from './CommentRenderer';
 
 export class PixiRenderer {
   private readonly app = new Application();
@@ -14,6 +17,9 @@ export class PixiRenderer {
   private images?: ImageRenderer;
   private selection?: SelectionOverlay;
   private textures?: TextureManager;
+  private groups?: GroupRenderer;
+  private annotations?: AnnotationRenderer;
+  private comments?: CommentRenderer;
   private contextDisposer?: () => void;
   private pendingScene?: Scene;
 
@@ -48,16 +54,30 @@ export class PixiRenderer {
       deviceMemoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
     });
     this.images = new ImageRenderer(this.layers.images, this.textures, this.requestRender);
+    this.groups = new GroupRenderer(this.layers.groups);
+    this.annotations = new AnnotationRenderer(this.layers.annotations);
+    this.comments = new CommentRenderer(this.layers.annotations);
     this.selection = new SelectionOverlay(this.layers.overlay);
-    if (this.pendingScene) this.images.sync(this.pendingScene);
+    if (this.pendingScene) this.setScene(this.pendingScene);
   }
 
-  setScene(scene: Scene) { this.pendingScene = scene; this.images?.sync(scene); }
+  setScene(scene: Scene) {
+    this.pendingScene = scene;
+    this.images?.sync(scene);
+    this.groups?.sync(scene.groups);
+    this.annotations?.sync(scene.annotations);
+    this.comments?.sync(scene.items);
+  }
+  setSelectedGroup(id?: string) { this.groups?.setSelected(id); if (this.pendingScene) this.groups?.sync(this.pendingScene.groups); }
   drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }) {
     this.selection?.draw(items, scale, box);
     this.requestRender();
   }
   hitSelectionHandle(point: { x: number; y: number }): TransformHandle | undefined { return this.selection?.hit(point); }
+  annotationLayer() {
+    if (!this.layers) throw new Error('Pixi renderer has not started');
+    return this.layers.annotations;
+  }
 
   render(viewport: Viewport, workset?: {
     visible: ReadonlySet<string>; prefetch: ReadonlySet<string>;
@@ -115,10 +135,16 @@ export class PixiRenderer {
     this.images?.destroy();
     this.selection?.destroy();
     this.textures?.destroy();
+    this.groups?.destroy();
+    this.annotations?.destroy();
+    this.comments?.destroy();
     this.app.destroy({ removeView: true }, { children: true, texture: false, textureSource: false });
     this.images = undefined;
     this.selection = undefined;
     this.textures = undefined;
+    this.groups = undefined;
+    this.annotations = undefined;
+    this.comments = undefined;
     this.layers = undefined;
   }
 }
