@@ -785,7 +785,13 @@ async function assetResponse(request) {
         && edge !== Math.max(registered.record.naturalWidth, registered.record.naturalHeight)) {
         return new Response('Invalid mip edge', { status: 400 });
       }
-      const buffer = await readPyramidLevel(id, edge);
+      // A scene package carries its source assets, but the derived cache is
+      // intentionally machine-local. Reopening on a new machine must rebuild
+      // a missing/corrupt pyramid before answering the renderer request.
+      const buffer = await readPyramidLevel(id, edge).catch(async () => {
+        await ensureImagePyramid(id);
+        return readPyramidLevel(id, edge);
+      });
       return new Response(buffer, { headers: {
         'Content-Type': encodedImageContentType(buffer),
         'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*',
@@ -1220,7 +1226,7 @@ function createWindow() {
     // requestAnimationFrame is visibility-throttled in a hidden BrowserWindow.
     // The stress harness must be composited like the real application or its FPS
     // measurements only describe Chromium's hidden-page timer policy.
-    if (stressTest || performanceBenchmark || projectZoomBenchmark || realImageTest) mainWindow.showInactive();
+    if (smokeTest || stressTest || performanceBenchmark || projectZoomBenchmark || realImageTest) mainWindow.showInactive();
     else if (!smokeTest) mainWindow.show();
   });
   mainWindow.webContents.on('did-finish-load', () => logInfo('renderer.loaded', { url: mainWindow?.webContents.getURL() }));
@@ -1228,7 +1234,7 @@ function createWindow() {
     logError('renderer.load-failed', new Error(description), { code, validatedURL, isMainFrame });
   });
   mainWindow.webContents.on('render-process-gone', (_event, details) => logError('renderer.process-gone', new Error(details.reason), details));
-  mainWindow.webContents.on('console-message', (_event, details) => {
+  mainWindow.webContents.on('console-message', (details) => {
     if (!details || !['warning', 'error'].includes(details.level)) return;
     log(details.level === 'error' ? 'error' : 'warn', 'renderer.console', {
       message: details.message, line: details.lineNumber, source: details.sourceId,
@@ -1278,7 +1284,7 @@ function createWindow() {
   else if (projectZoomBenchmark) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
       await runProjectZoomBenchmark({
-        mainWindow, rootDir, app,
+        mainWindow, rootDir, app, writeScenePackage, readScenePackage,
         projectPath: process.env.REFCANVAS_PROJECT_BENCH_PATH,
         cycles: Number(process.env.REFCANVAS_PROJECT_BENCH_CYCLES || 1),
       });
@@ -1313,10 +1319,14 @@ function createWindow() {
       await mainWindow.webContents.executeJavaScript(
         `window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: ${JSON.stringify(imagePaths)} }))`,
       );
-      let state: { total: number; visible: number; gpu: number; decode: number; upload: number } = {
+      let state: { total: number; visible: number; gpu: number; decode: number; upload: number;
+        peakGpuBytes?: number; peakCpuBytes?: number; peakDecode?: number; peakUpload?: number; peakFrameUploadBytes?: number } = {
         total: 0, visible: 0, gpu: 0, decode: 0, upload: 0,
       };
-      const deadline = Date.now() + Math.max(12_000, imagePaths.length * 400);
+      // Full pyramid import is intentionally completed before Scene commit.
+      // The 620-asset acceptance corpus needs a pixel-workload budget rather
+      // than the old thumbnail-era 400 ms/file timeout.
+      const deadline = Date.now() + Math.max(12_000, imagePaths.length * 1_500);
       while (Date.now() < deadline) {
         state = await mainWindow.webContents.executeJavaScript(`(() => {
           const canvas = document.querySelector('canvas.pixi-canvas');
@@ -1326,6 +1336,11 @@ function createWindow() {
             gpu: Number(canvas?.dataset.gpuTextures || 0),
             decode: Number(canvas?.dataset.decodeQueue || 0),
             upload: Number(canvas?.dataset.uploadQueue || 0),
+            peakGpuBytes: Number(canvas?.dataset.peakGpuBytes || 0),
+            peakCpuBytes: Number(canvas?.dataset.peakCpuImageBytes || 0),
+            peakDecode: Number(canvas?.dataset.peakDecodeQueue || 0),
+            peakUpload: Number(canvas?.dataset.peakUploadQueue || 0),
+            peakFrameUploadBytes: Number(canvas?.dataset.peakFrameUploadBytes || 0),
           };
         })()`);
         if (state.total === imagePaths.length && state.gpu >= Math.min(state.visible, imagePaths.length)
@@ -1427,6 +1442,156 @@ function createWindow() {
             && Number(canvas?.dataset.gpuTextures || 0) >= 1;
         })()`);
       }
+      const waitForRenderer = (milliseconds = 100) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+      const setup = imageReady ? await mainWindow.webContents.executeJavaScript(`(async () => {
+        const api = window.__refCanvasPerf;
+        if (!api) return undefined;
+        const scene = structuredClone(api.getScene());
+        const first = scene.items[0];
+        if (!first) return undefined;
+        Object.assign(first, { id: 'acceptance-a', x: 0, y: 0, width: 100, height: 100, rotation: 0, locked: false, zIndex: 0 });
+        scene.items = [first, { ...first, id: 'acceptance-b', name: 'second.png', x: 150, zIndex: 1 }];
+        scene.viewport = { x: 220, y: 220, scale: 1 };
+        api.loadScene(scene);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return { first: { x: 270, y: 270 }, second: { x: 420, y: 270 }, empty: { x: 205, y: 205 }, boxEnd: { x: 530, y: 350 } };
+      })()`) : undefined;
+      let interactionReady = false;
+      let lifecycleResult: Record<string, unknown> | undefined;
+      let interactionChecks: Record<string, boolean> | undefined;
+      let zoomDiagnostic: Record<string, unknown> | undefined;
+      if (setup) {
+        const click = async (point: { x: number; y: number }, modifiers?: ('control')[]) => {
+          mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1, modifiers });
+          mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1, modifiers });
+          await waitForRenderer(60);
+        };
+        await click(setup.first);
+        const selectionAfterFirst = await mainWindow.webContents.executeJavaScript(
+          `Number(document.querySelector('canvas.pixi-canvas')?.dataset.selectedImages || 0)`,
+        );
+        mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Control' });
+        await click(setup.second, ['control']);
+        mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Control' });
+        const selectionAfterSecond = await mainWindow.webContents.executeJavaScript(
+          `Number(document.querySelector('canvas.pixi-canvas')?.dataset.selectedImages || 0)`,
+        );
+        const multiSelected = selectionAfterFirst === 1 && selectionAfterSecond === 2;
+        mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: setup.first.x, y: setup.first.y, button: 'left', clickCount: 1 });
+        mainWindow.webContents.sendInputEvent({ type: 'mouseMove', x: setup.first.x + 30, y: setup.first.y + 20, button: 'left' });
+        mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: setup.first.x + 30, y: setup.first.y + 20, button: 'left', clickCount: 1 });
+        await waitForRenderer(120);
+        const moved = await mainWindow.webContents.executeJavaScript(`(() => {
+          const items = window.__refCanvasPerf?.getScene().items;
+          return items?.[0].x === 30 && items?.[0].y === 20 && items?.[1].x === 180 && items?.[1].y === 20;
+        })()`);
+        mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: ['control'] });
+        mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: ['control'] });
+        await waitForRenderer(100);
+        const undoneOnce = await mainWindow.webContents.executeJavaScript(`(() => {
+          const items = window.__refCanvasPerf?.getScene().items;
+          return items?.[0].x === 0 && items?.[1].x === 150;
+        })()`);
+        mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Y', modifiers: ['control'] });
+        mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Y', modifiers: ['control'] });
+        await waitForRenderer(100);
+        const redoneOnce = await mainWindow.webContents.executeJavaScript(`(() => {
+          const items = window.__refCanvasPerf?.getScene().items;
+          return items?.[0].x === 30 && items?.[1].x === 180;
+        })()`);
+        await mainWindow.webContents.executeJavaScript(`(() => {
+          const api = window.__refCanvasPerf; const scene = structuredClone(api.getScene());
+          scene.items[1].locked = true; scene.viewport = { x: 220, y: 220, scale: 1 }; api.loadScene(scene);
+        })()`);
+        await waitForRenderer(100);
+        mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: setup.second.x + 30, y: setup.second.y + 20, button: 'left', clickCount: 1 });
+        mainWindow.webContents.sendInputEvent({ type: 'mouseMove', x: setup.second.x + 60, y: setup.second.y + 40, button: 'left' });
+        mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: setup.second.x + 60, y: setup.second.y + 40, button: 'left', clickCount: 1 });
+        await waitForRenderer(100);
+        const lockedStable = await mainWindow.webContents.executeJavaScript(
+          `window.__refCanvasPerf?.getScene().items[1].x === 180 && window.__refCanvasPerf?.getScene().items[1].y === 20`,
+        );
+        await mainWindow.webContents.executeJavaScript(`(() => {
+          const api = window.__refCanvasPerf; const scene = structuredClone(api.getScene());
+          scene.items.forEach((item) => { item.locked = false; }); scene.viewport = { x: 220, y: 220, scale: 1 }; api.loadScene(scene);
+        })()`);
+        await waitForRenderer(100);
+        await click(setup.empty);
+        mainWindow.webContents.sendInputEvent({ type: 'mouseDown', x: setup.empty.x, y: setup.empty.y, button: 'left', clickCount: 1 });
+        mainWindow.webContents.sendInputEvent({ type: 'mouseMove', x: setup.boxEnd.x, y: setup.boxEnd.y, button: 'left' });
+        mainWindow.webContents.sendInputEvent({ type: 'mouseUp', x: setup.boxEnd.x, y: setup.boxEnd.y, button: 'left', clickCount: 1 });
+        await waitForRenderer(100);
+        const selectionAfterBox = await mainWindow.webContents.executeJavaScript(
+          `Number(document.querySelector('canvas.pixi-canvas')?.dataset.selectedImages || 0)`,
+        );
+        const boxSelected = selectionAfterBox === 2;
+        const anchor = { x: 350, y: 280 };
+        const viewportBefore = await mainWindow.webContents.executeJavaScript(`(() => {
+          const canvas = document.querySelector('canvas.pixi-canvas');
+          return { x: Number(canvas.dataset.viewportX), y: Number(canvas.dataset.viewportY), scale: Number(canvas.dataset.viewportScale) };
+        })()`);
+        for (let index = 0; index < 24; index += 1) {
+          mainWindow.webContents.sendInputEvent({ type: 'mouseWheel', x: anchor.x, y: anchor.y, deltaX: 0, deltaY: -20 });
+        }
+        await waitForRenderer(180);
+        const zoomResult = await mainWindow.webContents.executeJavaScript(`(async () => {
+          const deadline = performance.now() + 2000;
+          while (performance.now() < deadline) {
+            const canvas = document.querySelector('canvas.pixi-canvas'); const scene = window.__refCanvasPerf?.getScene();
+            const runtime = { x: Number(canvas.dataset.viewportX), y: Number(canvas.dataset.viewportY), scale: Number(canvas.dataset.viewportScale) };
+            if (Math.abs(runtime.scale - scene.viewport.scale) < .0001) return { runtime, persisted: scene.viewport };
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+          const canvas = document.querySelector('canvas.pixi-canvas'); const scene = window.__refCanvasPerf?.getScene();
+          return { runtime: { x: Number(canvas.dataset.viewportX), y: Number(canvas.dataset.viewportY), scale: Number(canvas.dataset.viewportScale) }, persisted: scene.viewport };
+        })()`);
+        const worldBefore = { x: (anchor.x - viewportBefore.x) / viewportBefore.scale, y: (anchor.y - viewportBefore.y) / viewportBefore.scale };
+        const worldAfter = { x: (anchor.x - zoomResult.runtime.x) / zoomResult.runtime.scale, y: (anchor.y - zoomResult.runtime.y) / zoomResult.runtime.scale };
+        zoomDiagnostic = { viewportBefore, zoomResult, worldBefore, worldAfter };
+        const anchorStable = Math.hypot(worldBefore.x - worldAfter.x, worldBefore.y - worldAfter.y) < 0.01
+          && Math.abs(zoomResult.runtime.scale - zoomResult.persisted.scale) < 0.0001;
+        const zoomLimits = await mainWindow.webContents.executeJavaScript(`(async () => {
+          const canvas = document.querySelector('canvas.pixi-canvas');
+          for (let index = 0; index < 100; index += 1) canvas.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true, cancelable: true, clientX: 350, clientY: 280, deltaY: -1,
+          }));
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          const maximum = Number(canvas.dataset.viewportScale);
+          for (let index = 0; index < 200; index += 1) canvas.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true, cancelable: true, clientX: 350, clientY: 280, deltaY: 1,
+          }));
+          await new Promise((resolve) => setTimeout(resolve, 180));
+          const minimum = Number(canvas.dataset.viewportScale);
+          return { maximum, minimum, valid: maximum <= 32 && maximum >= 31.99 && minimum >= .02 && minimum <= .0201 };
+        })()`);
+        lifecycleResult = await mainWindow.webContents.executeJavaScript(`(async () => {
+          const api = window.__refCanvasPerf; const populated = structuredClone(api.getScene());
+          const empty = { ...structuredClone(populated), items: [], groups: [], annotations: [] };
+          const heap = []; let allReleased = true; let singleCanvas = true;
+          for (let cycle = 0; cycle < 10; cycle += 1) {
+            api.loadScene(populated); await new Promise((resolve) => setTimeout(resolve, 60));
+            api.loadScene(empty);
+            const deadline = performance.now() + 1000;
+            while (performance.now() < deadline) {
+              const current = document.querySelector('canvas.pixi-canvas');
+              if (Number(current?.dataset.totalImages || 0) === 0 && Number(current?.dataset.gpuTextures || 0) === 0) break;
+              await new Promise((resolve) => setTimeout(resolve, 25));
+            }
+            const canvas = document.querySelector('canvas.pixi-canvas');
+            allReleased &&= Number(canvas?.dataset.totalImages || 0) === 0 && Number(canvas?.dataset.gpuTextures || 0) === 0;
+            singleCanvas &&= document.querySelectorAll('canvas.pixi-canvas').length === 1;
+            heap.push(performance.memory?.usedJSHeapSize ?? 0);
+          }
+          api.loadScene(populated); await new Promise((resolve) => setTimeout(resolve, 100));
+          return { allReleased, singleCanvas, heapStart: heap[0], heapEnd: heap.at(-1), cycles: 10 };
+        })()`);
+        zoomDiagnostic = { ...zoomDiagnostic, zoomLimits };
+        interactionChecks = { multiSelected, moved, undoneOnce, redoneOnce, lockedStable, boxSelected, anchorStable, zoomLimits: zoomLimits.valid,
+          selectionAfterFirst: selectionAfterFirst === 1, selectionAfterSecond: selectionAfterSecond === 2,
+          selectionAfterBox: selectionAfterBox === 2 };
+        interactionReady = Boolean(multiSelected && moved && undoneOnce && redoneOnce && lockedStable && boxSelected && anchorStable && zoomLimits.valid
+          && lifecycleResult?.allReleased && lifecycleResult?.singleCanvas);
+      }
       const contextRecoveryReady = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
         const canvas = document.querySelector('canvas.pixi-canvas');
         const gl = canvas?.getContext('webgl2') || canvas?.getContext('webgl');
@@ -1459,7 +1624,21 @@ function createWindow() {
       const reopened = await readScenePackage(packagePath);
       await fs.rm(packagePath, { force: true });
       const packageReady = reopened.version === 2 && Boolean(reopened.assets[smokeAsset.assetId]);
-      if (!ready || !registered || !imageReady || !contextRecoveryReady || !packageReady) process.exitCode = 1;
+      let cacheMigrationReady = true;
+      let cacheMigrationDiagnostic: Record<string, unknown> | undefined;
+      if (process.env.REFCANVAS_CACHE_MIGRATION_SMOKE === '1') {
+        const previousRoot = cacheRootDir();
+        const targetParent = path.join(app.getPath('temp'), `refcanvas-cache-migration-${process.pid}-${Date.now()}`);
+        const info = await setCacheLocation(targetParent);
+        const migratedThumbnail = await generateThumbnail(smokeAsset.assetId, 128);
+        const oldAssetExists = await fs.stat(path.join(previousRoot, 'asset-cache')).then(() => true).catch(() => false);
+        cacheMigrationReady = path.resolve(info.root) === path.resolve(targetParent, 'RefCanvas')
+          && migratedThumbnail.byteLength > 8 && !oldAssetExists;
+        cacheMigrationDiagnostic = { previousRoot, targetParent, infoRoot: info.root,
+          thumbnailBytes: migratedThumbnail.byteLength, oldAssetExists, cacheMigrationReady };
+      }
+      console.log(`RefCanvas acceptance smoke: ${JSON.stringify({ interactionReady, interactionChecks, lifecycleResult, zoomDiagnostic, cacheMigrationDiagnostic })}`);
+      if (!ready || !registered || !imageReady || !interactionReady || !contextRecoveryReady || !packageReady || !cacheMigrationReady) process.exitCode = 1;
       dirtyRevisionState = createDirtyRevisionState();
     } catch (error) {
       console.error(error);
@@ -1471,6 +1650,7 @@ function createWindow() {
   const devMode = !app.isPackaged && Boolean(devServerUrl);
   const rendererQuery: Record<string, string> = {};
   if (pixiCanvasSmoke || devSmokeTest || (smokeTest && !stressTest)) rendererQuery.smoke = '1';
+  if (smokeTest && !stressTest && !performanceBenchmark && !projectZoomBenchmark && !realImageTest) rendererQuery['perf-bench'] = 'acceptance';
   if (stressTest) rendererQuery.stress = '2000';
   if (performanceBenchmark) { rendererQuery.perf = '1'; rendererQuery['perf-bench'] = process.env.REFCANVAS_PERF_PHASE || 'before'; }
   if (projectZoomBenchmark) { rendererQuery.perf = '1'; rendererQuery['perf-bench'] = 'project'; rendererQuery['project-bench'] = '1'; }

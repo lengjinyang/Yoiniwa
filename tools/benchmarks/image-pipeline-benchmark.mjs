@@ -104,6 +104,7 @@ try {
     diskCacheBytes: await directoryBytes(cacheRoot),
     diskCacheHitRateOnReopen: 1,
     duplicateConcurrentDecodeRequests: 0,
+    sourceDirectory: process.env.REFCANVAS_KEEP_BENCHMARK_DATA === '1' ? sourcesRoot : '已清理',
     gpuEstimatedBytes: '未测量（Node 基准无 GPU 上下文）',
     zoomAverageFrameMs: '未测量（请同时运行 npm run smoke:project-zoom）',
     zoomP95FrameMs: '未测量（请同时运行 npm run smoke:project-zoom）',

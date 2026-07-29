@@ -8,10 +8,10 @@ import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
 import { SelectionController } from '../selection/SelectionController';
 import type { AnnotationItem, AnnotationTool, ImageItem, PickedColor } from '../../types';
-import { CommandManager } from '../commands/CommandManager';
+import { ImageTransformCommand } from '../commands/ImageTransformCommand';
 import { PREFETCH_VIEWPORT_MARGIN } from '../textures/TextureConfig';
 import { performanceMonitor } from '../../performanceMonitor';
-import { AnnotationToolController, type AnnotationToolState } from '../interaction/AnnotationToolController';
+import { AnnotationToolController, type AnnotationToolState, type EraserSample } from '../interaction/AnnotationToolController';
 import { ColorPickerController } from '../interaction/ColorPickerController';
 import { topmostImageAtPoint } from '../selection/HitTestService';
 import { WindowMoveController } from '../interaction/WindowMoveController';
@@ -37,9 +37,7 @@ export interface CanvasRuntimeOptions {
   colorPickerHeld?: boolean;
   onColorPicked?(color: PickedColor): void;
   onAddAnnotation?(annotation: AnnotationItem): void;
-  onEraseStart?(): void;
-  onEraseAt?(x: number, y: number, radius: number): void;
-  onEraseEnd?(): void;
+  onErase?(samples: readonly EraserSample[]): void;
   windowLocked?: boolean;
   onWindowMoveStart?(): void;
   onWindowMove?(): void;
@@ -54,7 +52,6 @@ export class CanvasRuntime {
   private started = false;
   private sceneStore?: SceneStore;
   private selectionController?: SelectionController;
-  private readonly commands = new CommandManager();
   private projectEpoch = 0;
   private cameraChangedAt = 0;
   private annotationState: AnnotationToolState;
@@ -94,8 +91,9 @@ export class CanvasRuntime {
         this.scheduleRender();
       },
       commit: (changes) => {
-        const scene = this.commands.commitImageChanges(changes);
-        if (scene) {
+        const current = this.sceneStore?.snapshot();
+        if (current) {
+          const scene = new ImageTransformCommand(current, changes).execute(current);
           this.sceneStore?.replace(scene);
           this.renderer.setScene(this.sceneStore?.renderScene() ?? scene);
         }
@@ -137,8 +135,7 @@ export class CanvasRuntime {
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
       layer: this.renderer.annotationLayer(), state: () => this.annotationState,
       add: (annotation) => this.options.onAddAnnotation?.(annotation),
-      eraseStart: () => this.options.onEraseStart?.(), eraseAt: (x, y, radius) => this.options.onEraseAt?.(x, y, radius),
-      eraseEnd: () => this.options.onEraseEnd?.(), requestRender: () => this.scheduleRender(),
+      erase: (samples) => this.options.onErase?.(samples), requestRender: () => this.scheduleRender(),
     });
     annotationTools.start();
     const picker = new ColorPickerController({
@@ -168,7 +165,6 @@ export class CanvasRuntime {
   setViewport(viewport: Viewport) { this.camera.set(viewport); this.scheduleRender(); }
   setScene(scene: Scene) {
     if (this.sceneStore) this.sceneStore.replace(scene); else this.sceneStore = new SceneStore(scene);
-    this.commands.sync(scene);
     this.renderer.setScene(this.sceneStore.renderScene());
     this.selectionController?.refresh();
     this.scheduleRender();
@@ -182,8 +178,8 @@ export class CanvasRuntime {
   setProjectEpoch(epoch: number) {
     if (epoch === this.projectEpoch) return;
     this.projectEpoch = epoch;
-    this.commands.reset(this.sceneStore?.snapshot());
     this.renderer.advanceTextureGeneration();
+    this.scheduleRender();
   }
   setBackground(background: string) { this.renderer.setBackground(background); }
   getViewport() { return this.camera.snapshot(); }

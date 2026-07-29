@@ -1,10 +1,10 @@
 import { Container, Graphics, Sprite } from 'pixi.js';
-import { IMAGE_TILE_GUTTER, IMAGE_TILE_SIZE, LARGE_IMAGE_TILE_EDGE } from '../../shared/imagePipelineConfig';
+import { IMAGE_TILE_GUTTER, IMAGE_TILE_SIZE } from '../../shared/imagePipelineConfig';
 import type { ImageItem, Scene } from '../../types';
 import { resolveCanvasTileUrl } from '../assets/AssetPathResolver';
 import type { SceneBounds } from '../scene/SceneNode';
 import type { GpuTextureEntry } from '../textures/GpuTextureCache';
-import { selectVisibleTiles, type TileAddress } from '../textures/TileSelector';
+import { selectVisibleTiles, shouldUseTiledImage, type TileAddress } from '../textures/TileSelector';
 import type { TextureManager } from '../textures/TextureManager';
 import { RenderObjectRegistry } from './RenderObjectRegistry';
 
@@ -37,7 +37,7 @@ export class TileRenderer {
   }
 
   update(item: ImageItem, requiredEdge: number, worldBounds: SceneBounds, priority: number) {
-    if (!this.scene || !item.assetId || Math.max(item.naturalWidth, item.naturalHeight) <= LARGE_IMAGE_TILE_EDGE || requiredEdge <= 4096) {
+    if (!this.scene || !item.assetId || !shouldUseTiledImage(item, requiredEdge)) {
       this.release(item.id);
       return;
     }
@@ -117,6 +117,7 @@ export class TileRenderer {
 
   destroy() { this.objects.destroy(); }
   invalidateAll() { this.objects.forEach((_object, id) => this.release(id)); }
+  hasCurrent(id: string) { return Boolean(this.objects.get(id)?.current); }
 
   private createContainer(pending: PendingTileSet) {
     const container = new Container();

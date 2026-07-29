@@ -135,6 +135,11 @@ export class PixiRenderer {
     this.app.canvas.dataset.gpuBytes = String(textureStats?.gpuBytes ?? 0);
     this.app.canvas.dataset.cpuImageBytes = String(textureStats?.cpuBytes ?? 0);
     this.app.canvas.dataset.frameUploadBytes = String(textureStats?.uploadedBytesThisFrame ?? 0);
+    this.app.canvas.dataset.peakGpuBytes = String(textureStats?.peakGpuBytes ?? 0);
+    this.app.canvas.dataset.peakCpuImageBytes = String(textureStats?.peakCpuBytes ?? 0);
+    this.app.canvas.dataset.peakDecodeQueue = String(textureStats?.peakDecodeQueueLength ?? 0);
+    this.app.canvas.dataset.peakUploadQueue = String(textureStats?.peakUploadQueueLength ?? 0);
+    this.app.canvas.dataset.peakFrameUploadBytes = String(textureStats?.peakFrameUploadBytes ?? 0);
     this.app.canvas.dataset.decodeQueue = String(textureStats?.decodeQueueLength ?? 0);
     this.app.canvas.dataset.uploadQueue = String(textureStats?.uploadQueueLength ?? 0);
     this.app.canvas.dataset.cacheMisses = String(textureStats?.cacheMisses ?? 0);

@@ -1,10 +1,15 @@
 import type { ImageItem } from '../../types';
-import { IMAGE_TILE_SIZE } from '../../shared/imagePipelineConfig';
+import { IMAGE_TILE_SIZE, IMAGE_TILE_THRESHOLD_EDGE, IMAGE_WHOLE_TEXTURE_EDGE } from '../../shared/imagePipelineConfig';
 import type { SceneBounds } from '../scene/SceneNode';
 
 export interface TileAddress { level: number; column: number; row: number }
 
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)); }
+
+export function shouldUseTiledImage(item: Pick<ImageItem, 'naturalWidth' | 'naturalHeight'>, requiredEdge: number) {
+  return Math.max(item.naturalWidth, item.naturalHeight) > IMAGE_TILE_THRESHOLD_EDGE
+    && requiredEdge > IMAGE_WHOLE_TEXTURE_EDGE;
+}
 
 function localPoint(item: ImageItem, point: { x: number; y: number }) {
   const centerX = item.x + item.width / 2;

@@ -6,6 +6,7 @@ import type { InputRouter } from '../interaction/InputRouter';
 export class CameraController {
   private pointerId?: number;
   private last = { x: 0, y: 0 };
+  private wheelCommitTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly element: HTMLElement,
@@ -22,7 +23,7 @@ export class CameraController {
       if (event.button === 0 && this.interactionBlocked()) return;
       this.pointerId = event.pointerId;
       this.last = { x: event.clientX, y: event.clientY };
-      this.element.setPointerCapture(event.pointerId);
+      try { this.element.setPointerCapture(event.pointerId); } catch { /* Synthetic benchmark events have no native capture target. */ }
     };
     const move = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
@@ -33,20 +34,27 @@ export class CameraController {
     const up = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
       this.pointerId = undefined;
-      this.element.releasePointerCapture(event.pointerId);
+      if (this.element.hasPointerCapture?.(event.pointerId)) this.element.releasePointerCapture(event.pointerId);
       this.changed(true);
     };
     const wheel = (event: WheelEvent) => {
       event.preventDefault();
       const bounds = this.element.getBoundingClientRect();
       this.camera.zoomAt({ x: event.clientX - bounds.left, y: event.clientY - bounds.top }, event.deltaY < 0 ? CAMERA_ZOOM_STEP : 1 / CAMERA_ZOOM_STEP);
-      this.changed(true);
+      this.changed(false);
+      if (this.wheelCommitTimer !== undefined) clearTimeout(this.wheelCommitTimer);
+      this.wheelCommitTimer = setTimeout(() => {
+        this.wheelCommitTimer = undefined;
+        this.changed(true);
+      }, 120);
     };
     const disposers = [
       this.input.onPointerDown(down), this.input.onPointerMove(move),
       this.input.onPointerUp(up), this.input.onWheel(wheel),
     ];
     this.lifecycle.add(() => {
+      if (this.wheelCommitTimer !== undefined) clearTimeout(this.wheelCommitTimer);
+      this.wheelCommitTimer = undefined;
       disposers.forEach((dispose) => dispose());
     });
   }

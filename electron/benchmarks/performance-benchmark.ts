@@ -145,6 +145,7 @@ async function execute(webContents, body, _timeout = 150000) {
 }
 
 export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeScenePackage, readScenePackage, phase = 'before' }) {
+  const interactionDurationMs = Math.max(1_000, Number(process.env.REFCANVAS_PERF_INTERACTION_MS || 10_000));
   const runId = `${Date.now()}-${process.pid}`;
   const outputDirectory = path.join(rootDir, 'performance-results', `${new Date().toISOString().replace(/[:.]/g, '-')}-${phase}`);
   const sourceDirectory = path.join(app.getPath('temp'), `refcanvas-perf-${runId}`);
@@ -156,8 +157,8 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
   try {
     results.import100x4k = await traceOperation(mainWindow.webContents, path.join(outputDirectory, '01-import-100x4k.trace.json'), () => execute(mainWindow.webContents, `
       window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: ${JSON.stringify(generatedFiles)} }));
-      await waitFor(() => Number(host()?.getAttribute('data-total-images') || 0) === 100, 180000);
-      await waitFor(() => !document.querySelector('.import-progress'), 300000);
+      await waitFor(() => Number(host()?.getAttribute('data-total-images') || 0) === 100, 600000);
+      await waitFor(() => !document.querySelector('.import-progress'), 600000);
       await wait(1000);
       resolve(snapshot());
     `, 310000));
@@ -182,13 +183,13 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
     results.pan10s = await traceOperation(mainWindow.webContents, path.join(outputDirectory, '02-pan-10s.trace.json'), () => execute(mainWindow.webContents, `
       const before = snapshot();
       const canvas = stageCanvas(); const x = innerWidth / 2; const y = innerHeight / 2;
-      canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1, buttons: 4, clientX: x, clientY: y, screenX: x, screenY: y }));
-      const frames = await runFrames(10000, (elapsed) => {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 1, buttons: 4, pointerId: 11, pointerType: 'mouse', clientX: x, clientY: y }));
+      const frames = await runFrames(${interactionDurationMs}, (elapsed) => {
         const px = x + Math.sin(elapsed / 620) * 110; const py = y + Math.cos(elapsed / 770) * 75;
-        canvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, button: 1, buttons: 4, clientX: px, clientY: py, screenX: px, screenY: py }));
+        canvas.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 1, buttons: 4, pointerId: 11, pointerType: 'mouse', clientX: px, clientY: py }));
       });
       const duringMetrics = snapshot();
-      canvas.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 1, clientX: x, clientY: y, screenX: x, screenY: y }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 1, pointerId: 11, pointerType: 'mouse', clientX: x, clientY: y }));
       await wait(250); const metrics = snapshot(); resolve({ ...frames, metrics,
         duringMetrics, texSubImage2DDelta: duringMetrics.texSubImage2DCalls - before.texSubImage2DCalls,
         textureUploadMsDelta: duringMetrics.textureUploadMs - before.textureUploadMs });
@@ -197,7 +198,7 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
     results.zoom10s = await traceOperation(mainWindow.webContents, path.join(outputDirectory, '03-zoom-10s.trace.json'), () => execute(mainWindow.webContents, `
       const before = snapshot();
       const canvas = stageCanvas(); const x = innerWidth / 2; const y = innerHeight / 2;
-      const frames = await runFrames(10000, (elapsed) => {
+      const frames = await runFrames(${interactionDurationMs}, (elapsed) => {
         canvas.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: x, clientY: y, deltaY: Math.sin(elapsed / 900) * 2.8 }));
       });
       const duringMetrics = snapshot();
@@ -210,13 +211,13 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
       const before = snapshot();
       window.__refCanvasPerf.selectImages(20); await wait(250);
       const canvas = stageCanvas(); const x = Number(host()?.getAttribute('data-stress-hit-x') || innerWidth / 2); const y = Number(host()?.getAttribute('data-stress-hit-y') || innerHeight / 2);
-      canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, clientX: x, clientY: y, screenX: x, screenY: y }));
-      const frames = await runFrames(10000, (elapsed) => {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, buttons: 1, pointerId: 12, pointerType: 'mouse', clientX: x, clientY: y }));
+      const frames = await runFrames(${interactionDurationMs}, (elapsed) => {
         const px = x + elapsed / 100; const py = y + Math.sin(elapsed / 500) * 36;
-        canvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, button: 0, buttons: 1, clientX: px, clientY: py, screenX: px, screenY: py }));
+        canvas.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, buttons: 1, pointerId: 12, pointerType: 'mouse', clientX: px, clientY: py }));
       });
       const duringMetrics = snapshot();
-      canvas.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: x + 100, clientY: y, screenX: x + 100, screenY: y }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 12, pointerType: 'mouse', clientX: x + 100, clientY: y }));
       await wait(400); const metrics = snapshot(); resolve({ ...frames, metrics,
         duringMetrics, texSubImage2DDelta: duringMetrics.texSubImage2DCalls - before.texSubImage2DCalls,
         textureUploadMsDelta: duringMetrics.textureUploadMs - before.textureUploadMs });
@@ -226,12 +227,12 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
       const before = snapshot();
       window.__refCanvasPerf.clearSelection(); await wait(200);
       const canvas = stageCanvas(); const startX = 3; const startY = 3;
-      canvas.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, clientX: startX, clientY: startY, screenX: startX, screenY: startY }));
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, buttons: 1, pointerId: 13, pointerType: 'mouse', clientX: startX, clientY: startY }));
       const frames = await runFrames(1600, (elapsed) => {
         const t = Math.min(1, elapsed / 1500); const x = startX + (innerWidth - 6) * t; const y = startY + (innerHeight - 6) * t;
-        canvas.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, button: 0, buttons: 1, clientX: x, clientY: y, screenX: x, screenY: y }));
+        canvas.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, button: 0, buttons: 1, pointerId: 13, pointerType: 'mouse', clientX: x, clientY: y }));
       });
-      canvas.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: innerWidth - 3, clientY: innerHeight - 3, screenX: innerWidth - 3, screenY: innerHeight - 3 }));
+      canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, button: 0, pointerId: 13, pointerType: 'mouse', clientX: innerWidth - 3, clientY: innerHeight - 3 }));
       await wait(500); const metrics = snapshot(); resolve({ ...frames, metrics,
         texSubImage2DDelta: metrics.texSubImage2DCalls - before.texSubImage2DCalls,
         textureUploadMsDelta: metrics.textureUploadMs - before.textureUploadMs });

@@ -109,14 +109,22 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     const completed = new Promise<void>((resolve, reject) => {
       output.once('close', resolve); output.once('error', reject); archive.once('error', reject);
     });
-    archive.pipe(output);
-    archive.append(JSON.stringify(manifest), { name: 'manifest.json' });
-    for (const record of Object.values(manifest.assets ?? {}) as any[]) {
-      const assetPath = await ensureAssetFile(record.id);
-      archive.file(assetPath, { name: `assets/${record.id}${extByMime[record.mimeType] ?? '.bin'}`, store: true } as any);
+    try {
+      archive.pipe(output);
+      archive.append(JSON.stringify(manifest), { name: 'manifest.json' });
+      for (const record of Object.values(manifest.assets ?? {}) as any[]) {
+        const assetPath = await ensureAssetFile(record.id);
+        archive.file(assetPath, { name: `assets/${record.id}${extByMime[record.mimeType] ?? '.bin'}`, store: true } as any);
+      }
+      await archive.finalize();
+      await completed;
+    } catch (error) {
+      void completed.catch(() => undefined);
+      archive.abort();
+      output.destroy();
+      await fs.rm(tempPath, { force: true }).catch(() => undefined);
+      throw error;
     }
-    await archive.finalize();
-    await completed;
     const backupPath = `${filePath}.bak`;
     let hadOriginal = false;
     try { await fs.rename(filePath, backupPath); hadOriginal = true; } catch { /* New file. */ }
@@ -141,7 +149,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     let scene;
     try { scene = JSON.parse(manifestBuffer.toString('utf8')); }
     catch { throw new Error('场景清单不是有效的 JSON'); }
-    if (scene?.format !== 'refcanvas' || scene?.version !== 2) throw new Error('该场景版本不受支持');
+    if (scene?.format !== 'refcanvas' || (scene?.version !== 1 && scene?.version !== 2)) throw new Error('该场景版本不受支持');
     if (!scene.assets || typeof scene.assets !== 'object' || Array.isArray(scene.assets)) scene.assets = {};
     const records = Object.values(scene.assets ?? {}) as any[];
     if (records.length > packageLimits.assetCount) throw new Error('场景资源数量超过限制');
@@ -217,7 +225,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     let scene: any;
     try { scene = JSON.parse(manifestBuffer.toString('utf8')); }
     catch { throw new Error('场景清单不是有效的 JSON'); }
-    if (scene?.format !== 'refcanvas' || scene?.version !== 2) throw new Error('该场景版本不受支持');
+    if (scene?.format !== 'refcanvas' || (scene?.version !== 1 && scene?.version !== 2)) throw new Error('该场景版本不受支持');
     const ids = Object.keys(scene.assets ?? {});
     if (ids.length > packageLimits.assetCount || ids.some((id) => !/^[a-f0-9]{64}$/i.test(id))) {
       throw new Error('场景资源索引无效');
