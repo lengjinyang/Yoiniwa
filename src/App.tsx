@@ -1400,6 +1400,9 @@ export default function App() {
         background={history.scene.canvas.background}
         scene={history.scene}
         viewport={history.scene.viewport}
+        selectedIds={selectedIds}
+        onSelectionChange={(ids) => { setSelectedIds(ids); setSelectedAnnotationIds([]); setSelectedGroupId(undefined); }}
+        onItemsChanged={commitItemChanges}
         onViewportCommit={history.updateViewport}
       /> : <CanvasBoard
         scene={history.scene}

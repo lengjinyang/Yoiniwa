@@ -21,6 +21,18 @@ export class SceneStore {
   groups() { return this.scene.groups; }
   annotations() { return this.scene.annotations; }
 
+  previewImageChanges(changes: Array<Partial<ImageItem> & { id: string }>) {
+    const byId = new Map(changes.map((change) => [change.id, change]));
+    this.scene = {
+      ...this.scene,
+      items: this.scene.items.map((item) => {
+        const change = byId.get(item.id);
+        return change ? { ...item, ...change, crop: item.crop } : item;
+      }),
+    };
+    this.rebuildIndex();
+  }
+
   private rebuildIndex() {
     this.nodes.clear();
     this.scene.items.forEach((value: ImageItem) => this.nodes.set(value.id, { kind: 'image', id: value.id, value }));

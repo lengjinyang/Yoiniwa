@@ -1,6 +1,7 @@
 import { Camera } from './Camera';
 import { CAMERA_ZOOM_STEP } from '../runtime/CanvasConfig';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
+import type { InputRouter } from '../interaction/InputRouter';
 
 export class CameraController {
   private pointerId?: number;
@@ -8,6 +9,7 @@ export class CameraController {
 
   constructor(
     private readonly element: HTMLElement,
+    private readonly input: InputRouter,
     private readonly camera: Camera,
     private readonly lifecycle: RuntimeLifecycle,
     private readonly changed: (committed: boolean) => void,
@@ -15,7 +17,7 @@ export class CameraController {
 
   start() {
     const down = (event: PointerEvent) => {
-      if (event.button !== 0 && event.button !== 1) return;
+      if (event.button !== 1 && !(event.button === 0 && event.altKey)) return;
       this.pointerId = event.pointerId;
       this.last = { x: event.clientX, y: event.clientY };
       this.element.setPointerCapture(event.pointerId);
@@ -38,17 +40,12 @@ export class CameraController {
       this.camera.zoomAt({ x: event.clientX - bounds.left, y: event.clientY - bounds.top }, event.deltaY < 0 ? CAMERA_ZOOM_STEP : 1 / CAMERA_ZOOM_STEP);
       this.changed(true);
     };
-    this.element.addEventListener('pointerdown', down);
-    this.element.addEventListener('pointermove', move);
-    this.element.addEventListener('pointerup', up);
-    this.element.addEventListener('pointercancel', up);
-    this.element.addEventListener('wheel', wheel, { passive: false });
+    const disposers = [
+      this.input.onPointerDown(down), this.input.onPointerMove(move),
+      this.input.onPointerUp(up), this.input.onWheel(wheel),
+    ];
     this.lifecycle.add(() => {
-      this.element.removeEventListener('pointerdown', down);
-      this.element.removeEventListener('pointermove', move);
-      this.element.removeEventListener('pointerup', up);
-      this.element.removeEventListener('pointercancel', up);
-      this.element.removeEventListener('wheel', wheel);
+      disposers.forEach((dispose) => dispose());
     });
   }
 }
