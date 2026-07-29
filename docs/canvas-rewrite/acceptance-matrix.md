@@ -10,17 +10,17 @@
 | Fit/Focus/Reset/恢复 | App + CanvasBoard | bounds 与 viewport 正确 | camera commands | unit + smoke | 待迁移 | 待验收 |
 | 图片导入/拖放/粘贴 | App IPC | 导入后可见且有进度 | App + runtime adapter | integration | 待迁移 | 待验收 |
 | 图片比例/EXIF/Alpha | image pipeline | 方向颜色透明正确 | renderer/assets | image smoke | 已实现 | 代码/构建已验收，真实图片 smoke 待阶段 5 |
-| 图片移动 | BoardImage/GPU gesture | 实时预览、一次提交 | transform + command | unit + smoke | 待迁移 | 待验收 |
-| 图片缩放/旋转 | Transformer/rotation | 单/多对象正确 | transform | unit + smoke | 待迁移 | 待验收 |
+| 图片移动 | BoardImage/GPU gesture | 实时预览、一次提交 | transform + command | unit + smoke | 已实现 | unit 已验收，smoke 待最终入口 |
+| 图片缩放/旋转 | Transformer/rotation | 单/多对象正确 | transform | unit + smoke | 已实现 | unit 已验收，smoke 待最终入口 |
 | 裁切/翻转/透明/灰度 | App properties | 非破坏、显示一致 | image renderer | unit + visual | 已实现 | unit/build 已验收，visual 待最终入口 |
 | 删除/重复/复制粘贴 | AppCommand | Scene 与资源正确 | commands | unit + integration | 待迁移 | 待验收 |
 | 层级顺序 | App moveLayer | 命中和绘制同步 | reorder command | unit | 进行中 | 绘制顺序已实现，Command/命中待阶段 3-4 |
 | 锁定/隐藏 | App/Outline | 不命中或不绘制 | scene/hit test | unit | 进行中 | 隐藏渲染已实现，命中待阶段 3 |
-| 单选/取消 | CanvasBoard | 顶层命中、空白清空 | selection | unit | 待迁移 | 待验收 |
-| 多选增减/全选 | CanvasBoard/App | 修饰键语义一致 | selection/keyboard | unit | 待迁移 | 待验收 |
-| 框选/自动平移 | CanvasBoard | 可见相交节点、边缘平移 | box selection | unit + smoke | 待迁移 | 待验收 |
-| 重叠命中 | imageIndex/zIndex | 返回最上层可交互节点 | hit test | unit | 待迁移 | 待验收 |
-| 控制点/多对象变换 | Konva Transformer | bounds、pivot 和锁定正确 | overlay/transform | unit + smoke | 待迁移 | 待验收 |
+| 单选/取消 | CanvasBoard | 顶层命中、空白清空 | selection | unit | 已实现 | 已验收 |
+| 多选增减/全选 | CanvasBoard/App | 修饰键语义一致 | selection/keyboard | 进行中 | 修饰键增减选已验收，全选待快捷键迁移 |
+| 框选/自动平移 | CanvasBoard | 可见相交节点、边缘平移 | box selection | unit + smoke | 进行中 | 框选已实现，边缘自动平移待阶段 6 |
+| 重叠命中 | imageIndex/zIndex | 返回最上层可交互节点 | hit test | unit | 已实现 | 已验收 |
+| 控制点/多对象变换 | Konva Transformer | bounds、pivot 和锁定正确 | overlay/transform | unit + smoke | 已实现 | unit 已验收，visual 待最终入口 |
 | Undo/Redo/合并 | useSceneHistory | 一次手势一条历史 | command stack | unit | 待迁移 | 待验收 |
 | 分组/嵌套/解散 | GroupFrame/App | 成员和 bounds 正确 | groups/commands | unit + smoke | 待迁移 | 待验收 |
 | 分组样式/折叠/隐藏/锁定 | GroupFrame/Header | 外观和命中正确 | group renderer | unit + visual | 待迁移 | 待验收 |

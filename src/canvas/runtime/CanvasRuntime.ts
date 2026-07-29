@@ -4,11 +4,18 @@ import { CameraController } from '../camera/CameraController';
 import { PixiRenderer } from '../renderer/PixiRenderer';
 import { FrameScheduler } from './FrameScheduler';
 import { RuntimeLifecycle } from './RuntimeLifecycle';
+import { InputRouter } from '../interaction/InputRouter';
+import { SceneStore } from '../scene/SceneStore';
+import { SelectionController } from '../selection/SelectionController';
+import type { ImageItem } from '../../types';
 
 export interface CanvasRuntimeOptions {
   background: string;
   viewport: Viewport;
   onViewportCommit?(viewport: Viewport): void;
+  selectedIds?: string[];
+  onSelectionChange?(ids: string[]): void;
+  onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>): void;
 }
 
 export class CanvasRuntime {
@@ -17,6 +24,8 @@ export class CanvasRuntime {
   private readonly renderer = new PixiRenderer(() => this.scheduleRender());
   private readonly camera: Camera;
   private started = false;
+  private sceneStore?: SceneStore;
+  private selectionController?: SelectionController;
 
   constructor(private readonly container: HTMLElement, private readonly options: CanvasRuntimeOptions) {
     this.camera = new Camera(options.viewport);
@@ -30,11 +39,29 @@ export class CanvasRuntime {
       this.renderer.destroy();
       return;
     }
-    const cameraController = new CameraController(this.container, this.camera, this.lifecycle, (committed) => {
+    const input = new InputRouter(this.container, this.lifecycle);
+    const cameraController = new CameraController(this.container, input, this.camera, this.lifecycle, (committed) => {
       this.scheduleRender();
+      this.selectionController?.refresh();
       if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
     });
     cameraController.start();
+    this.selectionController = new SelectionController({
+      element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
+      scene: () => this.sceneStore,
+      preview: (changes) => {
+        this.sceneStore?.previewImageChanges(changes);
+        if (this.sceneStore) this.renderer.setScene(this.sceneStore.snapshot());
+        this.selectionController?.refresh();
+        this.scheduleRender();
+      },
+      commit: (changes) => this.options.onItemsChanged?.(changes),
+      selectionChanged: (ids) => this.options.onSelectionChange?.(ids),
+      drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
+      hitHandle: (point) => this.renderer.hitSelectionHandle(point),
+    });
+    this.selectionController.start();
+    this.selectionController.setSelection(this.options.selectedIds ?? []);
     const observer = new ResizeObserver(() => this.scheduleRender());
     observer.observe(this.container);
     this.lifecycle.add(() => observer.disconnect());
@@ -42,7 +69,13 @@ export class CanvasRuntime {
   }
 
   setViewport(viewport: Viewport) { this.camera.set(viewport); this.scheduleRender(); }
-  setScene(scene: Scene) { this.renderer.setScene(scene); this.scheduleRender(); }
+  setScene(scene: Scene) {
+    if (this.sceneStore) this.sceneStore.replace(scene); else this.sceneStore = new SceneStore(scene);
+    this.renderer.setScene(scene);
+    this.selectionController?.refresh();
+    this.scheduleRender();
+  }
+  setSelection(ids: string[]) { this.selectionController?.setSelection(ids); }
   setBackground(background: string) { this.renderer.setBackground(background); }
   getViewport() { return this.camera.snapshot(); }
 
