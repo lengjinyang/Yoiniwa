@@ -107,6 +107,15 @@ class PerformanceMonitor {
     this.rendererStats = stats;
     this.backend = backend;
   }
+  recordCanvasRuntimeFrame(durationMs: number, backend: string) {
+    if (!this.active) return;
+    this.cpuFrames.push(durationMs); trim(this.cpuFrames);
+    this.backend = backend;
+  }
+  setCanvasGpuStats(textureCount: number, gpuBytes: number) {
+    if (!this.active) return;
+    this.rendererStats = { ...this.rendererStats, textureCount, gpuBytes };
+  }
   recordSpatialQuery(durationMs: number) {
     if (!this.active) return;
     this.spatialQueries.push(durationMs); trim(this.spatialQueries);

@@ -21,7 +21,7 @@ import { appendRendererLogs, flushLogs, getLogDirectory, getLogPath, initializeL
 import { createIpcHandlerRegistrar } from './ipc/register-handler.js';
 import { createImageCachePathResolver } from './services/image-cache-paths.js';
 import { WorkerGeneration } from './services/worker-generation.js';
-import { IMAGE_CACHE_FORMAT_VERSION, IMAGE_IMPORT_STAGE_WEIGHTS } from '../src/shared/imagePipelineConfig.js';
+import { IMAGE_CACHE_FORMAT_VERSION, IMAGE_IMPORT_STAGE_WEIGHTS, IMAGE_MIP_EDGES } from '../src/shared/imagePipelineConfig.js';
 import { closestManifestLevel, readImagePyramidManifest } from './services/image-pyramid-manifest.js';
 import { trimImagePyramidCache } from './services/image-cache-cleaner.js';
 import { WorkerAssetRegistrations } from './services/worker-asset-registrations.js';
@@ -45,6 +45,7 @@ process.stderr?.on?.('error', (error) => {
 const electronRuntimeDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = app.getAppPath();
 const runtimeFlags = parseRuntimeFlags(process.env, process.argv);
+const pixiCanvasSmoke = process.env.REFCANVAS_PIXI_SMOKE === '1';
 const {
   stressTest, performanceBenchmark, projectZoomBenchmark, devSmokeTest, realImageTest,
   forceThumbnailFailure, smokeTest, cleanTestSession,
@@ -778,6 +779,18 @@ async function assetResponse(request) {
     const registered = assetRegistry.get(id);
     if (!registered) return new Response('Not found', { status: 404 });
     const variant = url.searchParams.get('variant') ?? 'original';
+    if (variant === 'mip') {
+      const edge = Number(url.searchParams.get('edge'));
+      if (!IMAGE_MIP_EDGES.some((candidate) => candidate === edge)
+        && edge !== Math.max(registered.record.naturalWidth, registered.record.naturalHeight)) {
+        return new Response('Invalid mip edge', { status: 400 });
+      }
+      const buffer = await readPyramidLevel(id, edge);
+      return new Response(buffer, { headers: {
+        'Content-Type': encodedImageContentType(buffer),
+        'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*',
+      } });
+    }
     if (variant === 'tile') {
       const level = Number(url.searchParams.get('level'));
       const column = Number(url.searchParams.get('column'));
@@ -1223,7 +1236,46 @@ function createWindow() {
   });
   mainWindow.on('unresponsive', () => logWarn('window.unresponsive'));
   mainWindow.on('responsive', () => logInfo('window.responsive'));
-  if (projectZoomBenchmark) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
+  if (pixiCanvasSmoke) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
+    try {
+      const canvasReady = await mainWindow.webContents.executeJavaScript(
+        `Boolean(document.querySelector('[data-canvas-runtime="pixi-v8"] canvas.pixi-canvas'))`,
+      );
+      const smokePng = nativeImage.createFromDataURL(
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      ).toPNG();
+      const smokeAsset = await registerAssetBuffer(`pixi-smoke-${Date.now()}.png`, smokePng, undefined, 'clipboard');
+      await mainWindow.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('refcanvas-smoke-add-paths', { detail: [${JSON.stringify(assetCachePath(smokeAsset.asset))}] }))`,
+      );
+      let imageReady = false;
+      for (let attempt = 0; attempt < 50 && !imageReady; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        imageReady = await mainWindow.webContents.executeJavaScript(`(() => {
+          const canvas = document.querySelector('canvas.pixi-canvas');
+          return Number(canvas?.dataset.totalImages || 0) === 1 && Number(canvas?.dataset.gpuTextures || 0) >= 1;
+        })()`);
+      }
+      if (!canvasReady || !imageReady) {
+        const state = await mainWindow.webContents.executeJavaScript(`(() => {
+          const canvas = document.querySelector('canvas.pixi-canvas');
+          return { total: canvas?.dataset.totalImages, visible: canvas?.dataset.visibleImages,
+            gpu: canvas?.dataset.gpuTextures, decode: canvas?.dataset.decodeQueue,
+            upload: canvas?.dataset.uploadQueue, misses: canvas?.dataset.cacheMisses,
+            textureError: canvas?.dataset.textureError,
+            status: document.querySelector('.status-toast')?.textContent };
+        })()`);
+        console.error('Pixi canvas smoke did not become ready', { canvasReady, imageReady, state });
+        process.exitCode = 1;
+      }
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+    dirtyRevisionState = createDirtyRevisionState();
+    app.exit(Number(process.exitCode) || 0);
+  }, 500));
+  else if (projectZoomBenchmark) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
       await runProjectZoomBenchmark({
         mainWindow, rootDir, app,
@@ -1738,7 +1790,8 @@ function createWindow() {
   const devServerUrl = process.env.REFCANVAS_DEV_SERVER_URL;
   const devMode = !app.isPackaged && Boolean(devServerUrl);
   const rendererQuery: Record<string, string> = {};
-  if (devSmokeTest || (smokeTest && !stressTest)) rendererQuery.smoke = '1';
+  if (pixiCanvasSmoke || process.argv.includes('--pixi-canvas')) rendererQuery['pixi-canvas'] = '1';
+  if (pixiCanvasSmoke || devSmokeTest || (smokeTest && !stressTest)) rendererQuery.smoke = '1';
   if (stressTest) rendererQuery.stress = '2000';
   if (performanceBenchmark) { rendererQuery.perf = '1'; rendererQuery['perf-bench'] = process.env.REFCANVAS_PERF_PHASE || 'before'; }
   if (projectZoomBenchmark) { rendererQuery.perf = '1'; rendererQuery['perf-bench'] = 'project'; rendererQuery['project-bench'] = '1'; }

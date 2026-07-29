@@ -29,16 +29,16 @@
 | 取色 | CanvasBoard + Worker | 命中源像素且不阻塞 | picker controller | integration | 待迁移 | 待验收 |
 | 对齐/分布/统一尺寸 | layout.ts | 结果与旧工程一致 | App commands | existing unit + smoke | 待迁移 | 待验收 |
 | Pack/吸附/padding | layout/scene.canvas | 设置生效 | layout adapter | unit | 待迁移 | 待验收 |
-| Mip/迟滞 | imageResources | 最小覆盖、切换稳定 | assets/textures | unit | 待迁移 | 待验收 |
-| Tile/剔除/预加载 | usePixelScenePlan | 只处理工作集 | spatial/assets | unit + benchmark | 待迁移 | 待验收 |
-| 稳定纹理/原子切换 | stableRenderCommands | 不空白、不退回低清 | texture manager | unit + image smoke | 待迁移 | 待验收 |
-| CPU/GPU LRU | imageResources/WebGL | 字节预算、Pin、释放 | textures | unit + benchmark | 待迁移 | 待验收 |
-| GPU 分帧上传 | WebGL renderer | 4项/8MiB/约2ms | upload scheduler | unit + benchmark | 待迁移 | 待验收 |
+| Mip/迟滞 | imageResources | 最小覆盖、切换稳定 | assets/textures | unit | 已实现 | 已验收 |
+| Tile/剔除/预加载 | usePixelScenePlan | 只处理工作集 | spatial/assets | unit + benchmark | 已实现 | unit 已验收，benchmark 待阶段 6 |
+| 稳定纹理/原子切换 | stableRenderCommands | 不空白、不退回低清 | texture manager | unit + image smoke | 已实现 | Electron 真图片 smoke 已验收 |
+| CPU/GPU LRU | imageResources/WebGL | 字节预算、Pin、释放 | textures | unit + benchmark | 已实现 | unit 已验收，benchmark 待阶段 6 |
+| GPU 分帧上传 | WebGL renderer | 4项/8MiB/约2ms | upload scheduler | unit + benchmark | 已实现 | unit/Electron smoke 已验收，benchmark 待阶段 6 |
 | 上下文菜单/快捷键 | App | 命令与 enable 状态一致 | Canvas bridge/App | smoke | 待迁移 | 待验收 |
-| 性能诊断 | CanvasBoard data attrs | 稳定版本化 snapshot | debug | unit + benchmark | 待迁移 | 待验收 |
+| 性能诊断 | CanvasBoard data attrs | 稳定版本化 snapshot | debug | unit + benchmark | 已实现 | Pixi runtime 指标已接入，benchmark 待阶段 6 |
 | 旧工程打开 | scene-packages | 无需重新导入 | persistence adapter | integration | 待迁移 | 待验收 |
 | 保存/重开/viewport/zIndex | App/history | 往返无损 | persistence adapter | integration | 待迁移 | 待验收 |
 | 自动保存/dirty 边界 | App/history | 高频预览不写历史 | command bridge | integration | 待迁移 | 待验收 |
 | 缺失资源 | protocol/registry | 明确错误、不崩溃 | asset adapter | integration | 待迁移 | 待验收 |
-| WebGL context loss/销毁 | legacy renderer | 可恢复且释放资源 | runtime/renderer | smoke | 待迁移 | 待验收 |
+| WebGL context loss/销毁 | legacy renderer | 可恢复且释放资源 | runtime/renderer | smoke | 已实现 | 销毁 smoke 已验收，强制 context-loss 待最终 smoke |
 | Legacy 删除 | 全仓库 | 生产源码无 Legacy/V2 路径 | final cleanup | rg + knip | 待迁移 | 待验收 |

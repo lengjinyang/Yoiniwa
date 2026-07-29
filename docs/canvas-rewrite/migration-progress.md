@@ -6,8 +6,8 @@
 | 1. Pixi Runtime 与 Camera | 已完成 | `5c47eae` | typecheck/lint，51 files/194 tests，production build |
 | 2. Scene 与真实图片 | 已完成 | `b961ba5` | typecheck/lint，53 files/196 tests，production build |
 | 3. 选择与变换 | 已完成 | `71cab90` | typecheck/lint，55 files/199 tests，production build |
-| 4. Command/Undo/Redo | 已完成 | 待本阶段提交 | typecheck/lint，56 files/201 tests，production build |
-| 5. 图片流送与缓存 | 未开始 | — | — |
+| 4. Command/Undo/Redo | 已完成 | `53fe3ef` | typecheck/lint，56 files/201 tests，production build |
+| 5. 图片流送与缓存 | 已完成 | 待本阶段提交 | typecheck/lint，62 files/209 tests，production build，Pixi 真图片 smoke |
 | 6. 剩余功能 | 未开始 | — | — |
 | 7. 工程兼容 | 未开始 | — | — |
 | 唯一入口与删除 Legacy | 未开始 | — | — |
@@ -48,3 +48,16 @@
 - Undo/Redo 执行不可变场景替换，并在执行新命令后清空 redo 分支。
 - 工程 epoch 改变时清空 Runtime 命令历史，防止跨工程撤销。
 - 应用层现有 history 仍负责项目级快捷键与保存 dirty 状态；新画布内部所有变换先经过 CommandManager 再提交应用快照。
+
+## 阶段 5 结果
+
+- 新 MipSelector 以旋转后屏幕占用、Camera scale、DPR 和 1.25 超采样计算需求；升级立即、降级需 2 倍冗余且静止 300ms。
+- Uniform Grid 每帧仅查询可见区和 0.75 视口预加载区；远区 Sprite 不参与渲染并释放纹理 Pin。
+- TextureRequestScheduler 按 `assetId+mip+tile` 合并并发请求，generation 变化后丢弃旧结果。
+- CPU ImageBitmap LRU 按真实 RGBA 字节预算回收（设备自适应 256–1024 MiB，默认 512 MiB），释放时调用 `close()`。
+- GPU LRU 独立使用 512 MiB 默认预算/1 GiB 硬上限；当前显示与待切换纹理分别 Pin，远区按 LRU 回收。
+- 上传统一进入每帧最多 4 项、8 MiB、约 2ms 的队列；直接在预算帧调用 Pixi WebGL texture system，完成后才进入待切换状态。
+- ImageRenderer 在帧开始原子提交 pending texture，等待期间不清空当前 Sprite、不退回通用缩略图。
+- 超过 8192 的资源只用最大 4096 整图作稳定底图；放大需求超过 4096 时按 512 tile 建立完整目标集合，全部上传后整组切换。
+- 开发性能面板接入 Pixi CPU/GPU 字节、队列、上传字节、命中率、可见/预加载数和当前 Mip。
+- `npm run smoke:pixi` 已在 Electron production bundle 中导入真实 PNG、完成磁盘金字塔命中、GPU 上传并确认 Pixi canvas 数据。

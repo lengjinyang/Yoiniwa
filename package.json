@@ -17,6 +17,7 @@
     "build": "npm run typecheck && npm run build:electron && vite build",
     "start": "npm run build:electron && electron .",
     "smoke": "npm run build:electron && set \"REFCANVAS_SMOKE_TEST=1\" && electron .",
+    "smoke:pixi": "npm run build && set \"REFCANVAS_PIXI_SMOKE=1\" && electron .",
     "smoke:dev": "npm run build:electron && set \"REFCANVAS_DEV_SMOKE=1\" && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron \"vite --strictPort\" \"wait-on http://localhost:5173 && electron .\"",
     "smoke:stress": "npm run build:electron && set \"REFCANVAS_STRESS_TEST=1\" && electron .",
     "smoke:perf": "npm run build:electron && set \"REFCANVAS_PERF_BENCH=1\" && set \"REFCANVAS_PERF_PHASE=before\" && electron .",
