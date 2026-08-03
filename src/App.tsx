@@ -11,9 +11,9 @@ import { matchesColorPickerShortcut, MAX_ZOOM, MIN_ZOOM, type ColorPickerShortcu
 import { arrangeImportedItems } from './importPlacement';
 import { preloadImagePreview } from './imageResources';
 import { annotationLabel, groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from './outline';
-import { normalizeTags } from './tags';
 import { startOperation, settleOperation, clearOperation, type OperationKind, type OperationState } from './operationState';
-import { annotationSceneBounds, applyNonDestructiveCrop, createGroupFrame, createScene, groupVisibleBounds, GROUP_TITLE_HEIGHT, itemBounds, memberBounds, moveAnnotation, moveGroupWithContents, reconcileAllMemberships, reconcileMemberBounds, removeMemberFromGroups, reorderImages, resetImageTransform, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
+import { addMemberToGroup, annotationSceneBounds, createGroupFrame, createScene, detachImageFromGroup, fitAutoGroupsToContents, fitGroupToContents, groupVisibleBounds, itemBounds, memberBounds, moveAnnotation, moveGroupWithContents, reconcileAllMemberships, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
+import type { GroupFrameBounds } from './canvas/selection/GroupResizeController';
 import { captureSceneSelection, pasteScenePayload, type SceneClipboardPayload } from './sceneClipboard';
 import { mergeSceneInto } from './sceneMerge';
 import type { AnnotationItem, AnnotationTool, CacheInfo, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, RecentScene, WindowState } from './types';
@@ -21,9 +21,12 @@ import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
 import { Button, formatBytes, OutlineThumbnail } from './app/components/CommonControls';
-import { clampGroupToolbarX } from './app/uiGeometry';
 import { appCommand, createAppCommandRegistry } from './app/AppCommand';
+import { ColorControl, type ColorControlHandle } from './ColorControl';
 import './styles.css';
+import './styles/quiet-tokens.css';
+import './styles/quiet-controls.css';
+import './styles/quiet-surfaces.css';
 
 const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, opacity: 1 };
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
@@ -58,18 +61,21 @@ export default function App() {
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineQuery, setOutlineQuery] = useState('');
-  const [tagDraft, setTagDraft] = useState('');
   const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
   const [sceneNameVisible, setSceneNameVisible] = useState(false);
   const [commentEditingId, setCommentEditingId] = useState<string>();
   const [commentDraft, setCommentDraft] = useState('');
   const [contextMenu, setContextMenu] = useState<MenuPosition>();
+  const [groupActionMenu, setGroupActionMenu] = useState<{ id: string; position: MenuPosition }>();
   const [annotationMode, setAnnotationMode] = useState(false);
   const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('pen');
   const [annotationColor, setAnnotationColor] = useState('#ffcc45');
+  const [annotationOpacity, setAnnotationOpacity] = useState(1);
   const [annotationWidth, setAnnotationWidth] = useState(4);
   const [colorPickerHeld, setColorPickerHeld] = useState(false);
-  const [groupToolbarVisible, setGroupToolbarVisible] = useState(false);
+  const [groupColorEditor, setGroupColorEditor] = useState<{ id: string; anchor: { x: number; y: number } }>();
+  const groupColorEditorRef = useRef<ColorControlHandle>(null);
+  const groupColorEditorIdRef = useRef<string | undefined>(undefined);
   const [colorPickerShortcut, setColorPickerShortcut] = useState<ColorPickerShortcut>(() => {
     const query = new URLSearchParams(window.location.search);
     if (query.has('smoke') || query.has('stress')) return 's';
@@ -77,10 +83,6 @@ export default function App() {
     catch { return 's'; }
   });
   const [focusReturn, setFocusReturn] = useState<typeof history.scene.viewport>();
-  const groupToolbarRef = useRef<HTMLDivElement>(null);
-  const groupToolbarHideTimerRef = useRef<number | undefined>(undefined);
-  const groupToolbarPointerInsideRef = useRef(false);
-  const groupHeaderDraggingRef = useRef(false);
   const renameComposingRef = useRef(false);
   const colorSyncRequestRef = useRef(0);
   const sceneClipboardRef = useRef<SceneClipboardPayload | undefined>(undefined);
@@ -115,6 +117,7 @@ export default function App() {
       history.scene.canvas.includeBackgroundOnExport ? history.scene.canvas.background : undefined,
       history.scene.annotations,
       history.scene.groups,
+      history.scene.canvas.backgroundOpacity ?? 1,
     );
     return () => { delete smokeWindow.__refCanvasSmokeExport; };
   }, [history.scene]);
@@ -198,61 +201,8 @@ export default function App() {
     const item = history.scene.items.find((value) => value.id === id);
     return item ? [item] : [];
   }), [history.scene.items, selectedIds]);
-  const selectedAnnotations = useMemo(() => history.scene.annotations.filter((item) => selectedAnnotationIds.includes(item.id)), [history.scene.annotations, selectedAnnotationIds]);
   const selectedGroup = selectedGroupId ? history.scene.groups.find((group) => group.id === selectedGroupId) : undefined;
 
-  const showGroupToolbar = useCallback(() => {
-    if (groupHeaderDraggingRef.current) return;
-    if (groupToolbarHideTimerRef.current !== undefined) window.clearTimeout(groupToolbarHideTimerRef.current);
-    groupToolbarHideTimerRef.current = undefined;
-    setGroupToolbarVisible(true);
-  }, []);
-
-  const hideGroupToolbarSoon = useCallback(() => {
-    if (groupToolbarHideTimerRef.current !== undefined) window.clearTimeout(groupToolbarHideTimerRef.current);
-    groupToolbarHideTimerRef.current = window.setTimeout(() => {
-      groupToolbarHideTimerRef.current = undefined;
-      if (!groupToolbarPointerInsideRef.current) setGroupToolbarVisible(false);
-    }, 140);
-  }, []);
-
-  const setGroupHeaderDragging = useCallback((dragging: boolean) => {
-    groupHeaderDraggingRef.current = dragging;
-    if (!dragging) return;
-    if (groupToolbarHideTimerRef.current !== undefined) window.clearTimeout(groupToolbarHideTimerRef.current);
-    groupToolbarHideTimerRef.current = undefined;
-    setGroupToolbarVisible(false);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedGroup) {
-      setGroupToolbarVisible(false);
-      return;
-    }
-    const bounds = groupVisibleBounds(selectedGroup);
-    const viewport = history.scene.viewport;
-    const pointerInsideGroup = (clientX: number, clientY: number) => {
-      const worldX = (clientX - viewport.x) / viewport.scale;
-      const worldY = (clientY - viewport.y) / viewport.scale;
-      return worldX >= bounds.x && worldX <= bounds.x + bounds.width
-        && worldY >= bounds.y && worldY <= bounds.y + bounds.height;
-    };
-    const pointer = lastPointerRef.current;
-    setGroupToolbarVisible(pointerInsideGroup(pointer.x, pointer.y) || groupToolbarPointerInsideRef.current);
-    const trackPointer = (event: MouseEvent) => {
-      lastPointerRef.current = { x: event.clientX, y: event.clientY };
-      if (groupHeaderDraggingRef.current) return;
-      const inside = pointerInsideGroup(event.clientX, event.clientY);
-      if (inside) showGroupToolbar();
-      else if (!groupToolbarPointerInsideRef.current) hideGroupToolbarSoon();
-    };
-    window.addEventListener('mousemove', trackPointer);
-    return () => {
-      window.removeEventListener('mousemove', trackPointer);
-      if (groupToolbarHideTimerRef.current !== undefined) window.clearTimeout(groupToolbarHideTimerRef.current);
-      groupToolbarHideTimerRef.current = undefined;
-    };
-  }, [hideGroupToolbarSoon, history.scene.viewport, selectedGroup, showGroupToolbar]);
   const targetIds = useMemo(() => {
     if (selectedIds.length) return selectedIds.filter((id) => !history.scene.items.find((item) => item.id === id)?.locked);
     if (selectedGroup) {
@@ -598,6 +548,7 @@ export default function App() {
           }
         });
       });
+      fitAutoGroupsToContents(scene);
     }));
   }, [history]);
 
@@ -655,15 +606,6 @@ export default function App() {
     setStatus(`已创建分组框“${name}”`);
   }, [history, selectedAnnotationIds, selectedIds]);
 
-  const positionGroupToolbar = useCallback((group: ImageGroup, x = group.x, y = group.y) => {
-    const toolbar = groupToolbarRef.current;
-    if (!toolbar) return;
-    const visibleBounds = groupVisibleBounds({ ...group, x, y });
-    const centerX = history.scene.viewport.x + x * history.scene.viewport.scale + visibleBounds.width * history.scene.viewport.scale / 2;
-    const frameTop = history.scene.viewport.y + y * history.scene.viewport.scale;
-    toolbar.style.left = `${clampGroupToolbarX(centerX)}px`;
-    toolbar.style.top = `${frameTop > 42 ? frameTop - 31 : frameTop + GROUP_TITLE_HEIGHT * history.scene.viewport.scale + 6}px`;
-  }, [history.scene.viewport]);
 
   const renameGroupById = useCallback((groupId: string) => {
     const current = history.scene.groups.find((group) => group.id === groupId);
@@ -697,7 +639,6 @@ export default function App() {
   const ungroupSelected = useCallback(() => {
     if (!selectedGroup) return;
     history.commit((scene) => {
-      removeMemberFromGroups(scene, { type: 'group', id: selectedGroup.id });
       const group = scene.groups.find((value) => value.id === selectedGroup.id);
       if (group) {
         group.members.filter((member) => member.type === 'group').forEach((member) => {
@@ -710,6 +651,48 @@ export default function App() {
     setStatus('已清空分组框成员');
   }, [history, selectedGroup]);
 
+  const detachImages = useCallback((imageIds: readonly string[], groupId?: string) => {
+    const selected = new Set(imageIds);
+    const targets = history.scene.groups.flatMap((group) => group.members
+      .filter((member) => member.type === 'image' && selected.has(member.id) && (!groupId || group.id === groupId))
+      .map((member) => ({ groupId: group.id, imageId: member.id })));
+    if (!targets.length) {
+      setStatus('选中的图片不在组内');
+      return;
+    }
+    history.commit((scene) => {
+      targets.forEach((target) => { detachImageFromGroup(scene, target.groupId, target.imageId); });
+    });
+    setStatus(`已将 ${targets.length} 张图片移出组，图片位置保持不变`);
+  }, [history]);
+
+  const detachSelectedImages = useCallback(() => detachImages(selectedIds), [detachImages, selectedIds]);
+
+  const addImagesToGroup = useCallback((imageIds: readonly string[], groupId: string) => {
+    const existingIds = new Set(history.scene.items.map((item) => item.id));
+    const target = history.scene.groups.find((group) => group.id === groupId);
+    const targets = [...new Set(imageIds)].filter((id) => existingIds.has(id)
+      && !target?.members.some((member) => member.type === 'image' && member.id === id));
+    if (!target || !targets.length) {
+      setStatus(target ? '选中的图片已经在该组中' : '目标组不存在');
+      return;
+    }
+    history.commit((scene) => {
+      const group = scene.groups.find((value) => value.id === groupId);
+      if (!group) return;
+      targets.forEach((imageId) => {
+        // Mark the former relationship as explicitly detached before assigning
+        // the new one, otherwise geometry reconciliation could claim it back.
+        const former = scene.groups.find((value) => value.members.some((member) =>
+          member.type === 'image' && member.id === imageId));
+        if (former && former.id !== group.id) detachImageFromGroup(scene, former.id, imageId);
+        addMemberToGroup(scene, group, { type: 'image', id: imageId });
+      });
+      fitAutoGroupsToContents(scene);
+    });
+    setStatus(`已将 ${targets.length} 张图片加入“${target.name}”，图片位置保持不变`);
+  }, [history]);
+
   const changeGroup = useCallback((groupId: string, patch: Partial<ImageGroup>) => {
     history.commit((scene) => {
       const group = scene.groups.find((value) => value.id === groupId);
@@ -720,12 +703,47 @@ export default function App() {
     });
   }, [history]);
 
+  const openGroupActions = useCallback((groupId: string, position: { x: number; y: number }) => {
+    const group = history.scene.groups.find((value) => value.id === groupId);
+    if (!group) return;
+    setSelectedGroupId(groupId);
+    setContextMenu(undefined);
+    // Keep the popup just outside the group's right edge so it never covers
+    // images inside the frame while remaining visually tied to the trigger.
+    setGroupActionMenu({ id: groupId, position: { x: position.x + 6, y: position.y } });
+  }, [history.scene.groups]);
+
+  useEffect(() => {
+    groupColorEditorIdRef.current = groupColorEditor?.id;
+  }, [groupColorEditor]);
+
+  useEffect(() => {
+    if (groupColorEditor && selectedGroupId !== groupColorEditor.id) setGroupColorEditor(undefined);
+  }, [groupColorEditor, selectedGroupId]);
+
+  const moveGroupColorEditor = useCallback((groupId: string, position: { x: number; y: number }) => {
+    if (groupColorEditorIdRef.current === groupId) groupColorEditorRef.current?.setAnchor(position);
+  }, []);
+
   const moveGroup = useCallback((groupId: string, deltaX: number, deltaY: number) => {
     if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) return;
     history.commit((scene) => {
       moveGroupWithContents(scene, groupId, deltaX, deltaY);
       const bounds = memberBounds(scene, { type: 'group', id: groupId });
       if (bounds) reconcileMemberBounds(scene, { type: 'group', id: groupId }, bounds);
+    });
+  }, [history]);
+
+  const resizeGroup = useCallback((groupId: string, bounds: GroupFrameBounds) => {
+    const current = history.scene.groups.find((group) => group.id === groupId);
+    if (!current || current.sizeLocked || current.collapsed
+      || (current.x === bounds.x && current.y === bounds.y
+        && current.width === bounds.width && current.height === bounds.height)) return;
+    history.commit((scene) => {
+      const group = scene.groups.find((value) => value.id === groupId);
+      if (!group || group.sizeLocked || group.collapsed) return;
+      Object.assign(group, bounds, { autoFit: false });
+      reconcileAllMemberships(scene);
     });
   }, [history]);
 
@@ -750,8 +768,11 @@ export default function App() {
         scene.groups = scene.groups.filter((value) => value.id !== groupId);
       };
       remove(groupId);
+      fitAutoGroupsToContents(scene);
     });
     setSelectedGroupId(undefined);
+    setGroupColorEditor((current) => current?.id === groupId ? undefined : current);
+    setRenamingGroupId((current) => current === groupId ? undefined : current);
     setStatus(withContents ? '已删除分组框及其内容' : '已删除分组框，内部对象已保留');
   }, [history]);
 
@@ -945,7 +966,8 @@ export default function App() {
     if (!items.length && !annotations.length) { setStatus('没有可导出的内容'); return; }
     const requestId = beginOperation('export', '正在渲染导出图片…');
     try {
-      const imageData = await renderItems(items, history.scene.canvas.includeBackgroundOnExport ? history.scene.canvas.background : undefined, annotations, onlySelected ? [] : history.scene.groups);
+      const imageData = await renderItems(items, history.scene.canvas.includeBackgroundOnExport ? history.scene.canvas.background : undefined,
+        annotations, onlySelected ? [] : history.scene.groups, history.scene.canvas.backgroundOpacity ?? 1);
       if (copy) {
         await api.copyImage(imageData);
         settleCurrentOperation(requestId, 'success', '已将合成结果复制到剪贴板');
@@ -1017,7 +1039,7 @@ export default function App() {
       if (ctrl && !alt && shift && key === 'z') return run(appCommand(commands, 'edit.redo').execute);
       if (ctrl && !alt && shift && key === 'c') return run(restoreFullImages);
       if (ctrl && !alt && shift && key === 't') return run(() => mutateSelected(resetImageTransform));
-      if (ctrl && !alt && shift && key === 'g') return run(ungroupSelected);
+      if (ctrl && !alt && shift && key === 'g') return run(selectedIds.length ? detachSelectedImages : ungroupSelected);
       if (ctrl && !alt && shift && (key === '+' || key === '=')) return run(() => { void setMode({ opacity: Math.min(1, windowMode.opacity + 0.1) }); });
       if (ctrl && !alt && shift && key === '-') return run(() => { void setMode({ opacity: Math.max(0.3, windowMode.opacity - 0.1) }); });
 
@@ -1090,7 +1112,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [annotationMode, api, colorPickerShortcut, commands, contextMenu, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedItems, setMode, toggleAnnotationMode, toggleFocus, ungroupSelected, windowMode, zoomBy]);
+  }, [annotationMode, api, colorPickerShortcut, commands, contextMenu, detachSelectedImages, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, setMode, toggleAnnotationMode, toggleFocus, ungroupSelected, windowMode, zoomBy]);
 
   useEffect(() => {
     const over = (event: DragEvent) => event.preventDefault();
@@ -1155,60 +1177,19 @@ export default function App() {
     return () => window.removeEventListener('refcanvas-smoke-add-paths', addTestPaths);
   }, [addImages, api]);
 
-  const updateCrop = (side: 'left' | 'right' | 'top' | 'bottom', percent: number) => {
-    if (!primary) return;
-    mutateSelected((item) => {
-      const fullW = item.naturalWidth;
-      const fullH = item.naturalHeight;
-      let left = item.crop.x;
-      let right = fullW - item.crop.x - item.crop.width;
-      let top = item.crop.y;
-      let bottom = fullH - item.crop.y - item.crop.height;
-      if (side === 'left') left = Math.min(fullW - right - 1, fullW * percent / 100);
-      if (side === 'right') right = Math.min(fullW - left - 1, fullW * percent / 100);
-      if (side === 'top') top = Math.min(fullH - bottom - 1, fullH * percent / 100);
-      if (side === 'bottom') bottom = Math.min(fullH - top - 1, fullH * percent / 100);
-      applyNonDestructiveCrop(item, { x: left, y: top, width: fullW - left - right, height: fullH - top - bottom });
-    });
-  };
-
   const selectedObjectCount = selectedIds.length + selectedAnnotationIds.length;
   const hasSelection = selectedObjectCount > 0;
   const hasImageSelection = selectedIds.length > 0;
-  const selectedTagObjects = useMemo(() => [
-    ...selectedItems,
-    ...selectedAnnotations,
-    ...(selectedGroup ? [selectedGroup] : []),
-  ], [selectedAnnotations, selectedGroup, selectedItems]);
-  const displayedTags = selectedTagObjects.length
-    ? (selectedTagObjects[0].tags ?? []).filter((tag) => selectedTagObjects.every((object) =>
-      object.tags?.some((value) => value.localeCompare(tag, undefined, { sensitivity: 'accent' }) === 0)))
-    : [];
-  const mutateSelectedTags = (mutate: (tags: string[]) => string[]) => {
-    history.commit((scene) => {
-      const imageIds = new Set(selectedIds);
-      const annotationIds = new Set(selectedAnnotationIds);
-      const apply = <T extends { tags?: string[] },>(object: T) => {
-        const next = normalizeTags(mutate([...(object.tags ?? [])]));
-        if (next) object.tags = next;
-        else delete object.tags;
-      };
-      scene.items.forEach((item) => { if (imageIds.has(item.id)) apply(item); });
-      scene.annotations.forEach((annotation) => { if (annotationIds.has(annotation.id)) apply(annotation); });
-      const group = selectedGroupId ? scene.groups.find((value) => value.id === selectedGroupId) : undefined;
-      if (group) apply(group);
-    });
-  };
-  const addSelectedTag = () => {
-    const tag = normalizeTags([tagDraft])?.[0];
-    if (!tag) return;
-    mutateSelectedTags((tags) => [...tags, tag]);
-    setTagDraft('');
-  };
-  const removeSelectedTag = (tag: string) => {
-    const key = tag.toLocaleLowerCase();
-    mutateSelectedTags((tags) => tags.filter((value) => value.toLocaleLowerCase() !== key));
-  };
+  const selectedGroupedImageIds = selectedIds.filter((id) => history.scene.groups.some((group) =>
+    group.members.some((member) => member.type === 'image' && member.id === id)));
+  const joinGroupEntries: ContextMenuEntry[] = history.scene.groups.map((group) => {
+    const alreadyJoined = selectedIds.length > 0 && selectedIds.every((id) => group.members.some((member) =>
+      member.type === 'image' && member.id === id));
+    return {
+      type: 'item', label: group.name, checked: alreadyJoined, disabled: alreadyJoined,
+      action: () => addImagesToGroup(selectedIds, group.id),
+    };
+  });
   const undoCommand = appCommand(commands, 'edit.undo');
   const redoCommand = appCommand(commands, 'edit.redo');
   const copyCommand = appCommand(commands, 'edit.copy');
@@ -1218,9 +1199,9 @@ export default function App() {
   const deleteCommand = appCommand(commands, 'edit.delete');
   const createGroupCommand = appCommand(commands, 'group.create');
   const menuEntries: ContextMenuEntry[] = [
-    { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => setOutlineOpen((value) => !value) },
-    { type: 'separator' },
     { type: 'item', label: `${history.scene.name}${history.dirty ? '  • 未保存' : ''}`, disabled: true },
+    { type: 'separator' },
+    { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => setOutlineOpen((value) => !value) },
     { type: 'separator' },
     {
       type: 'item', label: '文件', children: [
@@ -1246,16 +1227,28 @@ export default function App() {
         { type: 'item', label: '粘贴', shortcut: 'Ctrl+V', disabled: !pasteCommand.enabled, action: pasteCommand.execute },
         { type: 'item', label: '快速创建副本', shortcut: 'Ctrl+D', disabled: !duplicateCommand.enabled, action: duplicateCommand.execute },
         { type: 'item', label: '删除选中', shortcut: 'Delete', disabled: !deleteCommand.enabled, danger: true, action: deleteCommand.execute },
-        { type: 'separator' },
+      ],
+    },
+    {
+      type: 'item', label: '分组', disabled: !selectedGroup && !createGroupCommand.enabled
+        && selectedGroupedImageIds.length === 0 && (!hasImageSelection || joinGroupEntries.length === 0), children: [
         { type: 'item', label: '创建分组框', shortcut: 'Ctrl+G', disabled: !createGroupCommand.enabled, action: createGroupCommand.execute },
-        { type: 'item', label: '重命名组…', shortcut: 'F2', disabled: !selectedGroup, action: renameGroup },
-        { type: 'item', label: '清空分组成员', shortcut: 'Ctrl+Shift+G', disabled: !selectedGroup, action: ungroupSelected },
-        { type: 'item', label: '删除分组框', disabled: !selectedGroup, action: () => deleteGroup(false) },
-        { type: 'item', label: '删除分组及内容', disabled: !selectedGroup, danger: true, action: () => deleteGroup(true) },
+        { type: 'item', label: '加入组', disabled: !hasImageSelection || joinGroupEntries.length === 0, children: joinGroupEntries },
+        { type: 'item', label: '将选中图片移出组', shortcut: 'Ctrl+Shift+G', disabled: selectedGroupedImageIds.length === 0, action: detachSelectedImages },
+        { type: 'item', label: '重命名…', shortcut: 'F2', disabled: !selectedGroup, action: renameGroup },
+        { type: 'separator' },
+        { type: 'item', label: selectedGroup?.collapsed ? '展开' : '折叠', disabled: !selectedGroup,
+          action: () => { if (selectedGroup) changeGroup(selectedGroup.id, { collapsed: !selectedGroup.collapsed }); } },
+        { type: 'separator' },
+        { type: 'item', label: '清空成员', disabled: !selectedGroup, action: ungroupSelected },
+        { type: 'item', label: '删除组框', disabled: !selectedGroup, action: () => deleteGroup(false) },
       ],
     },
     {
       type: 'item', label: '图片', disabled: !hasImageSelection, children: hasImageSelection ? [
+        { type: 'item', label: '加入组', disabled: joinGroupEntries.length === 0, children: joinGroupEntries },
+        { type: 'item', label: '从组中移出', shortcut: 'Ctrl+Shift+G', disabled: selectedGroupedImageIds.length === 0, action: detachSelectedImages },
+        { type: 'separator' },
         { type: 'item', label: primary?.locked ? '解锁' : '锁定', shortcut: 'Alt+L', action: () => mutateSelected((item) => { item.locked = !item.locked; }) },
         { type: 'item', label: '水平翻转', shortcut: 'Alt+Shift+H', action: () => mutateSelected((item) => { item.flipX = !item.flipX; }) },
         { type: 'item', label: '垂直翻转', shortcut: 'Alt+Shift+V', action: () => mutateSelected((item) => { item.flipY = !item.flipY; }) },
@@ -1290,7 +1283,7 @@ export default function App() {
         { type: 'item', label: '聚焦选中', shortcut: 'Space', disabled: !hasSelection, action: () => toggleFocus(selectedItems) },
         { type: 'item', label: '显示整个画板', shortcut: 'Ctrl+Space', disabled: !hasContent, action: fitCanvas },
         { type: 'item', label: '重置缩放为 1:1', shortcut: 'Ctrl+0', action: resetZoom },
-        { type: 'item', label: '属性面板', shortcut: 'Tab', checked: propertiesOpen, action: () => setPropertiesOpen((value) => !value) },
+        { type: 'item', label: '系统设置', shortcut: 'Tab', checked: propertiesOpen, action: () => setPropertiesOpen((value) => !value) },
       ],
     },
     {
@@ -1316,6 +1309,28 @@ export default function App() {
     { type: 'item', label: '新建画板', shortcut: 'Ctrl+K', action: newScene },
     { type: 'item', label: '退出画布', shortcut: 'Ctrl+Q', danger: true, action: () => api?.close() },
   ];
+  const groupActionTarget = groupActionMenu
+    ? history.scene.groups.find((group) => group.id === groupActionMenu.id) : undefined;
+  const groupActionEntries: ContextMenuEntry[] = groupActionTarget && groupActionMenu ? [
+    { type: 'item', label: '更改颜色…', action: () => setGroupColorEditor({
+      id: groupActionTarget.id,
+      anchor: { ...groupActionMenu.position },
+    }) },
+    { type: 'item', label: '重命名…', shortcut: 'F2', action: () => renameGroupById(groupActionTarget.id) },
+    { type: 'item', label: groupActionTarget.collapsed ? '展开' : '折叠',
+      action: () => changeGroup(groupActionTarget.id, { collapsed: !groupActionTarget.collapsed }) },
+    { type: 'item', label: '自动适应内容', checked: groupActionTarget.autoFit ?? true,
+      action: () => history.commit((scene) => {
+        const group = scene.groups.find((value) => value.id === groupActionTarget.id);
+        if (!group) return;
+        group.autoFit = !(group.autoFit ?? true);
+        if (group.autoFit) fitGroupToContents(scene, group.id);
+      }) },
+    { type: 'item', label: '移出组内全部图片', disabled: !groupActionTarget.members.some((member) => member.type === 'image'),
+      action: () => detachImages(groupActionTarget.members.filter((member) => member.type === 'image').map((member) => member.id), groupActionTarget.id) },
+    { type: 'separator' },
+    { type: 'item', label: '删除组框', action: () => deleteGroupById(groupActionTarget.id, false) },
+  ] : [];
 
   const groupedImageIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'image').map((member) => member.id)));
   const groupedAnnotationIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'annotation').map((member) => member.id)));
@@ -1365,20 +1380,20 @@ export default function App() {
       <button className="outline-name" title={`${item.name} · 双击定位`} onClick={() => selectOutlineImage(item)} onDoubleClick={() => focusOutlineImage(item)}>{item.name}</button>
       {item.comment && <span className="outline-comment-dot" title={item.comment}>●</span>}
       <span className="outline-actions">
-        <button title={item.hidden ? '显示图片' : '隐藏图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.hidden = !value.hidden; })}>{item.hidden ? '◌' : '◉'}</button>
-        <button title={item.locked ? '解锁图片' : '锁定图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.locked = !value.locked; })}>{item.locked ? '◆' : '◇'}</button>
-        <button title="下移一层" onClick={() => moveOutlineImageLayer(item.id, -1)}>↓</button>
-        <button title="上移一层" onClick={() => moveOutlineImageLayer(item.id, 1)}>↑</button>
+        <button className={`outline-visibility${item.hidden ? ' off' : ''}`} title={item.hidden ? '显示图片' : '隐藏图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.hidden = !value.hidden; })}><i /></button>
+        <button className={`outline-lock${item.locked ? ' locked' : ''}`} title={item.locked ? '解锁图片' : '锁定图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.locked = !value.locked; })}><i /></button>
+        <button className="outline-layer down" title="下移一层" onClick={() => moveOutlineImageLayer(item.id, -1)}><i /></button>
+        <button className="outline-layer up" title="上移一层" onClick={() => moveOutlineImageLayer(item.id, 1)}><i /></button>
       </span>
     </div>
   </li> : null;
   const renderOutlineAnnotation = (annotation: AnnotationItem) => annotationMatchesOutline(annotation) ? <li key={`annotation-${annotation.id}`}>
     <div className={`outline-row annotation${selectedAnnotationIds.includes(annotation.id) ? ' selected' : ''}${annotation.hidden ? ' muted' : ''}`}>
-      <span className="outline-indent" /><span className="outline-type-icon">✎</span>
+      <span className="outline-indent" /><span className="outline-type-icon"><i /></span>
       <button className="outline-name" title="双击定位" onClick={() => selectOutlineAnnotation(annotation)} onDoubleClick={() => focusOutlineAnnotation(annotation)}>{annotationLabel(annotation)}</button>
       <span className="outline-actions">
-        <button title={annotation.hidden ? '显示标注' : '隐藏标注'} onClick={() => history.commit((scene) => { const value = scene.annotations.find((entry) => entry.id === annotation.id); if (value) value.hidden = !value.hidden; })}>{annotation.hidden ? '◌' : '◉'}</button>
-        <button title={annotation.locked ? '解锁标注' : '锁定标注'} onClick={() => history.commit((scene) => { const value = scene.annotations.find((entry) => entry.id === annotation.id); if (value) value.locked = !value.locked; })}>{annotation.locked ? '◆' : '◇'}</button>
+        <button className={`outline-visibility${annotation.hidden ? ' off' : ''}`} title={annotation.hidden ? '显示标注' : '隐藏标注'} onClick={() => history.commit((scene) => { const value = scene.annotations.find((entry) => entry.id === annotation.id); if (value) value.hidden = !value.hidden; })}><i /></button>
+        <button className={`outline-lock${annotation.locked ? ' locked' : ''}`} title={annotation.locked ? '解锁标注' : '锁定标注'} onClick={() => history.commit((scene) => { const value = scene.annotations.find((entry) => entry.id === annotation.id); if (value) value.locked = !value.locked; })}><i /></button>
       </span>
     </div>
   </li> : null;
@@ -1388,14 +1403,11 @@ export default function App() {
     const collapsed = !hasOutlineFilter && outlineCollapsedIds.has(group.id);
     return <li key={group.id} className="outline-group-node">
       <div className={`outline-row group${selectedGroupId === group.id ? ' selected' : ''}`}>
-        <button className="outline-disclosure" title={collapsed ? '展开' : '折叠'} onClick={() => toggleOutlineGroup(group.id)}>{collapsed ? '›' : '⌄'}</button>
-        <span className="outline-type-icon group" style={{ color: group.color }}>▣</span>
+        <button className={`outline-disclosure${collapsed ? ' collapsed' : ''}`} title={collapsed ? '展开层级' : '折叠层级'}
+          onClick={() => toggleOutlineGroup(group.id)}><i /></button>
+        <span className="outline-group-mark"><i style={{ backgroundColor: group.color }} /></span>
         <button className="outline-name" title={`${group.name} · 双击定位`} onClick={() => selectOutlineGroup(group)} onDoubleClick={() => focusOutlineGroup(group)}>{group.name}</button>
         <span className="outline-count">{group.members.length}</span>
-        <span className="outline-actions">
-          <button title={group.contentsHidden ? '显示组内容' : '隐藏组内容'} onClick={() => changeGroup(group.id, { contentsHidden: !group.contentsHidden })}>{group.contentsHidden ? '◌' : '◉'}</button>
-          <button title={group.sizeLocked ? '解锁组尺寸' : '锁定组尺寸'} onClick={() => changeGroup(group.id, { sizeLocked: !group.sizeLocked })}>{group.sizeLocked ? '◆' : '◇'}</button>
-        </span>
       </div>
       {!collapsed && <ul>{group.members.map((member) => {
         if (member.type === 'group') {
@@ -1416,6 +1428,7 @@ export default function App() {
     <section className="workspace">
       <CanvasView
         background={history.scene.canvas.background}
+        backgroundOpacity={history.scene.canvas.backgroundOpacity ?? 1}
         scene={history.scene}
         viewport={history.scene.viewport}
         selectedIds={selectedIds}
@@ -1428,21 +1441,23 @@ export default function App() {
         onItemsChanged={commitItemChanges}
         onAnnotationsChanged={commitAnnotationChanges}
         onGroupMoved={moveGroup}
-        onGroupHeaderDragChange={setGroupHeaderDragging}
-        onGroupPreview={(id, x, y) => {
-          const group = history.scene.groups.find((value) => value.id === id);
-          if (group) { positionGroupToolbar(group, x, y); showGroupToolbar(); }
-        }}
+        onGroupResized={resizeGroup}
+        onRenameGroup={renameGroupById}
+        onOpenGroupMenu={openGroupActions}
+        onExpandGroup={(id) => changeGroup(id, { collapsed: false })}
+        groupMenuOpen={Boolean(groupActionMenu)}
+        onGroupPreviewAnchor={moveGroupColorEditor}
         annotationMode={annotationMode}
         annotationTool={annotationTool}
         annotationColor={annotationColor}
+        annotationOpacity={annotationOpacity}
         annotationWidth={annotationWidth}
         colorPickerHeld={colorPickerHeld}
         onColorPicked={(color) => { void syncPickedColor(color); }}
         onAddAnnotation={addAnnotation}
         onErase={eraseAnnotations}
         onFocusItem={focusItem}
-        onContextMenu={(position) => { setPropertiesOpen(false); setContextMenu(position); }}
+        onContextMenu={(position) => { setPropertiesOpen(false); setGroupActionMenu(undefined); setContextMenu(position); }}
         windowLocked={windowMode.locked}
         onWindowMoveStart={() => api?.beginWindowMove()}
         onWindowMove={() => api?.updateWindowMove()}
@@ -1451,114 +1466,7 @@ export default function App() {
       />
 
       {propertiesOpen && <aside className="property-panel no-drag">
-        <div className="property-header"><div><strong>属性</strong><span>{selectedGroup ? '分组框' : selectedObjectCount ? `${selectedObjectCount} 项` : '画板'}</span></div><button title="关闭属性面板 (Tab)" onClick={() => setPropertiesOpen(false)}>×</button></div>
-        <section>
-          <h3>选择</h3>
-          <div className="selection-summary">{selectedGroup
-            ? `分组框“${selectedGroup.name}” · ${selectedGroup.members.length} 个直接成员`
-            : selectedObjectCount ? `已选择 ${selectedObjectCount} 个对象` : `画板共 ${history.scene.items.length} 张图片`}</div>
-          <div className="button-grid">
-            <Button onClick={duplicateCommand.execute} disabled={!duplicateCommand.enabled}>复制</Button>
-            <Button onClick={deleteCommand.execute} disabled={!deleteCommand.enabled}>删除</Button>
-            <Button onClick={() => mutateSelected((item) => { item.locked = !item.locked; })} disabled={!selectedIds.length}>{primary?.locked ? '解锁' : '锁定'}</Button>
-            <Button onClick={() => mutateSelected((item) => { item.flipX = !item.flipX; })} disabled={!selectedIds.length}>水平翻转</Button>
-            <Button onClick={() => mutateSelected((item) => { item.flipY = !item.flipY; })} disabled={!selectedIds.length}>垂直翻转</Button>
-            <Button onClick={() => mutateSelected(resetImageTransform)} disabled={!selectedIds.length}>重置变换</Button>
-            <Button onClick={() => moveLayer(true)} disabled={!selectedIds.length}>移到顶层</Button>
-            <Button onClick={() => moveLayer(false)} disabled={!selectedIds.length}>移到底层</Button>
-            <Button onClick={() => mutateSelected((item) => { item.grayscale = !item.grayscale; })} disabled={!selectedIds.length}>{primary?.grayscale ? '恢复彩色' : '灰度去色'}</Button>
-            <Button onClick={editImageComment} disabled={!primary}>{primary?.comment ? '编辑评论' : '添加评论'}</Button>
-            <Button onClick={() => { void showPrimarySource(); }} disabled={!primary?.sourcePath}>源文件位置</Button>
-          </div>
-          <div className="button-grid" style={{ marginTop: 5 }}>
-            <Button onClick={createGroupCommand.execute} disabled={!createGroupCommand.enabled}>创建分组框</Button>
-            <Button onClick={renameGroup} disabled={!selectedGroup}>重命名组</Button>
-            <Button onClick={ungroupSelected} disabled={!selectedGroup}>清空成员</Button>
-          </div>
-          <label>图片透明度 <output>{Math.round((primary?.opacity ?? 1) * 100)}%</output>
-            <input type="range" min="10" max="100" value={(primary?.opacity ?? 1) * 100} disabled={!primary} onChange={(event) => mutateSelected((item) => { item.opacity = Number(event.target.value) / 100; })} />
-          </label>
-          {selectedTagObjects.length > 0 && <div className="tag-editor">
-            <label>标签</label>
-            <div className="tag-list">{displayedTags.map((tag) => <button key={tag} title={`移除标签 ${tag}`} onClick={() => removeSelectedTag(tag)}>{tag} ×</button>)}</div>
-            <div className="tag-input-row">
-              <input value={tagDraft} maxLength={64} placeholder="添加标签" onChange={(event) => setTagDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addSelectedTag(); } }} />
-              <Button onClick={addSelectedTag}>添加</Button>
-            </div>
-          </div>}
-        </section>
-
-        {selectedGroup && <section>
-          <h3>分组框</h3>
-          <label className="color-row">背景颜色 <input type="color" value={selectedGroup.color} onChange={(event) => changeGroup(selectedGroup.id, { color: event.target.value })} /></label>
-          <label>背景透明度 <output>{Math.round(selectedGroup.opacity * 100)}%</output>
-            <input type="range" min="0" max="80" value={selectedGroup.opacity * 100}
-              onPointerDown={history.beginTransaction}
-              onChange={(event) => history.preview((scene) => { const group = scene.groups.find((value) => value.id === selectedGroup.id); if (group) group.opacity = Number(event.target.value) / 100; })}
-              onPointerUp={history.commitTransaction}
-              onPointerCancel={history.commitTransaction}
-              onBlur={history.commitTransaction} />
-          </label>
-          <label className="color-row">标题颜色 <input type="color" value={selectedGroup.titleColor} onChange={(event) => changeGroup(selectedGroup.id, { titleColor: event.target.value })} /></label>
-          <div className="button-grid" style={{ marginTop: 10 }}>
-            <Button onClick={() => changeGroup(selectedGroup.id, { collapsed: !selectedGroup.collapsed })}>{selectedGroup.collapsed ? '展开' : '折叠'}</Button>
-            <Button onClick={() => changeGroup(selectedGroup.id, { sizeLocked: !selectedGroup.sizeLocked })}>{selectedGroup.sizeLocked ? '解锁尺寸' : '锁定尺寸'}</Button>
-            <Button onClick={() => changeGroup(selectedGroup.id, { contentsHidden: !selectedGroup.contentsHidden })}>{selectedGroup.contentsHidden ? '显示成员' : '隐藏成员'}</Button>
-            <Button onClick={() => deleteGroup(false)}>删除框</Button>
-            <Button onClick={() => deleteGroup(true)}>删除框及内容</Button>
-          </div>
-        </section>}
-
-        {history.scene.groups.length > 0 && <section>
-          <h3>所有分组框</h3>
-          <div className="recent-list">{history.scene.groups.map((group) => <button key={group.id} onClick={() => {
-            setSelectedIds([]); setSelectedAnnotationIds([]); setSelectedGroupId(group.id);
-          }}>{group.contentsHidden ? '◌' : group.collapsed ? '▸' : '▾'} {group.name}</button>)}</div>
-        </section>}
-
-        <section>
-          <h3>排列与对齐</h3>
-          <div className="button-grid compact">
-            <Button disabled={layoutTargetCount < 2} onClick={() => layout('align-left')}>左对齐</Button><Button disabled={layoutTargetCount < 2} onClick={() => layout('align-right')}>右对齐</Button>
-            <Button disabled={layoutTargetCount < 2} onClick={() => layout('align-top')}>顶对齐</Button><Button disabled={layoutTargetCount < 2} onClick={() => layout('align-bottom')}>底对齐</Button>
-            <Button disabled={layoutTargetCount < 2} onClick={() => layout('distribute-horizontal')}>水平分布</Button><Button disabled={layoutTargetCount < 2} onClick={() => layout('distribute-vertical')}>垂直分布</Button>
-            <Button disabled={layoutTargetCount < 2} onClick={() => layout('normalize-width')}>统一宽度</Button><Button disabled={layoutTargetCount < 2} onClick={() => layout('normalize-height')}>统一高度</Button>
-            <Button disabled={layoutTargetCount < 2} onClick={() => layout('normalize-size')}>统一尺寸</Button><Button disabled={layoutTargetCount < 2} onClick={() => layout('pack')}>紧密排列</Button>
-          </div>
-          <label>排列间距 <output>{history.scene.canvas.padding}px</output>
-            <input type="range" min="0" max="100" value={history.scene.canvas.padding} onChange={(event) => history.commit((scene) => { scene.canvas.padding = Number(event.target.value); })} />
-          </label>
-          <label className="check-row"><input type="checkbox" checked={history.scene.canvas.snap} onChange={(event) => history.commit((scene) => { scene.canvas.snap = event.target.checked; })} /> 移动时吸附图片边缘与中心</label>
-        </section>
-
-        {primary && <section>
-          <h3>非破坏性裁剪</h3>
-          <div className="crop-grid">
-            {(['left', 'right', 'top', 'bottom'] as const).map((side) => {
-              const percent = side === 'left' ? primary.crop.x / primary.naturalWidth * 100
-                : side === 'right' ? (1 - (primary.crop.x + primary.crop.width) / primary.naturalWidth) * 100
-                : side === 'top' ? primary.crop.y / primary.naturalHeight * 100
-                : (1 - (primary.crop.y + primary.crop.height) / primary.naturalHeight) * 100;
-              const labels = { left: '左', right: '右', top: '上', bottom: '下' };
-              return <label key={side}>{labels[side]} <input type="number" min="0" max="45" step="1" value={Math.round(percent)} onChange={(event) => updateCrop(side, Number(event.target.value))} />%</label>;
-            })}
-          </div>
-          <Button onClick={restoreFullImages}>恢复裁剪区域</Button>
-        </section>}
-
-        <section>
-          <h3>画板与输出</h3>
-          <label className="color-row">背景色 <input type="color" value={history.scene.canvas.background} onChange={(event) => history.commit((scene) => { scene.canvas.background = event.target.value; })} /></label>
-          <label className="check-row"><input type="checkbox" checked={history.scene.canvas.includeBackgroundOnExport} onChange={(event) => history.commit((scene) => { scene.canvas.includeBackgroundOnExport = event.target.checked; })} /> 导出时包含背景</label>
-          <div className="button-grid">
-            <Button onClick={() => exportItems(false, false, 'png')}>导出 PNG</Button>
-            <Button onClick={() => exportItems(false, false, 'jpg')}>导出 JPEG</Button>
-            <Button onClick={() => exportItems(true)} disabled={!selectedIds.length}>导出选中</Button>
-            <Button onClick={() => exportItems(Boolean(selectedIds.length), true)}>复制合成图</Button>
-            <Button onClick={() => save(true)}>另存为</Button>
-          </div>
-        </section>
-
+        <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title="关闭设置面板 (Tab)" onClick={() => setPropertiesOpen(false)}>×</button></div>
         <section>
           <h3>交互设置</h3>
           <div className="selection-summary">按住所选按键并用左键在图片上拖动取色</div>
@@ -1599,11 +1507,6 @@ export default function App() {
               .catch((error) => setStatus(`复制诊断信息失败：${String(error)}`)); }}>复制诊断信息</Button>
           </div>
         </section>
-
-        {recent.length > 0 && <section>
-          <h3>最近打开</h3>
-          <div className="recent-list">{recent.slice(0, 5).map((item) => <button key={item.path} title={item.path} onClick={() => open(item.path)}>{item.name}</button>)}</div>
-        </section>}
       </aside>}
     </section>
 
@@ -1611,9 +1514,17 @@ export default function App() {
       <header>
         <div><strong>大纲</strong><span>{history.scene.items.length + history.scene.annotations.length + history.scene.groups.length}</span></div>
         <span className="outline-header-actions">
-          <button title="全部展开" onClick={() => setOutlineCollapsedIds(new Set())}>⌄</button>
-          <button title="全部折叠" onClick={() => setOutlineCollapsedIds(new Set(history.scene.groups.map((group) => group.id)))}>›</button>
-          <button title="关闭大纲" onClick={() => setOutlineOpen(false)}>×</button>
+          <button className="outline-expand-all" title="全部展开" aria-label="全部展开"
+            onClick={() => setOutlineCollapsedIds(new Set())}>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 3.5 4 4 4-4M4 8.5l4 4 4-4" /></svg>
+          </button>
+          <button className="outline-collapse-all" title="全部折叠" aria-label="全部折叠"
+            onClick={() => setOutlineCollapsedIds(new Set(history.scene.groups.map((group) => group.id)))}>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 7.5 4-4 4 4M4 12.5l4-4 4 4" /></svg>
+          </button>
+          <button className="outline-close" title="关闭大纲" aria-label="关闭大纲" onClick={() => setOutlineOpen(false)}>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg>
+          </button>
         </span>
       </header>
       <div className="outline-search">
@@ -1672,36 +1583,25 @@ export default function App() {
     </div>
 
     {contextMenu && <ContextMenu position={contextMenu} entries={menuEntries} onClose={() => setContextMenu(undefined)} />}
+    {groupActionMenu && groupActionEntries.length > 0 && <ContextMenu variant="group" position={groupActionMenu.position}
+      entries={groupActionEntries} onClose={() => setGroupActionMenu(undefined)} />}
 
-    {selectedGroup && <div ref={groupToolbarRef} className={`group-toolbar no-drag${groupToolbarVisible ? '' : ' auto-hidden'}`}
-      onMouseEnter={() => { groupToolbarPointerInsideRef.current = true; showGroupToolbar(); }}
-      onMouseLeave={() => { groupToolbarPointerInsideRef.current = false; hideGroupToolbarSoon(); }}
-      style={(() => {
-      const visibleBounds = groupVisibleBounds(selectedGroup);
-      const centerX = history.scene.viewport.x + selectedGroup.x * history.scene.viewport.scale + visibleBounds.width * history.scene.viewport.scale / 2;
-      const frameTop = history.scene.viewport.y + selectedGroup.y * history.scene.viewport.scale;
-      return { left: clampGroupToolbarX(centerX), top: frameTop > 42 ? frameTop - 31 : frameTop + GROUP_TITLE_HEIGHT * history.scene.viewport.scale + 6 };
-    })()}>
-      <button className="group-toolbar-title" title="双击分组框标题或按 F2 重命名" onDoubleClick={() => renameGroupById(selectedGroup.id)}>
-        <span style={{ background: selectedGroup.color }} />{selectedGroup.name}
-      </button>
-      <span className="group-toolbar-divider" />
-      <label title="分组框颜色" className="group-color-control"><input type="color" value={selectedGroup.color} onChange={(event) => changeGroup(selectedGroup.id, { color: event.target.value })} /></label>
-      <label className="group-opacity-control" title={`背景透明度 ${Math.round(selectedGroup.opacity * 100)}%`}>
-        <input type="range" min="0" max="80" value={selectedGroup.opacity * 100}
-          onPointerDown={history.beginTransaction}
-          onChange={(event) => history.preview((scene) => { const group = scene.groups.find((value) => value.id === selectedGroup.id); if (group) group.opacity = Number(event.target.value) / 100; })}
-          onPointerUp={history.commitTransaction}
-          onPointerCancel={history.commitTransaction}
-          onBlur={history.commitTransaction} />
-      </label>
-      <label title="标题文字颜色" className="group-title-color"><input type="color" value={selectedGroup.titleColor} onChange={(event) => changeGroup(selectedGroup.id, { titleColor: event.target.value })} /></label>
-      <span className="group-toolbar-divider" />
-      <button className={selectedGroup.collapsed ? 'active' : ''} title={selectedGroup.collapsed ? '展开内容' : '折叠内容'} onClick={() => changeGroup(selectedGroup.id, { collapsed: !selectedGroup.collapsed })}>▱</button>
-      <button className={selectedGroup.sizeLocked ? 'active' : ''} title={selectedGroup.sizeLocked ? '解锁分组框尺寸' : '锁定分组框尺寸'} onClick={() => changeGroup(selectedGroup.id, { sizeLocked: !selectedGroup.sizeLocked })}>{selectedGroup.sizeLocked ? '●' : '○'}</button>
-      <button className={selectedGroup.contentsHidden ? 'active' : ''} title={selectedGroup.contentsHidden ? '显示成员' : '隐藏成员'} onClick={() => changeGroup(selectedGroup.id, { contentsHidden: !selectedGroup.contentsHidden })}>{selectedGroup.contentsHidden ? '◌' : '◉'}</button>
-      <button className="danger" title="删除分组框，保留内容" onClick={() => deleteGroup(false)}>×</button>
-    </div>}
+    {groupColorEditor && (() => {
+      const group = history.scene.groups.find((value) => value.id === groupColorEditor.id);
+      return group ? <ColorControl groupPalette key={group.id} ref={groupColorEditorRef} label="组背景颜色" value={group.color} alpha={group.opacity}
+        anchor={groupColorEditor.anchor} onClose={() => setGroupColorEditor(undefined)}
+        onChange={(color) => changeGroup(group.id, { color })}
+        onPresetChange={(color, opacity) => changeGroup(group.id, { color, opacity })}
+        onPreviewChange={(color) => history.preview((scene) => {
+          const current = scene.groups.find((value) => value.id === group.id);
+          if (current) current.color = color;
+        })}
+        onInteractionStart={history.beginTransaction} onInteractionEnd={history.commitTransaction}
+        onAlphaChange={(opacity) => history.preview((scene) => {
+          const current = scene.groups.find((value) => value.id === group.id);
+          if (current) current.opacity = opacity;
+        })} /> : null;
+    })()}
 
     {renamingGroupId && <div className="group-rename-overlay no-drag" onMouseDown={finishGroupRename}>
       <div className="group-rename-card" onMouseDown={(event) => event.stopPropagation()}>
@@ -1726,7 +1626,8 @@ export default function App() {
       <Button active={annotationTool === 'ellipse'} title="椭圆 (4)" onClick={() => setAnnotationTool('ellipse')}>椭圆</Button>
       <Button active={annotationTool === 'eraser'} title="橡皮擦 (E)" onClick={() => setAnnotationTool('eraser')}>橡皮</Button>
       <span className="annotation-separator" />
-      <label title="标注颜色"><input type="color" value={annotationColor} onChange={(event) => setAnnotationColor(event.target.value)} /></label>
+      <ColorControl compact label="标注颜色" value={annotationColor} alpha={annotationOpacity}
+        onChange={setAnnotationColor} onAlphaChange={setAnnotationOpacity} />
       <label className="annotation-width" title="笔画粗细"><input type="range" min="1" max="24" value={annotationWidth} onChange={(event) => setAnnotationWidth(Number(event.target.value))} /><output>{annotationWidth}</output></label>
       <Button title="撤销最后一次标注 (Ctrl+Z)" onClick={history.undo} disabled={!history.canUndo}>撤销</Button>
       <Button title="清除全部标注" onClick={clearAnnotations} disabled={!history.scene.annotations.length}>清除</Button>

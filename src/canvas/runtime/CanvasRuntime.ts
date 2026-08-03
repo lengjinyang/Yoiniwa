@@ -7,17 +7,20 @@ import { RuntimeLifecycle } from './RuntimeLifecycle';
 import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
 import { SelectionController } from '../selection/SelectionController';
-import type { AnnotationItem, AnnotationTool, ImageItem, PickedColor } from '../../types';
+import type { AnnotationItem, ImageItem, PickedColor } from '../../types';
 import { ImageTransformCommand } from '../commands/ImageTransformCommand';
 import { PREFETCH_VIEWPORT_MARGIN } from '../textures/TextureConfig';
 import { performanceMonitor } from '../../performanceMonitor';
 import { AnnotationToolController, type AnnotationToolState, type EraserSample } from '../interaction/AnnotationToolController';
 import { ColorPickerController } from '../interaction/ColorPickerController';
-import { topmostImageAtPoint } from '../selection/HitTestService';
+import { groupHeaderActionAtPoint, groupHeaderAtPoint, topmostImageAtPoint } from '../selection/HitTestService';
 import { WindowMoveController } from '../interaction/WindowMoveController';
+import type { GroupFrameBounds } from '../selection/GroupResizeController';
+import { groupHeaderScreenWidth, groupHeaderWorldY } from '../groups/GroupPresentation';
 
 export interface CanvasRuntimeOptions {
   background: string;
+  backgroundOpacity: number;
   viewport: Viewport;
   onViewportCommit?(viewport: Viewport): void;
   selectedIds?: string[];
@@ -29,8 +32,11 @@ export interface CanvasRuntimeOptions {
   onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>): void;
   onAnnotationsChanged?(changes: Array<{ id: string; deltaX: number; deltaY: number }>): void;
   onGroupMoved?(id: string, deltaX: number, deltaY: number): void;
-  onGroupHeaderDragChange?(dragging: boolean): void;
-  onGroupPreview?(id: string, x?: number, y?: number): void;
+  onGroupResized?(id: string, bounds: GroupFrameBounds): void;
+  onRenameGroup?(id: string): void;
+  onOpenGroupMenu?(id: string, position: { x: number; y: number }): void;
+  onExpandGroup?(id: string): void;
+  onGroupPreviewAnchor?(id: string, position: { x: number; y: number }): void;
   onFocusItem?(item: ImageItem): void;
   onContextMenu?(position: { x: number; y: number }): void;
   annotationState?: AnnotationToolState;
@@ -60,7 +66,7 @@ export class CanvasRuntime {
 
   constructor(private readonly container: HTMLElement, private readonly options: CanvasRuntimeOptions) {
     this.camera = new Camera(options.viewport);
-    this.annotationState = options.annotationState ?? { enabled: false, tool: 'pen', color: '#ffcc00', width: 4 };
+    this.annotationState = options.annotationState ?? { enabled: false, tool: 'pen', color: '#ffcc00', opacity: 1, width: 4 };
     this.colorPickerHeld = Boolean(options.colorPickerHeld);
     this.windowLocked = Boolean(options.windowLocked);
   }
@@ -68,7 +74,7 @@ export class CanvasRuntime {
   async start() {
     if (this.started) return;
     this.started = true;
-    await this.renderer.start(this.container, this.options.background);
+    await this.renderer.start(this.container, this.options.background, this.options.backgroundOpacity);
     if (!this.started) {
       this.renderer.destroy();
       return;
@@ -76,6 +82,8 @@ export class CanvasRuntime {
     const input = new InputRouter(this.container, this.lifecycle);
     const cameraController = new CameraController(this.container, input, this.camera, this.lifecycle, (committed) => {
       this.cameraChangedAt = performance.now();
+      this.renderer.setGroupHeaderHover();
+      this.container.style.cursor = '';
       this.scheduleRender();
       this.selectionController?.refresh();
       if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
@@ -111,14 +119,25 @@ export class CanvasRuntime {
       previewGroup: (id, deltaX, deltaY) => {
         this.sceneStore?.previewGroupMove(id, deltaX, deltaY);
         if (this.sceneStore) this.renderer.setScene(this.sceneStore.renderScene());
-        const group = this.sceneStore?.groups().find((value) => value.id === id);
-        this.options.onGroupPreview?.(id, group?.x, group?.y);
+        this.emitGroupPreviewAnchor(id);
         this.scheduleRender();
       },
       commitGroup: (id, deltaX, deltaY) => this.options.onGroupMoved?.(id, deltaX, deltaY),
-      groupDragChanged: (dragging) => this.options.onGroupHeaderDragChange?.(dragging),
+      previewGroupResize: (id, bounds) => {
+        this.sceneStore?.previewGroupResize(id, bounds);
+        if (this.sceneStore) this.renderer.setScene(this.sceneStore.renderScene());
+        this.emitGroupPreviewAnchor(id);
+        this.scheduleRender();
+      },
+      commitGroupResize: (id, bounds) => this.options.onGroupResized?.(id, bounds),
+      openGroupMenu: (id, position) => this.options.onOpenGroupMenu?.(id, position),
+      expandGroup: (id) => this.options.onExpandGroup?.(id),
+      groupHeaderHoverChanged: (id, action) => {
+        if (this.renderer.setGroupHeaderHover(id, action)) this.scheduleRender();
+      },
       drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
+      hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
       interactionBlocked: () => this.annotationState.enabled || this.colorPickerHeld,
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
@@ -148,10 +167,32 @@ export class CanvasRuntime {
       input, lifecycle: this.lifecycle, locked: () => this.windowLocked,
       begin: () => this.options.onWindowMoveStart?.(), move: () => this.options.onWindowMove?.(), end: () => this.options.onWindowMoveEnd?.(),
     }).startListening();
-    const disposeContext = input.onContextMenu((event) => this.options.onContextMenu?.({ x: event.clientX, y: event.clientY }));
+    const disposeContext = input.onContextMenu((event) => {
+      const bounds = this.container.getBoundingClientRect();
+      const point = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+      const group = groupHeaderAtPoint(this.sceneStore?.groups() ?? [], point, this.camera.snapshot().scale);
+      if (group) {
+        this.selectionController?.setSelection([]);
+        this.selectionController?.setAnnotationSelection([]);
+        this.selectionController?.setGroupSelection(group.id);
+        this.renderer.setSelectedImageCount(0);
+        this.renderer.setSelectedGroup(group.id);
+        this.options.onSelectionChange?.([]);
+        this.options.onAnnotationSelectionChange?.([]);
+        this.options.onGroupSelectionChange?.(group.id);
+      }
+      this.options.onContextMenu?.({ x: event.clientX, y: event.clientY });
+    });
     const disposeDouble = input.onDoubleClick((event) => {
       const bounds = this.container.getBoundingClientRect();
       const point = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+      const group = groupHeaderAtPoint(this.sceneStore?.groups() ?? [], point, this.camera.snapshot().scale);
+      if (group) {
+        if (groupHeaderActionAtPoint(group, point, this.camera.snapshot().scale) === 'drag') {
+          this.options.onRenameGroup?.(group.id);
+        }
+        return;
+      }
       const item = topmostImageAtPoint(this.sceneStore?.images() ?? [], point);
       if (item) this.options.onFocusItem?.(item);
     });
@@ -159,7 +200,39 @@ export class CanvasRuntime {
     const observer = new ResizeObserver(() => this.scheduleRender());
     observer.observe(this.container);
     this.lifecycle.add(() => observer.disconnect());
+    const updateDropTarget = (event: DragEvent) => {
+      const bounds = this.container.getBoundingClientRect();
+      const world = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+      const group = [...(this.sceneStore?.groups() ?? [])].reverse().find((candidate) => !candidate.hidden
+        && !candidate.collapsed && world.x >= candidate.x && world.x <= candidate.x + candidate.width
+        && world.y >= candidate.y && world.y <= candidate.y + candidate.height);
+      if (this.renderer.setGroupDropTarget(group?.id)) this.scheduleRender();
+    };
+    const clearDropTarget = () => {
+      if (this.renderer.setGroupDropTarget()) this.scheduleRender();
+    };
+    this.container.addEventListener('dragover', updateDropTarget);
+    this.container.addEventListener('drop', clearDropTarget);
+    this.container.addEventListener('dragleave', clearDropTarget);
+    this.lifecycle.add(() => {
+      this.container.removeEventListener('dragover', updateDropTarget);
+      this.container.removeEventListener('drop', clearDropTarget);
+      this.container.removeEventListener('dragleave', clearDropTarget);
+    });
     this.scheduleRender();
+  }
+
+  private emitGroupPreviewAnchor(id: string) {
+    const group = this.sceneStore?.groups().find((candidate) => candidate.id === id);
+    if (!group) return;
+    const viewport = this.camera.snapshot();
+    const scale = Math.max(viewport.scale, 0.0001);
+    const bounds = this.container.getBoundingClientRect();
+    this.options.onGroupPreviewAnchor?.(id, {
+      x: bounds.left + viewport.x + group.x * scale
+        + groupHeaderScreenWidth(group, scale) + 6,
+      y: bounds.top + viewport.y + groupHeaderWorldY(group, scale) * scale,
+    });
   }
 
   setViewport(viewport: Viewport) { this.camera.set(viewport); this.scheduleRender(); }
@@ -172,7 +245,8 @@ export class CanvasRuntime {
   setSelection(ids: string[]) { this.selectionController?.setSelection(ids); this.renderer.setSelectedImageCount(ids.length); }
   setAnnotationSelection(ids: string[]) { this.selectionController?.setAnnotationSelection(ids); }
   setGroupSelection(id?: string) { this.selectionController?.setGroupSelection(id); this.renderer.setSelectedGroup(id); }
-  setAnnotationState(state: { enabled: boolean; tool: AnnotationTool; color: string; width: number }) { this.annotationState = state; }
+  setGroupMenuOpen(open: boolean) { this.renderer.setGroupControlsMuted(open); }
+  setAnnotationState(state: AnnotationToolState) { this.annotationState = state; }
   setColorPickerHeld(held: boolean) { this.colorPickerHeld = held; }
   setWindowLocked(locked: boolean) { this.windowLocked = locked; }
   setProjectEpoch(epoch: number) {
@@ -181,7 +255,7 @@ export class CanvasRuntime {
     this.renderer.advanceTextureGeneration();
     this.scheduleRender();
   }
-  setBackground(background: string) { this.renderer.setBackground(background); }
+  setBackground(background: string, opacity: number) { this.renderer.setBackground(background, opacity); }
   getViewport() { return this.camera.snapshot(); }
 
   private scheduleRender() {

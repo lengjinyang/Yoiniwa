@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react';
 import type { AnnotationItem, AnnotationTool, ImageItem, PickedColor, Scene, Viewport } from '../types';
 import { CanvasRuntime } from './runtime/CanvasRuntime';
 import type { EraserSample } from './interaction/AnnotationToolController';
+import type { GroupFrameBounds } from './selection/GroupResizeController';
 
 interface CanvasViewProps {
   background: string;
+  backgroundOpacity: number;
   scene: Scene;
   viewport: Viewport;
   onViewportCommit?(viewport: Viewport): void;
@@ -17,12 +19,17 @@ interface CanvasViewProps {
   onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>): void;
   onAnnotationsChanged(changes: Array<{ id: string; deltaX: number; deltaY: number }>): void;
   onGroupMoved(id: string, deltaX: number, deltaY: number): void;
-  onGroupHeaderDragChange(dragging: boolean): void;
-  onGroupPreview(id: string, x?: number, y?: number): void;
+  onGroupResized(id: string, bounds: GroupFrameBounds): void;
+  onRenameGroup(id: string): void;
+  onOpenGroupMenu(id: string, position: { x: number; y: number }): void;
+  onExpandGroup(id: string): void;
+  groupMenuOpen: boolean;
+  onGroupPreviewAnchor(id: string, position: { x: number; y: number }): void;
   projectEpoch: number;
   annotationMode: boolean;
   annotationTool: AnnotationTool;
   annotationColor: string;
+  annotationOpacity: number;
   annotationWidth: number;
   colorPickerHeld: boolean;
   onColorPicked(color: PickedColor): void;
@@ -37,18 +44,20 @@ interface CanvasViewProps {
 }
 
 export function CanvasView({
-  background, scene, viewport, selectedIds, selectedAnnotationIds, selectedGroupId, projectEpoch,
+  background, backgroundOpacity, scene, viewport, selectedIds, selectedAnnotationIds, selectedGroupId, projectEpoch,
   onViewportCommit, onSelectionChange, onAnnotationSelectionChange, onGroupSelectionChange,
-  onItemsChanged, onAnnotationsChanged, onGroupMoved, onGroupHeaderDragChange, onGroupPreview,
-  annotationMode, annotationTool, annotationColor, annotationWidth, colorPickerHeld,
+  onItemsChanged, onAnnotationsChanged, onGroupMoved, onGroupResized,
+  onRenameGroup,
+  onOpenGroupMenu, onExpandGroup, groupMenuOpen, onGroupPreviewAnchor,
+  annotationMode, annotationTool, annotationColor, annotationOpacity, annotationWidth, colorPickerHeld,
   onColorPicked, onAddAnnotation, onErase, onFocusItem, onContextMenu,
   windowLocked, onWindowMoveStart, onWindowMove, onWindowMoveEnd,
 }: CanvasViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<CanvasRuntime | undefined>(undefined);
   const initialOptionsRef = useRef({
-    background, viewport, selectedIds, selectedAnnotationIds, selectedGroupId, colorPickerHeld,
-    annotationState: { enabled: annotationMode, tool: annotationTool, color: annotationColor, width: annotationWidth },
+    background, backgroundOpacity, viewport, selectedIds, selectedAnnotationIds, selectedGroupId, colorPickerHeld,
+    annotationState: { enabled: annotationMode, tool: annotationTool, color: annotationColor, opacity: annotationOpacity, width: annotationWidth },
     windowLocked,
   });
   const viewportCommitRef = useRef(onViewportCommit);
@@ -58,7 +67,11 @@ export function CanvasView({
   const groupSelectionRef = useRef(onGroupSelectionChange);
   const annotationsChangedRef = useRef(onAnnotationsChanged);
   const groupMovedRef = useRef(onGroupMoved);
-  const groupDragRef = useRef(onGroupHeaderDragChange); const groupPreviewRef = useRef(onGroupPreview);
+  const groupResizedRef = useRef(onGroupResized);
+  const renameGroupRef = useRef(onRenameGroup);
+  const openGroupMenuRef = useRef(onOpenGroupMenu);
+  const expandGroupRef = useRef(onExpandGroup);
+  const groupPreviewAnchorRef = useRef(onGroupPreviewAnchor);
   const colorPickedRef = useRef(onColorPicked); const addAnnotationRef = useRef(onAddAnnotation);
   const eraseRef = useRef(onErase);
   const focusItemRef = useRef(onFocusItem); const contextMenuRef = useRef(onContextMenu);
@@ -70,7 +83,11 @@ export function CanvasView({
   groupSelectionRef.current = onGroupSelectionChange;
   annotationsChangedRef.current = onAnnotationsChanged;
   groupMovedRef.current = onGroupMoved;
-  groupDragRef.current = onGroupHeaderDragChange; groupPreviewRef.current = onGroupPreview;
+  groupResizedRef.current = onGroupResized;
+  renameGroupRef.current = onRenameGroup;
+  openGroupMenuRef.current = onOpenGroupMenu;
+  expandGroupRef.current = onExpandGroup;
+  groupPreviewAnchorRef.current = onGroupPreviewAnchor;
   colorPickedRef.current = onColorPicked; addAnnotationRef.current = onAddAnnotation;
   eraseRef.current = onErase;
   focusItemRef.current = onFocusItem; contextMenuRef.current = onContextMenu;
@@ -88,8 +105,11 @@ export function CanvasView({
       onItemsChanged: (changes) => itemsChangedRef.current(changes),
       onAnnotationsChanged: (changes) => annotationsChangedRef.current(changes),
       onGroupMoved: (id, deltaX, deltaY) => groupMovedRef.current(id, deltaX, deltaY),
-      onGroupHeaderDragChange: (dragging) => groupDragRef.current(dragging),
-      onGroupPreview: (id, x, y) => groupPreviewRef.current(id, x, y),
+      onGroupResized: (id, bounds) => groupResizedRef.current(id, bounds),
+      onRenameGroup: (id) => renameGroupRef.current(id),
+      onOpenGroupMenu: (id, position) => openGroupMenuRef.current(id, position),
+      onExpandGroup: (id) => expandGroupRef.current(id),
+      onGroupPreviewAnchor: (id, position) => groupPreviewAnchorRef.current(id, position),
       onColorPicked: (color) => colorPickedRef.current(color), onAddAnnotation: (annotation) => addAnnotationRef.current(annotation),
       onErase: (samples) => eraseRef.current(samples), onFocusItem: (item) => focusItemRef.current(item),
       onContextMenu: (position) => contextMenuRef.current(position),
@@ -111,11 +131,12 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setSelection(selectedIds); }, [selectedIds]);
   useEffect(() => { runtimeRef.current?.setAnnotationSelection(selectedAnnotationIds); }, [selectedAnnotationIds]);
   useEffect(() => { runtimeRef.current?.setGroupSelection(selectedGroupId); }, [selectedGroupId]);
+  useEffect(() => { runtimeRef.current?.setGroupMenuOpen(groupMenuOpen); }, [groupMenuOpen]);
   useEffect(() => { runtimeRef.current?.setProjectEpoch(projectEpoch); }, [projectEpoch]);
-  useEffect(() => { runtimeRef.current?.setAnnotationState({ enabled: annotationMode, tool: annotationTool, color: annotationColor, width: annotationWidth }); }, [annotationColor, annotationMode, annotationTool, annotationWidth]);
+  useEffect(() => { runtimeRef.current?.setAnnotationState({ enabled: annotationMode, tool: annotationTool, color: annotationColor, opacity: annotationOpacity, width: annotationWidth }); }, [annotationColor, annotationMode, annotationOpacity, annotationTool, annotationWidth]);
   useEffect(() => { runtimeRef.current?.setColorPickerHeld(colorPickerHeld); }, [colorPickerHeld]);
   useEffect(() => { runtimeRef.current?.setWindowLocked(windowLocked); }, [windowLocked]);
-  useEffect(() => { runtimeRef.current?.setBackground(background); }, [background]);
+  useEffect(() => { runtimeRef.current?.setBackground(background, backgroundOpacity); }, [background, backgroundOpacity]);
   useEffect(() => {
     const setBenchmarkViewport = (event: Event) => {
       const next = (event as CustomEvent<Viewport>).detail;

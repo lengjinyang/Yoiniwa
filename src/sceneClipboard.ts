@@ -1,4 +1,4 @@
-import { annotationSceneBounds, moveAnnotation, sceneBounds } from './scene';
+import { annotationSceneBounds, groupVisibleBounds, moveAnnotation, sceneBounds } from './scene';
 import type { AnnotationItem, AssetRecord, ImageGroup, ImageItem, Scene } from './types';
 
 export interface SceneClipboardPayload {
@@ -40,7 +40,7 @@ export function pasteScenePayload(scene: Scene, payload: SceneClipboardPayload, 
   const bounds = [
     ...(payload.items.length ? [sceneBounds(payload.items)] : []),
     ...payload.annotations.map(annotationSceneBounds),
-    ...payload.groups.map((group) => ({ x: group.x, y: group.y, width: group.width, height: group.height })),
+    ...payload.groups.map(groupVisibleBounds),
   ].reduce<{ x: number; y: number; width: number; height: number } | undefined>((combined, value) => {
     if (!combined) return value;
     const right = Math.max(combined.x + combined.width, value.x + value.width);
@@ -65,6 +65,9 @@ export function pasteScenePayload(scene: Scene, payload: SceneClipboardPayload, 
   const groups = payload.groups.map((group) => ({
     ...structuredClone(group), id: groupIds.get(group.id)!, x: group.x + deltaX, y: group.y + deltaY,
     parentId: group.parentId ? groupIds.get(group.parentId) : undefined,
+    // Detached images are not descendants of a copied group, so their old IDs
+    // must not leak into the pasted frame.
+    detachedImageIds: undefined,
     members: group.members.flatMap((member) => {
       const id = member.type === 'image' ? imageIds.get(member.id)
         : member.type === 'annotation' ? annotationIds.get(member.id)

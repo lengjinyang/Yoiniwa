@@ -22,8 +22,14 @@ export class WindowMoveController {
     };
     const up = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
+      const moved = this.moved;
       this.pointerId = undefined;
-      if (this.moved) this.options.end();
+      if (moved) {
+        this.options.input.suppressNextContextMenu();
+      }
+      // Every matching release must close the native/fallback move path,
+      // including a stationary right-click that should still open its menu.
+      this.options.end();
     };
     const disposers = [this.options.input.onPointerDown(down), this.options.input.onPointerMove(move), this.options.input.onPointerUp(up)];
     this.options.lifecycle.add(() => disposers.forEach((dispose) => dispose()));

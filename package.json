@@ -5,8 +5,8 @@
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "dev": "npm run build:electron && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --strictPort\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://localhost:5173 && electron .\"",
-    "dev:test": "npm run build:electron && set \"REFCANVAS_CLEAN_TEST_SESSION=1\" && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --strictPort\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev": "npm run build:electron && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --strictPort\" \"tsc -p tsconfig.electron.json --watch --noEmit --preserveWatchOutput\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:test": "npm run build:electron && set \"REFCANVAS_CLEAN_TEST_SESSION=1\" && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --strictPort\" \"tsc -p tsconfig.electron.json --watch --noEmit --preserveWatchOutput\" \"wait-on http://localhost:5173 && electron .\"",
     "typecheck:renderer": "tsc --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json --noEmit",
     "typecheck": "npm run typecheck:renderer && npm run typecheck:electron",

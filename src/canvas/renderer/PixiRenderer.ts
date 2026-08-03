@@ -10,12 +10,16 @@ import { performanceMonitor } from '../../performanceMonitor';
 import { GroupRenderer } from './GroupRenderer';
 import { AnnotationRenderer } from './AnnotationRenderer';
 import { CommentRenderer } from './CommentRenderer';
+import { GroupResizeOverlay } from '../selection/GroupResizeOverlay';
+import type { GroupResizeHandle } from '../selection/GroupResizeController';
+import type { GroupHeaderAction } from '../selection/HitTestService';
 
 export class PixiRenderer {
   private readonly app = new Application();
   private layers?: RenderLayers;
   private images?: ImageRenderer;
   private selection?: SelectionOverlay;
+  private groupResize?: GroupResizeOverlay;
   private textures?: TextureManager;
   private groups?: GroupRenderer;
   private annotations?: AnnotationRenderer;
@@ -23,15 +27,20 @@ export class PixiRenderer {
   private contextDisposer?: () => void;
   private pendingScene?: Scene;
   private selectedImages = 0;
+  private selectedGroupId?: string;
+  private viewportScale = 1;
 
   constructor(private readonly requestRender: () => void) {}
 
-  async start(container: HTMLElement, background: string) {
+  async start(container: HTMLElement, background: string, backgroundOpacity: number) {
     await this.app.init({
-      background, antialias: true, autoDensity: true,
+      // Create an alpha-capable context up front; Pixi cannot add alpha support
+      // after initialization when the user later lowers background opacity.
+      background, backgroundAlpha: 0, antialias: true, autoDensity: true,
       resolution: boundedDevicePixelRatio(), preference: 'webgl', powerPreference: 'high-performance',
       resizeTo: container,
     });
+    this.app.renderer.background.alpha = backgroundOpacity;
     this.app.stop();
     const gl = (this.app.renderer as typeof this.app.renderer & { gl?: WebGL2RenderingContext }).gl;
     if (gl) {
@@ -55,10 +64,11 @@ export class PixiRenderer {
       deviceMemoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
     });
     this.images = new ImageRenderer(this.layers.images, this.textures, this.requestRender);
-    this.groups = new GroupRenderer(this.layers.groups);
+    this.groups = new GroupRenderer(this.layers.groups, this.layers.groupHeaderSurfaces, this.layers.groupHeaders, container);
     this.annotations = new AnnotationRenderer(this.layers.annotations);
     this.comments = new CommentRenderer(this.layers.annotations);
     this.selection = new SelectionOverlay(this.layers.overlay);
+    this.groupResize = new GroupResizeOverlay(this.layers.overlay);
     if (this.pendingScene) this.setScene(this.pendingScene);
   }
 
@@ -68,14 +78,28 @@ export class PixiRenderer {
     this.groups?.sync(scene.groups);
     this.annotations?.sync(scene.annotations);
     this.comments?.sync(scene.items);
+    this.syncGroupResizeOverlay();
   }
   setSelectedImageCount(count: number) { this.selectedImages = count; }
-  setSelectedGroup(id?: string) { this.groups?.setSelected(id); if (this.pendingScene) this.groups?.sync(this.pendingScene.groups); }
+  setSelectedGroup(id?: string) {
+    this.selectedGroupId = id;
+    this.groups?.setSelected(id);
+    if (this.pendingScene) this.groups?.sync(this.pendingScene.groups);
+    this.syncGroupResizeOverlay();
+    this.requestRender();
+  }
+  setGroupHeaderHover(id?: string, action?: GroupHeaderAction) { return this.groups?.setHover(id, action) ?? false; }
+  setGroupControlsMuted(muted: boolean) {
+    this.groupResize?.setMuted(muted);
+    this.requestRender();
+  }
+  setGroupDropTarget(id?: string) { return this.groups?.setDropTarget(id) ?? false; }
   drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }) {
     this.selection?.draw(items, scale, box);
     this.requestRender();
   }
   hitSelectionHandle(point: { x: number; y: number }): TransformHandle | undefined { return this.selection?.hit(point); }
+  hitGroupResizeHandle(point: { x: number; y: number }): GroupResizeHandle | undefined { return this.groupResize?.hit(point); }
   annotationLayer() {
     if (!this.layers) throw new Error('Pixi renderer has not started');
     return this.layers.annotations;
@@ -89,6 +113,9 @@ export class PixiRenderer {
   }) {
     if (!this.layers) return;
     const startedAt = performance.now();
+    this.viewportScale = viewport.scale;
+    this.groups?.setViewport(viewport);
+    this.syncGroupResizeOverlay();
     this.textures?.processFrame();
     if (workset) this.images?.updateQuality({
       viewport, visible: workset.visible, prefetch: workset.prefetch,
@@ -148,8 +175,11 @@ export class PixiRenderer {
     this.app.canvas.dataset.textureError = textureStats?.lastError ?? '';
   }
 
-  setBackground(background: string) {
-    if (this.app.renderer) this.app.renderer.background.color = background;
+  setBackground(background: string, opacity: number) {
+    if (this.app.renderer) {
+      this.app.renderer.background.color = background;
+      this.app.renderer.background.alpha = opacity;
+    }
   }
 
   advanceTextureGeneration() { this.images?.invalidateTextures(); this.textures?.advanceGeneration(); }
@@ -159,6 +189,7 @@ export class PixiRenderer {
     this.contextDisposer = undefined;
     this.images?.destroy();
     this.selection?.destroy();
+    this.groupResize?.destroy();
     this.textures?.destroy();
     this.groups?.destroy();
     this.annotations?.destroy();
@@ -166,10 +197,16 @@ export class PixiRenderer {
     this.app.destroy({ removeView: true }, { children: true, texture: false, textureSource: false });
     this.images = undefined;
     this.selection = undefined;
+    this.groupResize = undefined;
     this.textures = undefined;
     this.groups = undefined;
     this.annotations = undefined;
     this.comments = undefined;
     this.layers = undefined;
+  }
+
+  private syncGroupResizeOverlay() {
+    const group = this.pendingScene?.groups.find((value) => value.id === this.selectedGroupId);
+    this.groupResize?.draw(group, this.viewportScale);
   }
 }

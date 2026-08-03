@@ -1,0 +1,62 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  color: #e4e6e8;
+  background: #161719;
+  font-synthesis: none;
+
+  --app-bg: #161719;
+  --canvas-bg: #121315;
+  --surface-0: #191a1d;
+  --surface-1: #1d1f22;
+  --surface-2: #232529;
+  --surface-hover: #2c2f34;
+  --surface-pressed: #30343a;
+  --border: #34383f;
+  --border-strong: #454a53;
+  --text-primary: #e4e6e8;
+  --text-secondary: #979ca4;
+  --text-muted: #686e77;
+  --accent: #708cff;
+  --accent-hover: #8299ff;
+  --accent-text: #cbd4ff;
+  --accent-text-muted: #9eacfa;
+  --accent-soft: rgba(112, 140, 255, .14);
+  --accent-pressed: rgba(112, 140, 255, .2);
+  --accent-border: rgba(112, 140, 255, .32);
+  --accent-fill: #526bd4;
+  --accent-fill-hover: #5f78df;
+  --accent-fill-border: #657de0;
+  --accent-fill-border-hover: #758ced;
+  --text-on-accent: #f2f4ff;
+  --danger: #dc727a;
+  --danger-hover: #ee9299;
+  --danger-soft: rgba(220, 114, 122, .12);
+  --danger-border: rgba(220, 114, 122, .32);
+  --warning: #c6a465;
+  --scrim: rgba(10, 11, 13, .58);
+  --surface-overlay: rgba(29, 31, 34, .88);
+  --shadow-panel: 0 8px 24px rgba(0,0,0,.26);
+  --shadow-menu: 0 10px 28px rgba(0,0,0,.32);
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-panel: 8px;
+  --duration-fast: 120ms;
+  --duration-normal: 150ms;
+
+  /* Compatibility aliases for the pre-theme stylesheet. */
+  --panel: var(--surface-1);
+  --panel-2: var(--surface-2);
+  --line: var(--border);
+  --muted: var(--text-secondary);
+  --accent-2: var(--accent);
+}
+
+* { scrollbar-color: var(--border) transparent; }
+body, .app-shell { color: var(--text-primary); background: var(--app-bg); }
+::selection { color: var(--text-primary); background: var(--accent-pressed); }
+:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
