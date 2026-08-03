@@ -40,7 +40,7 @@ export interface PerformanceSnapshot {
 }
 
 const initiallyEnabled = typeof window !== 'undefined'
-  && (import.meta.env.DEV || new URLSearchParams(window.location.search).get('perf') === '1'
+  && (new URLSearchParams(window.location.search).get('perf') === '1'
     || new URLSearchParams(window.location.search).has('perf-bench'));
 
 const MAX_SAMPLES = 240;

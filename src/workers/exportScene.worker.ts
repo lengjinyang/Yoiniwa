@@ -9,6 +9,7 @@ interface ExportRequest {
   offsetX: number;
   offsetY: number;
   background?: string;
+  backgroundOpacity?: number;
   items: ExportImage[];
   annotations: AnnotationItem[];
   groups: ImageGroup[];
@@ -18,6 +19,7 @@ function drawAnnotation(context: OffscreenCanvasRenderingContext2D, annotation: 
   context.save();
   context.strokeStyle = annotation.color;
   context.fillStyle = annotation.color;
+  context.globalAlpha = annotation.opacity ?? 1;
   context.lineWidth = annotation.strokeWidth;
   context.lineCap = 'round';
   context.lineJoin = 'round';
@@ -51,16 +53,17 @@ async function render(request: ExportRequest) {
   if (!context) throw new Error('无法创建后台导出画布');
   context.scale(request.scale, request.scale);
   if (request.background) {
+    context.globalAlpha = request.backgroundOpacity ?? 1;
     context.fillStyle = request.background;
     context.fillRect(0, 0, request.width / request.scale, request.height / request.scale);
+    context.globalAlpha = 1;
   }
   context.translate(request.offsetX, request.offsetY);
   for (const group of request.groups) {
-    const bounds = groupVisibleBounds(group);
-    context.save(); context.globalAlpha = group.opacity; context.fillStyle = group.color;
-    context.fillRect(group.x, group.y, bounds.width, bounds.height); context.restore();
-    context.save(); context.strokeStyle = group.color; context.lineWidth = 0.5;
-    context.strokeRect(group.x, group.y, bounds.width, bounds.height); context.restore();
+    if (!group.collapsed) {
+      context.save(); context.globalAlpha = group.opacity; context.fillStyle = group.color;
+      context.fillRect(group.x, group.y, group.width, group.height); context.restore();
+    }
   }
   for (const item of request.items) {
     const response = await fetch(item.resourceUrl, { cache: 'no-store' });
@@ -78,11 +81,12 @@ async function render(request: ExportRequest) {
   request.annotations.forEach((annotation) => drawAnnotation(context, annotation));
   for (const group of request.groups) {
     const bounds = groupVisibleBounds(group);
+    const headerY = group.y - GROUP_TITLE_HEIGHT;
     context.save(); context.globalAlpha = Math.min(0.96, group.opacity + 0.58); context.fillStyle = group.color;
-    context.fillRect(group.x, group.y, bounds.width, GROUP_TITLE_HEIGHT); context.restore();
-    context.save(); context.fillStyle = group.titleColor; context.font = '600 11px "Segoe UI", sans-serif';
-    context.textBaseline = 'middle'; context.beginPath(); context.rect(group.x + 8, group.y, Math.max(1, bounds.width - 16), GROUP_TITLE_HEIGHT);
-    context.clip(); context.fillText(`${group.collapsed ? '▸' : '▾'}  ${group.name}`, group.x + 10, group.y + GROUP_TITLE_HEIGHT / 2);
+    context.fillRect(group.x, headerY, bounds.width, GROUP_TITLE_HEIGHT); context.restore();
+    context.save(); context.globalAlpha = group.titleOpacity ?? 1; context.fillStyle = group.titleColor; context.font = '600 11px "Segoe UI", sans-serif';
+    context.textBaseline = 'middle'; context.beginPath(); context.rect(group.x + 8, headerY, Math.max(1, bounds.width - 16), GROUP_TITLE_HEIGHT);
+    context.clip(); context.fillText(`${group.collapsed ? '▸' : '▾'}  ${group.name}`, group.x + 10, headerY + GROUP_TITLE_HEIGHT / 2);
     context.restore();
   }
   return (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer();

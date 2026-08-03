@@ -45,7 +45,9 @@ function combinedBounds(items: ImageItem[], annotations: AnnotationItem[], group
   return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
 }
 
-export async function renderItems(items: ImageItem[], background?: string, annotations: AnnotationItem[] = [], groups: ImageGroup[] = []): Promise<ArrayBuffer> {
+export async function renderItems(
+  items: ImageItem[], background?: string, annotations: AnnotationItem[] = [], groups: ImageGroup[] = [], backgroundOpacity = 1,
+): Promise<ArrayBuffer> {
   const visibility = exportVisibility(groups);
   const visibleGroups = groups.filter((group) => !visibility.hiddenGroups.has(group.id));
   const visibleItems = items.filter((item) => !item.hidden && !visibility.hiddenImages.has(item.id));
@@ -66,7 +68,7 @@ export async function renderItems(items: ImageItem[], background?: string, annot
       worker.postMessage({
         width: Math.max(1, Math.ceil((bounds.width + margin * 2) * scale)),
         height: Math.max(1, Math.ceil((bounds.height + margin * 2) * scale)),
-        scale, offsetX: -bounds.x + margin, offsetY: -bounds.y + margin, background,
+        scale, offsetX: -bounds.x + margin, offsetY: -bounds.y + margin, background, backgroundOpacity,
         items: ordered.map((item) => ({ ...item, resourceUrl: imageSource(item, 'original') })),
         annotations: visibleAnnotations, groups: visibleGroups,
       });

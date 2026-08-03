@@ -55,6 +55,8 @@ export interface GroupMember {
 }
 
 export interface ImageGroup {
+  /** Version 2 stores the content-frame bounds; the expanded header lives outside them. */
+  headerLayoutVersion?: 2;
   id: string;
   name: string;
   x: number;
@@ -64,9 +66,14 @@ export interface ImageGroup {
   color: string;
   opacity: number;
   titleColor: string;
+  titleOpacity?: number;
   collapsed: boolean;
   sizeLocked: boolean;
   contentsHidden: boolean;
+  /** Default layout mode keeps the content frame fitted to its members. */
+  autoFit?: boolean;
+  /** Images explicitly detached while still inside this frame. */
+  detachedImageIds?: string[];
   /** Legacy fields read by the scene migrator. */
   locked?: boolean;
   hidden?: boolean;
@@ -79,6 +86,7 @@ export interface Viewport { x: number; y: number; scale: number }
 
 interface CanvasSettings {
   background: string;
+  backgroundOpacity?: number;
   padding: number;
   snap: boolean;
   includeBackgroundOnExport: boolean;
@@ -90,6 +98,7 @@ export interface AnnotationItem {
   id: string;
   type: Exclude<AnnotationTool, 'eraser'>;
   color: string;
+  opacity?: number;
   strokeWidth: number;
   locked?: boolean;
   hidden?: boolean;

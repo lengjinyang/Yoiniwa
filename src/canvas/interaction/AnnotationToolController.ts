@@ -4,7 +4,7 @@ import type { Camera } from '../camera/Camera';
 import type { InputRouter } from './InputRouter';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
 
-export interface AnnotationToolState { enabled: boolean; tool: AnnotationTool; color: string; width: number }
+export interface AnnotationToolState { enabled: boolean; tool: AnnotationTool; color: string; opacity: number; width: number }
 export interface EraserSample { x: number; y: number; radius: number }
 
 export class AnnotationToolController {
@@ -69,10 +69,10 @@ export class AnnotationToolController {
     if (this.points.length < 4) return undefined;
     if (state.tool === 'eraser') return undefined;
     if (state.tool === 'pen' || state.tool === 'arrow') return {
-      id: crypto.randomUUID(), type: state.tool, color: state.color, strokeWidth: state.width, points: [...this.points],
+      id: crypto.randomUUID(), type: state.tool, color: state.color, opacity: state.opacity, strokeWidth: state.width, points: [...this.points],
     };
     const [x1, y1, x2, y2] = this.points;
-    return { id: crypto.randomUUID(), type: state.tool, color: state.color, strokeWidth: state.width,
+    return { id: crypto.randomUUID(), type: state.tool, color: state.color, opacity: state.opacity, strokeWidth: state.width,
       x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
   }
 
@@ -80,7 +80,7 @@ export class AnnotationToolController {
     const state = this.options.state();
     this.preview.clear();
     if (state.tool === 'eraser' || this.points.length < 4) { this.options.requestRender(); return; }
-    const style = { color: state.color, width: state.width };
+    const style = { color: state.color, alpha: state.opacity, width: state.width };
     if (state.tool === 'pen' || state.tool === 'arrow') {
       this.preview.moveTo(this.points[0], this.points[1]);
       for (let index = 2; index < this.points.length; index += 2) this.preview.lineTo(this.points[index], this.points[index + 1]);

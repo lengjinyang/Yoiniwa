@@ -64,6 +64,9 @@ let dirtyRevisionState = createDirtyRevisionState();
 let currentScenePath;
 const enqueuePersistence = createRecoveringQueue();
 let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.find((value) => /\.refcanvas$/i.test(value));
+// Temporary manual-verification hook. Keep explicit CLI/file-association paths
+// authoritative, otherwise open the desktop fixture on every normal launch.
+const TEMPORARY_DESKTOP_SCENE_NAME = '未命名画板.refcanvas';
 let windowState = { alwaysOnTop: false, clickThrough: false, locked: false, opacity: 1 };
 let windowMoveSession;
 let windowMoveTimer;
@@ -1955,9 +1958,18 @@ ipcMain.on('scene:reset-path', () => {
     await retainAssetRegistry([]);
   }).catch(() => undefined);
 });
-handleIpc('scene:startup-path', () => {
-  const result = startupScenePath ?? null;
+handleIpc('scene:startup-path', async () => {
+  let result = startupScenePath ?? null;
   startupScenePath = undefined;
+  if (!result) {
+    const desktopScenePath = path.join(app.getPath('desktop'), TEMPORARY_DESKTOP_SCENE_NAME);
+    try {
+      await fs.access(desktopScenePath);
+      result = desktopScenePath;
+    } catch {
+      // The fixture is optional; absence must not block normal startup.
+    }
+  }
   return result;
 });
 handleIpc('image:export', async (_event, data, suggestedName) => {

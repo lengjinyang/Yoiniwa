@@ -1,4 +1,5 @@
 import type { AnnotationItem, ImageGroup, ImageItem } from '../../types';
+import { GROUP_HEADER_ACTION_SCREEN_WIDTH, groupHeaderWorldBounds } from '../groups/GroupPresentation';
 import type { SceneBounds } from '../scene/SceneNode';
 
 export function imageBounds(item: ImageItem): SceneBounds {
@@ -61,7 +62,27 @@ export function topmostAnnotationAtPoint(annotations: AnnotationItem[], point: {
   });
 }
 
-export function groupHeaderAtPoint(groups: ImageGroup[], point: { x: number; y: number }) {
-  return [...groups].reverse().find((group) => !group.hidden && point.x >= group.x && point.x <= group.x + group.width
-    && point.y >= group.y && point.y <= group.y + Math.min(28, group.height));
+export function groupHeaderAtPoint(groups: ImageGroup[], point: { x: number; y: number }, scale = 1) {
+  return [...groups].reverse().find((group) => {
+    if (group.hidden) return false;
+    const bounds = groupHeaderWorldBounds(group, scale);
+    return point.x >= bounds.x && point.x <= bounds.x + bounds.width
+      && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+  });
+}
+
+export type GroupHeaderAction = 'drag' | 'more' | 'expand';
+
+export function groupHeaderActionAtPoint(
+  group: ImageGroup,
+  point: { x: number; y: number },
+  scale = 1,
+  _state: { selected?: boolean } = { selected: true },
+): GroupHeaderAction {
+  const bounds = groupHeaderWorldBounds(group, scale);
+  const distanceFromRight = (bounds.x + bounds.width - point.x) * Math.max(scale, 0.0001);
+  if (group.collapsed && distanceFromRight <= GROUP_HEADER_ACTION_SCREEN_WIDTH) return 'expand';
+  if (group.collapsed && distanceFromRight <= GROUP_HEADER_ACTION_SCREEN_WIDTH * 2) return 'more';
+  if (distanceFromRight <= GROUP_HEADER_ACTION_SCREEN_WIDTH) return 'more';
+  return 'drag';
 }

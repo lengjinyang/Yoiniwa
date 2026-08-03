@@ -6,7 +6,9 @@ export function serializeProjectScene(scene: Scene): Scene {
     ...scene,
     viewport: { ...scene.viewport }, canvas: { ...scene.canvas }, assets: { ...scene.assets },
     items: scene.items.map((item) => ({ ...item, crop: { ...item.crop }, tags: item.tags ? [...item.tags] : undefined })),
-    groups: scene.groups.map((group) => ({ ...group, members: group.members.map((member) => ({ ...member })), tags: group.tags ? [...group.tags] : undefined })),
+    groups: scene.groups.map((group) => ({ ...group, members: group.members.map((member) => ({ ...member })),
+      detachedImageIds: group.detachedImageIds ? [...group.detachedImageIds] : undefined,
+      tags: group.tags ? [...group.tags] : undefined })),
     annotations: scene.annotations.map((annotation) => ({ ...annotation, points: annotation.points ? [...annotation.points] : undefined,
       tags: annotation.tags ? [...annotation.tags] : undefined })),
   };

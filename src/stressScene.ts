@@ -1,4 +1,4 @@
-import { createScene, GROUP_PADDING, GROUP_TITLE_HEIGHT } from './scene';
+import { createScene, GROUP_PADDING } from './scene';
 import type { AssetRecord, ImageGroup, ImageItem, Scene } from './types';
 
 /**
@@ -43,8 +43,9 @@ export function createStressScene(itemCount = 2000, assetCount = 40, fixtureData
     const right = Math.max(...members.map((item) => item.x + item.width)); const bottom = Math.max(...members.map((item) => item.y + item.height));
     return {
       id: `stress-group-${groupIndex}`, name: `分组 ${groupIndex + 1}`,
-      x: left - GROUP_PADDING, y: top - GROUP_TITLE_HEIGHT - GROUP_PADDING,
-      width: right - left + GROUP_PADDING * 2, height: bottom - top + GROUP_TITLE_HEIGHT + GROUP_PADDING * 2,
+      headerLayoutVersion: 2,
+      x: left - GROUP_PADDING, y: top - GROUP_PADDING,
+      width: right - left + GROUP_PADDING * 2, height: bottom - top + GROUP_PADDING * 2,
       color: `hsl(${groupIndex * 47 % 360} 32% 48%)`, opacity: 0.18, titleColor: '#f5f7fa',
       collapsed: false, sizeLocked: false, contentsHidden: false,
       members: members.map((item) => ({ type: 'image', id: item.id })),

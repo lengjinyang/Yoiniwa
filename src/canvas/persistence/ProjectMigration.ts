@@ -12,7 +12,7 @@ export function migrateProjectScene(input: unknown): Scene | undefined {
   migrated.name = typeof migrated.name === 'string' ? migrated.name : '未命名画板';
   migrated.savedAt = typeof migrated.savedAt === 'string' ? migrated.savedAt : new Date(0).toISOString();
   migrated.viewport = record(migrated.viewport) ?? { x: 0, y: 0, scale: 1 };
-  migrated.canvas = { background: '#202124', padding: 20, snap: true, includeBackgroundOnExport: true, ...record(migrated.canvas) };
+  migrated.canvas = { background: '#121315', padding: 20, snap: true, includeBackgroundOnExport: true, ...record(migrated.canvas) };
   migrated.assets = record(migrated.assets) ?? {};
   migrated.items = Array.isArray(migrated.items) ? migrated.items.map((value) => {
     const item = record(value) ?? {};

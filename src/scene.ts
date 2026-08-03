@@ -7,7 +7,7 @@ export const createScene = (): Scene => ({
   name: '未命名画板',
   savedAt: new Date().toISOString(),
   viewport: { x: 0, y: 0, scale: 1 },
-  canvas: { background: '#202124', padding: 20, snap: true, includeBackgroundOnExport: true },
+  canvas: { background: '#121315', backgroundOpacity: 1, padding: 20, snap: true, includeBackgroundOnExport: true },
   assets: {},
   items: [],
   groups: [],
@@ -21,7 +21,9 @@ export const cloneScene = (scene: Scene): Scene => ({
   canvas: { ...scene.canvas },
   assets: { ...scene.assets },
   items: scene.items.map((item) => ({ ...item, crop: { ...item.crop }, tags: item.tags ? [...item.tags] : undefined })),
-  groups: scene.groups.map((group) => ({ ...group, tags: group.tags ? [...group.tags] : undefined, members: group.members.map((member) => ({ ...member })) })),
+  groups: scene.groups.map((group) => ({ ...group, tags: group.tags ? [...group.tags] : undefined,
+    detachedImageIds: group.detachedImageIds ? [...group.detachedImageIds] : undefined,
+    members: group.members.map((member) => ({ ...member })) })),
   annotations: scene.annotations.map((annotation) => ({ ...annotation, tags: annotation.tags ? [...annotation.tags] : undefined, points: annotation.points ? [...annotation.points] : undefined })),
 });
 
@@ -98,20 +100,16 @@ export function rotateItemsAsGroup(items: ImageItem[], deltaDegrees: number) {
   });
 }
 
-export const GROUP_TITLE_HEIGHT = 28;
-export const GROUP_PADDING = 18;
-const GROUP_COLLAPSED_MIN_WIDTH = 88;
-
-function estimatedGroupTitleWidth(name: string) {
-  return Array.from(name).reduce((width, character) => width + (/^[\x00-\xff]$/.test(character) ? 6.5 : 11), 0);
-}
-
-/** A collapsed group keeps its stored frame size but presents as a compact title capsule. */
+export const GROUP_TITLE_HEIGHT = 30;
+const LEGACY_GROUP_TITLE_HEIGHT = 28;
+// Keep a small visual inset without making a newly-created frame feel detached
+// from the images it was created around.
+export const GROUP_PADDING = 8;
+/** A collapsed group keeps its width and presents as a full title bar. */
 export function groupVisibleBounds(group: Pick<ImageGroup, 'name' | 'x' | 'y' | 'width' | 'height' | 'collapsed'>): Bounds {
-  const width = group.collapsed
-    ? Math.min(group.width, Math.max(GROUP_COLLAPSED_MIN_WIDTH, Math.ceil(estimatedGroupTitleWidth(group.name) + 58)))
-    : group.width;
-  return { x: group.x, y: group.y, width, height: group.collapsed ? GROUP_TITLE_HEIGHT : group.height };
+  return group.collapsed
+    ? { x: group.x, y: group.y - GROUP_TITLE_HEIGHT, width: group.width, height: GROUP_TITLE_HEIGHT }
+    : { x: group.x, y: group.y - GROUP_TITLE_HEIGHT, width: group.width, height: group.height + GROUP_TITLE_HEIGHT };
 }
 
 export function topmostVisibleGroupAtPoint(
@@ -179,16 +177,19 @@ export function createGroupFrame(scene: Scene, members: GroupMember[], name: str
     return [];
   }));
   const group: ImageGroup = {
-    id, name,
+    id, name, headerLayoutVersion: 2,
     x: bounds.x - GROUP_PADDING,
-    y: bounds.y - GROUP_TITLE_HEIGHT - GROUP_PADDING,
-    width: Math.max(140, bounds.width + GROUP_PADDING * 2),
-    height: Math.max(80, bounds.height + GROUP_TITLE_HEIGHT + GROUP_PADDING * 2),
-    color: '#536778', opacity: 0.2, titleColor: '#e7f6ff',
-    collapsed: false, sizeLocked: false, contentsHidden: false, members: [],
+    y: bounds.y - GROUP_PADDING,
+    width: Math.max(96, bounds.width + GROUP_PADDING * 2),
+    height: Math.max(48, bounds.height + GROUP_PADDING * 2),
+    color: '#3a4955', opacity: 0.2, titleColor: '#e7f6ff', titleOpacity: 1,
+    collapsed: false, sizeLocked: false, contentsHidden: false, autoFit: true, members: [],
   };
   for (const member of members) addMemberToGroup(scene, group, member);
   scene.groups.push(group);
+  // Creating a subgroup removes its direct members from the old parent. Attach
+  // the new frame to that parent so nesting remains structurally intact.
+  reconcileMemberBounds(scene, { type: 'group', id: group.id }, groupContentBounds(group));
   return group;
 }
 
@@ -215,6 +216,10 @@ function canNestGroup(scene: Scene, childId: string, parentId: string) {
 export function addMemberToGroup(scene: Scene, group: ImageGroup, member: GroupMember) {
   if (member.type === 'group' && !canNestGroup(scene, member.id, group.id)) return false;
   removeMemberFromGroups(scene, member);
+  if (member.type === 'image' && group.detachedImageIds) {
+    group.detachedImageIds = group.detachedImageIds.filter((id) => id !== member.id);
+    if (!group.detachedImageIds.length) delete group.detachedImageIds;
+  }
   if (!group.members.some((value) => value.type === member.type && value.id === member.id)) group.members.push(member);
   if (member.type === 'group') {
     const child = scene.groups.find((value) => value.id === member.id);
@@ -226,7 +231,7 @@ export function addMemberToGroup(scene: Scene, group: ImageGroup, member: GroupM
 export interface Bounds { x: number; y: number; width: number; height: number }
 
 function groupContentBounds(group: ImageGroup): Bounds {
-  return { x: group.x, y: group.y + GROUP_TITLE_HEIGHT, width: group.width, height: Math.max(0, group.height - GROUP_TITLE_HEIGHT) };
+  return { x: group.x, y: group.y, width: group.width, height: group.height };
 }
 
 function fullyContains(outer: Bounds, inner: Bounds) {
@@ -250,24 +255,81 @@ export function memberBounds(scene: Scene, member: GroupMember): Bounds | undefi
   }
   if (member.type === 'group') {
     const group = scene.groups.find((value) => value.id === member.id);
-    return group ? groupVisibleBounds(group) : undefined;
+    return group ? groupContentBounds(group) : undefined;
   }
   return undefined;
 }
 
+/** Keep an explicitly detached image free while it remains inside the frame. */
+export function detachImageFromGroup(scene: Scene, groupId: string, imageId: string) {
+  const group = scene.groups.find((value) => value.id === groupId);
+  if (!group?.members.some((member) => member.type === 'image' && member.id === imageId)) return false;
+  group.members = group.members.filter((member) => member.type !== 'image' || member.id !== imageId);
+  group.detachedImageIds = [...new Set([...(group.detachedImageIds ?? []), imageId])];
+  fitGroupToContents(scene, groupId);
+  return true;
+}
+
+/** Fit uses scene-space pixels so padding remains stable with every camera zoom. */
+export function fitGroupToContents(scene: Scene, groupId: string, visited = new Set<string>()) {
+  if (visited.has(groupId)) return;
+  visited.add(groupId);
+  const group = scene.groups.find((value) => value.id === groupId);
+  if (!group || group.autoFit === false || group.sizeLocked) return;
+  group.members.filter((member) => member.type === 'group').forEach((member) => {
+    fitGroupToContents(scene, member.id, visited);
+  });
+  const bounds = group.members.flatMap((member) => {
+    const value = memberBounds(scene, member);
+    return value ? [value] : [];
+  });
+  if (!bounds.length) return;
+  const content = unionBounds(bounds);
+  group.x = content.x - GROUP_PADDING;
+  group.y = content.y - GROUP_PADDING;
+  group.width = Math.max(64, content.width + GROUP_PADDING * 2);
+  group.height = Math.max(48, content.height + GROUP_PADDING * 2);
+  if (group.parentId) fitGroupToContents(scene, group.parentId, visited);
+}
+
+export function fitAutoGroupsToContents(scene: Scene) {
+  scene.groups.forEach((group) => fitGroupToContents(scene, group.id));
+}
+
 export function reconcileMemberBounds(scene: Scene, member: GroupMember, bounds: Bounds) {
+  if (member.type === 'image') {
+    // Once the image leaves, dragging it back in is a deliberate re-entry.
+    scene.groups.forEach((group) => {
+      if (!group.detachedImageIds?.includes(member.id) || intersects(groupContentBounds(group), bounds)) return;
+      group.detachedImageIds = group.detachedImageIds.filter((id) => id !== member.id);
+      if (!group.detachedImageIds.length) delete group.detachedImageIds;
+    });
+  }
   const current = scene.groups.find((group) => group.members.some((value) => value.type === member.type && value.id === member.id));
   const candidates = scene.groups
     .filter((group) => !group.collapsed && fullyContains(groupContentBounds(group), bounds)
+      && (member.type !== 'image' || !group.detachedImageIds?.includes(member.id))
       && (member.type !== 'group' || canNestGroup(scene, member.id, group.id)))
     .sort((a, b) => a.width * a.height - b.width * b.height);
   const target = candidates[0];
   if (target) {
-    if (target.id !== current?.id) addMemberToGroup(scene, target, member);
+    if (target.id !== current?.id) {
+      const oldGroupId = current?.id;
+      addMemberToGroup(scene, target, member);
+      if (oldGroupId) fitGroupToContents(scene, oldGroupId);
+    }
+    fitGroupToContents(scene, target.id);
     return target.id;
   }
+  if (current?.autoFit) {
+    fitGroupToContents(scene, current.id);
+    return current.id;
+  }
   if (current && intersects(groupContentBounds(current), bounds)) return current.id;
-  if (current) removeMemberFromGroups(scene, member);
+  if (current) {
+    removeMemberFromGroups(scene, member);
+    fitGroupToContents(scene, current.id);
+  }
   return undefined;
 }
 
@@ -275,8 +337,9 @@ export function reconcileAllMemberships(scene: Scene) {
   scene.items.forEach((item) => reconcileMemberBounds(scene, { type: 'image', id: item.id }, itemBounds(item)));
   scene.annotations.forEach((annotation) => reconcileMemberBounds(scene, { type: 'annotation', id: annotation.id }, annotationSceneBounds(annotation)));
   scene.groups.forEach((group) => {
-    reconcileMemberBounds(scene, { type: 'group', id: group.id }, groupVisibleBounds(group));
+    reconcileMemberBounds(scene, { type: 'group', id: group.id }, groupContentBounds(group));
   });
+  fitAutoGroupsToContents(scene);
 }
 
 export function moveGroupWithContents(scene: Scene, groupId: string, deltaX: number, deltaY: number, visited = new Set<string>()) {
@@ -297,12 +360,22 @@ export function moveGroupWithContents(scene: Scene, groupId: string, deltaX: num
 }
 
 export function normalizeScene(scene: Scene): Scene {
+  scene.canvas.backgroundOpacity = scene.canvas.backgroundOpacity ?? 1;
   const rawGroups = scene.groups ?? [];
   scene.groups = rawGroups.map((raw) => {
     const tags = normalizeTags(raw.tags);
     if (Array.isArray(raw.members) && Number.isFinite(raw.x)) return {
       ...raw,
       tags,
+      headerLayoutVersion: 2,
+      y: raw.headerLayoutVersion === 2 ? raw.y : raw.y + LEGACY_GROUP_TITLE_HEIGHT,
+      width: Math.max(64, Number.isFinite(raw.width) ? raw.width : 140),
+      height: Math.max(48, Number.isFinite(raw.height)
+        ? (raw.headerLayoutVersion === 2 ? raw.height : raw.height - LEGACY_GROUP_TITLE_HEIGHT) : 80),
+      opacity: Math.max(0, Math.min(1, Number.isFinite(raw.opacity) ? raw.opacity : 0.2)),
+      titleOpacity: Math.max(0, Math.min(1, Number.isFinite(raw.titleOpacity) ? raw.titleOpacity! : 1)),
+      autoFit: raw.autoFit ?? true,
+      detachedImageIds: raw.detachedImageIds?.filter((id) => scene.items.some((item) => item.id === id)),
       sizeLocked: raw.sizeLocked ?? raw.locked ?? false,
       contentsHidden: raw.contentsHidden ?? raw.hidden ?? false,
       locked: undefined,
@@ -311,9 +384,10 @@ export function normalizeScene(scene: Scene): Scene {
     const legacyMembers: GroupMember[] = scene.items.filter((item) => item.groupId === raw.id).map((item) => ({ type: 'image', id: item.id }));
     const bounds = sceneBounds(scene.items.filter((item) => item.groupId === raw.id));
     return {
-      ...raw, tags, x: bounds.x - GROUP_PADDING, y: bounds.y - GROUP_TITLE_HEIGHT - GROUP_PADDING,
-      width: Math.max(140, bounds.width + GROUP_PADDING * 2), height: Math.max(80, bounds.height + GROUP_TITLE_HEIGHT + GROUP_PADDING * 2),
-      color: '#536778', opacity: 0.2, titleColor: '#e7f6ff', collapsed: false, sizeLocked: false, contentsHidden: false, members: legacyMembers,
+      ...raw, tags, headerLayoutVersion: 2, x: bounds.x - GROUP_PADDING, y: bounds.y - GROUP_PADDING,
+      width: Math.max(96, bounds.width + GROUP_PADDING * 2), height: Math.max(48, bounds.height + GROUP_PADDING * 2),
+      color: '#3a4955', opacity: 0.2, titleColor: '#e7f6ff', titleOpacity: 1,
+      collapsed: false, sizeLocked: false, contentsHidden: false, autoFit: true, members: legacyMembers,
     };
   });
   scene.items.forEach((item) => {
@@ -323,9 +397,33 @@ export function normalizeScene(scene: Scene): Scene {
     item.groupId = undefined;
   });
   scene.annotations.forEach((annotation) => {
+    annotation.opacity = annotation.opacity ?? 1;
     const tags = normalizeTags(annotation.tags);
     if (tags) annotation.tags = tags;
     else delete annotation.tags;
+  });
+  // Repair stale references and derive hierarchy from the member lists. A
+  // member belongs to at most one group; first occurrence preserves file order.
+  const imageIds = new Set(scene.items.map((item) => item.id));
+  const annotationIds = new Set(scene.annotations.map((annotation) => annotation.id));
+  const groupIds = new Set(scene.groups.map((group) => group.id));
+  const claimed = new Set<string>();
+  scene.groups.forEach((group) => { group.parentId = undefined; });
+  scene.groups.forEach((group) => {
+    group.members = group.members.filter((member) => {
+      const exists = member.type === 'image' ? imageIds.has(member.id)
+        : member.type === 'annotation' ? annotationIds.has(member.id)
+          : member.type === 'group' ? groupIds.has(member.id) && member.id !== group.id : false;
+      const key = `${member.type}:${member.id}`;
+      if (!exists || claimed.has(key)) return false;
+      if (member.type === 'group') {
+        if (!canNestGroup(scene, member.id, group.id)) return false;
+        const child = scene.groups.find((value) => value.id === member.id);
+        if (child) child.parentId = group.id;
+      }
+      claimed.add(key);
+      return true;
+    });
   });
   return scene;
 }

@@ -27,7 +27,7 @@ export class AnnotationRenderer {
   private draw(graphics: Graphics, annotation: AnnotationItem) {
     graphics.clear();
     graphics.visible = !annotation.hidden;
-    const style = { color: annotation.color, width: annotation.strokeWidth, cap: 'round' as const, join: 'round' as const };
+    const style = { color: annotation.color, alpha: annotation.opacity ?? 1, width: annotation.strokeWidth, cap: 'round' as const, join: 'round' as const };
     if (annotation.points && annotation.points.length >= 2) {
       graphics.moveTo(annotation.points[0], annotation.points[1]);
       for (let index = 2; index < annotation.points.length; index += 2) graphics.lineTo(annotation.points[index], annotation.points[index + 1]);

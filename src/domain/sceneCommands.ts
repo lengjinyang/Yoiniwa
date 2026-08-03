@@ -1,5 +1,5 @@
 import { applyLayout, type LayoutAction } from '../layout';
-import { itemBounds, memberBounds, normalizeZIndexes, reconcileMemberBounds } from '../scene';
+import { fitAutoGroupsToContents, itemBounds, memberBounds, normalizeZIndexes, reconcileMemberBounds } from '../scene';
 import type { ImageItem, Scene } from '../types';
 
 export type ImageChange = Partial<ImageItem> & { id: string };
@@ -15,7 +15,12 @@ export function deleteSceneSelection(scene: Scene, imageIds: readonly string[], 
     ) && (
       member.type !== 'annotation' || !annotations.has(member.id)
     ));
+    if (group.detachedImageIds) {
+      group.detachedImageIds = group.detachedImageIds.filter((id) => !images.has(id));
+      if (!group.detachedImageIds.length) delete group.detachedImageIds;
+    }
   });
+  fitAutoGroupsToContents(scene);
 }
 
 export function applyImageChanges(scene: Scene, changes: readonly ImageChange[]) {

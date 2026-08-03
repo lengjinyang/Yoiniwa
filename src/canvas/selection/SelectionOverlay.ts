@@ -2,6 +2,7 @@ import { Graphics, type Container } from 'pixi.js';
 import type { ImageItem } from '../../types';
 import type { SceneBounds } from '../scene/SceneNode';
 import { unionImageBounds } from './HitTestService';
+import { GROUP_RESIZE_HANDLE_SCREEN_SIZE } from '../groups/GroupPresentation';
 
 export type TransformHandle = 'north-west' | 'north-east' | 'south-west' | 'south-east' | 'rotate';
 
@@ -15,25 +16,29 @@ export class SelectionOverlay {
   draw(items: ImageItem[], scale: number, box?: SceneBounds) {
     this.scale = scale;
     this.selectionBounds = unionImageBounds(items);
-    const lineWidth = 1.5 / scale;
-    const handleSize = 9 / scale;
+    const lineWidth = 1 / scale;
+    const handleSize = GROUP_RESIZE_HANDLE_SCREEN_SIZE / scale;
     this.graphics.clear();
     if (this.selectionBounds) {
       const bounds = this.selectionBounds;
       this.graphics.rect(bounds.x, bounds.y, bounds.width, bounds.height)
-        .stroke({ color: 0x55cfff, width: lineWidth });
+        .stroke({ color: 0x7892ff, width: lineWidth, alpha: 0.78 });
       this.cornerPoints(bounds).forEach((point) => {
-        this.graphics.rect(point.x - handleSize / 2, point.y - handleSize / 2, handleSize, handleSize)
-          .fill({ color: 0xffffff }).stroke({ color: 0x168fbd, width: lineWidth });
+        this.graphics.roundRect(point.x - handleSize / 2, point.y - handleSize / 2,
+          handleSize, handleSize, 1.25 / scale)
+          .fill({ color: 0x1d1f22, alpha: 0.78 })
+          .stroke({ color: 0x8ca1ff, width: lineWidth, alpha: 0.76 });
       });
       const rotate = { x: bounds.x + bounds.width / 2, y: bounds.y - 28 / scale };
       this.graphics.moveTo(bounds.x + bounds.width / 2, bounds.y).lineTo(rotate.x, rotate.y)
-        .stroke({ color: 0x55cfff, width: lineWidth });
-      this.graphics.circle(rotate.x, rotate.y, handleSize / 2).fill({ color: 0xffffff })
-        .stroke({ color: 0x168fbd, width: lineWidth });
+        .stroke({ color: 0x7892ff, width: lineWidth, alpha: 0.62 });
+      this.graphics.roundRect(rotate.x - handleSize / 2, rotate.y - handleSize / 2,
+        handleSize, handleSize, 1.25 / scale)
+        .fill({ color: 0x1d1f22, alpha: 0.78 })
+        .stroke({ color: 0x8ca1ff, width: lineWidth, alpha: 0.76 });
     }
     if (box) this.graphics.rect(box.x, box.y, box.width, box.height)
-      .fill({ color: 0x55cfff, alpha: 0.12 }).stroke({ color: 0x55cfff, width: lineWidth });
+      .fill({ color: 0x708cff, alpha: 0.1 }).stroke({ color: 0x708cff, width: lineWidth });
   }
 
   hit(point: { x: number; y: number }): TransformHandle | undefined {

@@ -86,7 +86,7 @@ const MenuList = ({ entries, onClose, className = '', style, ref }: {
             onClose();
           }}
         >
-          <span className="context-check">{entry.checked === undefined ? '' : entry.checked ? '✓' : ''}</span>
+          <span className="context-check">{entry.checked ? '✓' : ''}</span>
           <span className="context-label">{entry.label}</span>
           {entry.shortcut && <span className="context-shortcut">{entry.shortcut}</span>}
           {entry.children && <span className="context-arrow">›</span>}
@@ -95,10 +95,11 @@ const MenuList = ({ entries, onClose, className = '', style, ref }: {
   </ul>;
 };
 
-export function ContextMenu({ position, entries, onClose }: {
+export function ContextMenu({ position, entries, onClose, variant = 'default' }: {
   position: MenuPosition;
   entries: ContextMenuEntry[];
   onClose(): void;
+  variant?: 'default' | 'group';
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [clamped, setClamped] = useState(position);
@@ -114,21 +115,31 @@ export function ContextMenu({ position, entries, onClose }: {
   }, [position]);
 
   useEffect(() => {
-    const close = () => onClose();
+    const closePointer = (event: PointerEvent) => {
+      if (ref.current?.contains(event.target as Node)) return;
+      onClose();
+    };
+    const closeWindow = () => onClose();
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('pointerdown', close);
-    window.addEventListener('blur', close);
-    window.addEventListener('keydown', key);
+    // Canvas menus are opened from native Pixi pointer handlers. Register on
+    // the next task so the opening pointerdown cannot close the new menu while
+    // it continues bubbling to window.
+    const listenerTimer = window.setTimeout(() => {
+      document.addEventListener('pointerdown', closePointer, true);
+      window.addEventListener('blur', closeWindow);
+      window.addEventListener('keydown', key);
+    }, 0);
     return () => {
-      window.removeEventListener('pointerdown', close);
-      window.removeEventListener('blur', close);
+      window.clearTimeout(listenerTimer);
+      document.removeEventListener('pointerdown', closePointer, true);
+      window.removeEventListener('blur', closeWindow);
       window.removeEventListener('keydown', key);
     };
   }, [onClose]);
 
   return <div
     ref={ref}
-    className="context-menu-root no-drag"
+    className={`context-menu-root no-drag${variant === 'group' ? ' group-context-menu' : ''}`}
     style={{ left: clamped.x, top: clamped.y, visibility: ready ? 'visible' : 'hidden' }}
     onPointerDown={(event) => event.stopPropagation()}
     onContextMenu={(event) => event.preventDefault()}

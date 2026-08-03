@@ -80,6 +80,10 @@ export function mergeSceneInto(target: Scene, source: Scene, placement: { x: num
     x: group.x + deltaX,
     y: group.y + deltaY,
     parentId: group.parentId ? groupIds.get(group.parentId) : undefined,
+    detachedImageIds: group.detachedImageIds?.flatMap((id) => {
+      const mapped = imageIds.get(id);
+      return mapped ? [mapped] : [];
+    }),
     members: group.members.flatMap((member) => {
       const id = member.type === 'image' ? imageIds.get(member.id)
         : member.type === 'annotation' ? annotationIds.get(member.id)
