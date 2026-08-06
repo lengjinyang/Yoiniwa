@@ -1,6 +1,7 @@
 import {
   forwardRef, useEffect, useImperativeHandle, useRef, useState, type CSSProperties,
 } from 'react';
+import { UiIcon } from './app/components/UiIcon';
 
 const PRESET_COLORS = [
   '#20242b', '#536778', '#2677ff', '#16a4b8', '#2da66f', '#8bad38',
@@ -16,23 +17,6 @@ const GROUP_COLORS = [
   ['褐色', '#564639', DEFAULT_GROUP_ALPHA], ['灰紫', '#46404f', DEFAULT_GROUP_ALPHA],
   ['暖灰', '#4c4843', DEFAULT_GROUP_ALPHA],
 ] as const;
-
-type ColorToolIconKind = 'lightness' | 'saturation' | 'opacity' | 'reset';
-
-function ColorToolIcon({ kind }: { kind: ColorToolIconKind }) {
-  return <svg className="color-tool-icon" viewBox="0 0 16 16" aria-hidden="true">
-    {kind === 'lightness' && <>
-      <circle cx="8" cy="8" r="2.7" />
-      <path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1" />
-    </>}
-    {kind === 'saturation' && <path d="M8 1.7S3.8 6.2 3.8 9.5A4.2 4.2 0 0 0 12.2 9.5C12.2 6.2 8 1.7 8 1.7Z" />}
-    {kind === 'opacity' && <>
-      <circle cx="8" cy="8" r="5.1" />
-      <path d="M8 2.9v10.2A5.1 5.1 0 0 0 8 2.9Z" className="filled" />
-    </>}
-    {kind === 'reset' && <path d="M3.1 5.5A5.2 5.2 0 1 1 3 10.3M3.1 5.5V2.7M3.1 5.5h2.8" />}
-  </svg>;
-}
 
 function inputHex(value: string) {
   if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
@@ -189,7 +173,7 @@ export const ColorControl = forwardRef<ColorControlHandle, ColorControlProps>(fu
       <span className="color-control-checker"><i style={{ backgroundColor: value, opacity: alpha ?? 1 }} /></span>
       {label && <span>{label}</span>}
       {!compact && <code>{nativeValue.toUpperCase()}</code>}
-      <b>⌄</b>
+      <b><UiIcon name="caret-down" size={14} /></b>
     </button>}
     {visible && <div ref={popoverRef} className={`color-control-popover${groupPalette ? ' group-palette' : ''}`} style={popupStyle}>
       <header>
@@ -198,8 +182,8 @@ export const ColorControl = forwardRef<ColorControlHandle, ColorControlProps>(fu
         </div>
         <div className="color-control-header-actions">
           {groupPalette && <button type="button" title="恢复默认" aria-label="恢复默认"
-            onClick={() => applyPreset(DEFAULT_GROUP_COLOR, DEFAULT_GROUP_ALPHA)}><ColorToolIcon kind="reset" /></button>}
-          <button type="button" aria-label="关闭颜色面板" onClick={() => { setOpen(false); onClose?.(); }}>×</button>
+            onClick={() => applyPreset(DEFAULT_GROUP_COLOR, DEFAULT_GROUP_ALPHA)}><UiIcon name="reset" size={14} className="color-tool-icon" /></button>}
+          <button type="button" aria-label="关闭颜色面板" onClick={() => { setOpen(false); onClose?.(); }}><UiIcon name="close" /></button>
         </div>
       </header>
       <div className="color-control-current">
@@ -219,12 +203,12 @@ export const ColorControl = forwardRef<ColorControlHandle, ColorControlProps>(fu
           className={preset === nativeValue && Math.abs((alpha ?? DEFAULT_GROUP_ALPHA) - presetAlpha) < 0.001 ? 'selected' : ''}
           onClick={() => applyPreset(preset, presetAlpha)}>
           <i style={{ backgroundColor: preset }} /><span>{name}</span></button>)}</div>
-        <label className="color-control-adjustment"><span><b><ColorToolIcon kind="lightness" />明度</b><output>{Math.round(hsl.l)}%</output></span>
+        <label className="color-control-adjustment"><span><b><UiIcon name="lightness" size={14} className="color-tool-icon" />明度</b><output>{Math.round(hsl.l)}%</output></span>
           <input type="range" min="12" max="72" value={Math.round(hsl.l)}
             onPointerDown={() => onInteractionStart?.()} onPointerUp={() => onInteractionEnd?.()}
             onPointerCancel={() => onInteractionEnd?.()} onBlur={() => onInteractionEnd?.()}
             onChange={(event) => (onPreviewChange ?? onChange)(hslToHex(hsl.h, hsl.s, Number(event.target.value)))} /></label>
-        <label className="color-control-adjustment"><span><b><ColorToolIcon kind="saturation" />饱和度</b><output>{Math.round(hsl.s)}%</output></span>
+        <label className="color-control-adjustment"><span><b><UiIcon name="saturation" size={14} className="color-tool-icon" />饱和度</b><output>{Math.round(hsl.s)}%</output></span>
           <input type="range" min="0" max="65" value={Math.round(hsl.s)}
             onPointerDown={() => onInteractionStart?.()} onPointerUp={() => onInteractionEnd?.()}
             onPointerCancel={() => onInteractionEnd?.()} onBlur={() => onInteractionEnd?.()}
@@ -233,7 +217,7 @@ export const ColorControl = forwardRef<ColorControlHandle, ColorControlProps>(fu
         className={preset.toLowerCase() === nativeValue ? 'selected' : ''}
         style={{ backgroundColor: preset }} title={preset} onClick={() => onChange(preset)} />)}</div>}
       {alpha !== undefined && onAlphaChange && <label className="color-control-alpha">
-        <span><b>{groupPalette && <ColorToolIcon kind="opacity" />}不透明度</b><output>{Math.round(alpha * 100)}%</output></span>
+        <span><b>{groupPalette && <UiIcon name="opacity" size={14} className="color-tool-icon" />}不透明度</b><output>{Math.round(alpha * 100)}%</output></span>
         <input type="range" min="0" max="100" value={Math.round(alpha * 100)}
           style={{ background: `linear-gradient(90deg, transparent, ${value})` }}
           onPointerDown={() => onInteractionStart?.()} onPointerUp={() => onInteractionEnd?.()}

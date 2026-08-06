@@ -9,7 +9,6 @@ export function serializeProjectScene(scene: Scene): Scene {
     groups: scene.groups.map((group) => ({ ...group, members: group.members.map((member) => ({ ...member })),
       detachedImageIds: group.detachedImageIds ? [...group.detachedImageIds] : undefined,
       tags: group.tags ? [...group.tags] : undefined })),
-    annotations: scene.annotations.map((annotation) => ({ ...annotation, points: annotation.points ? [...annotation.points] : undefined,
-      tags: annotation.tags ? [...annotation.tags] : undefined })),
+    visualNotes: structuredClone(scene.visualNotes),
   };
 }

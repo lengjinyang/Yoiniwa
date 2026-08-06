@@ -31,7 +31,6 @@ export function createStressScene(itemCount = 2000, assetCount = 40, fixtureData
       width, height, rotation: (index % 13 - 6) * 2.5,
       flipX: index % 29 === 0, flipY: index % 47 === 0, opacity: 1,
       zIndex: index, locked: assetCount === itemCount ? false : index % 97 === 0,
-      comment: index % 17 === 0 ? `压力测试评论 ${index + 1}` : undefined,
       crop: { x: 0, y: 0, width: asset.naturalWidth, height: asset.naturalHeight },
     };
   });

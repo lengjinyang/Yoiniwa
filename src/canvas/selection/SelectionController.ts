@@ -4,7 +4,7 @@ import type { InputRouter } from '../interaction/InputRouter';
 import { PointerState } from '../interaction/PointerState';
 import type { SceneStore } from '../scene/SceneStore';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
-import { groupHeaderActionAtPoint, groupHeaderAtPoint, topmostAnnotationAtPoint, topmostImageAtPoint, unionImageBounds } from './HitTestService';
+import { groupHeaderActionAtPoint, groupHeaderAtPoint, topmostImageAtPoint, unionImageBounds } from './HitTestService';
 import { SceneSelection } from './SceneSelection';
 import type { TransformHandle } from './SelectionOverlay';
 import { boxFromPoints, collapsedGroupInSelectionBox, imagesInSelectionBox } from './BoxSelectionController';
@@ -17,7 +17,6 @@ type Drag =
   | { kind: 'move'; start: { x: number; y: number }; originals: ImageItem[] }
   | { kind: 'box'; start: { x: number; y: number }; additive: string[] }
   | { kind: 'transform'; start: { x: number; y: number }; originals: ImageItem[]; bounds: NonNullable<ReturnType<typeof unionImageBounds>>; handle: TransformHandle }
-  | { kind: 'annotation'; start: { x: number; y: number }; last: { x: number; y: number }; ids: string[] }
   | { kind: 'group'; start: { x: number; y: number }; last: { x: number; y: number }; id: string }
   | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds };
 
@@ -30,10 +29,7 @@ interface SelectionControllerOptions {
   preview(changes: ImageChange[]): void;
   commit(changes: ImageChange[]): void;
   selectionChanged(ids: string[]): void;
-  annotationSelectionChanged(ids: string[]): void;
   groupSelectionChanged(id?: string): void;
-  previewAnnotation(ids: string[], deltaX: number, deltaY: number): void;
-  commitAnnotation(ids: string[], deltaX: number, deltaY: number): void;
   previewGroup(id: string, deltaX: number, deltaY: number): void;
   commitGroup(id: string, deltaX: number, deltaY: number): void;
   previewGroupResize(id: string, bounds: GroupFrameBounds): void;
@@ -50,7 +46,6 @@ interface SelectionControllerOptions {
 
 export class SelectionController {
   private readonly selection = new SceneSelection();
-  private readonly annotationSelection = new SceneSelection();
   private readonly pointer = new PointerState();
   private drag?: Drag;
   private pendingChanges: ImageChange[] = [];
@@ -79,7 +74,6 @@ export class SelectionController {
   }
 
   setSelection(ids: string[]) { this.selection.replace(ids); this.refresh(); }
-  setAnnotationSelection(ids: string[]) { this.annotationSelection.replace(ids); }
   setGroupSelection(id?: string) { this.selectedGroupId = id; }
   refresh() {
     const scene = this.options.scene();
@@ -114,8 +108,8 @@ export class SelectionController {
       return;
     }
     if (headerGroup && headerAction !== 'drag') {
-      this.selection.clear(); this.annotationSelection.clear(); this.selectedGroupId = headerGroup.id;
-      this.options.selectionChanged([]); this.options.annotationSelectionChanged([]);
+      this.selection.clear(); this.selectedGroupId = headerGroup.id;
+      this.options.selectionChanged([]);
       this.options.groupSelectionChanged(headerGroup.id);
       if (headerAction === 'more') {
         const elementBounds = this.options.element.getBoundingClientRect();
@@ -140,29 +134,17 @@ export class SelectionController {
     // The title bar is the group's interaction surface. It must win over
     // images beneath it so selecting and dragging the group is predictable.
     if (headerGroup) {
-      this.selection.clear(); this.annotationSelection.clear();
+      this.selection.clear();
       this.selectedGroupId = headerGroup.id;
-      this.options.selectionChanged([]); this.options.annotationSelectionChanged([]); this.options.groupSelectionChanged(headerGroup.id);
+      this.options.selectionChanged([]); this.options.groupSelectionChanged(headerGroup.id);
       this.drag = { kind: 'group', start: world, last: world, id: headerGroup.id };
       this.options.element.style.cursor = 'grabbing';
-      return;
-    }
-    const annotation = topmostAnnotationAtPoint(scene.annotations(), world);
-    if (annotation) {
-      this.selectedGroupId = undefined;
-      this.selection.clear();
-      if (event.shiftKey || event.ctrlKey || event.metaKey) this.annotationSelection.toggle(annotation.id);
-      else if (!this.annotationSelection.has(annotation.id)) this.annotationSelection.replace([annotation.id]);
-      this.options.selectionChanged([]); this.options.annotationSelectionChanged(this.annotationSelection.values());
-      this.options.groupSelectionChanged(undefined);
-      this.drag = { kind: 'annotation', start: world, last: world, ids: scene.annotations().filter((value) => this.annotationSelection.has(value.id) && !value.locked).map((value) => value.id) };
       return;
     }
     const hit = topmostImageAtPoint(scene.images(), world);
     if (hit) {
       this.selectedGroupId = undefined;
-      this.annotationSelection.clear();
-      this.options.annotationSelectionChanged([]); this.options.groupSelectionChanged(undefined);
+      this.options.groupSelectionChanged(undefined);
       if (event.shiftKey || event.ctrlKey || event.metaKey) this.selection.toggle(hit.id);
       else if (!this.selection.has(hit.id)) this.selection.replace([hit.id]);
       this.emitSelection();
@@ -172,8 +154,8 @@ export class SelectionController {
       const additive = event.shiftKey || event.ctrlKey || event.metaKey ? this.selection.values() : [];
       if (!additive.length) {
         this.selectedGroupId = undefined;
-        this.selection.clear(); this.annotationSelection.clear();
-        this.emitSelection(); this.options.annotationSelectionChanged([]); this.options.groupSelectionChanged(undefined);
+        this.selection.clear();
+        this.emitSelection(); this.options.groupSelectionChanged(undefined);
       }
       this.drag = { kind: 'box', start: world, additive };
     }
@@ -234,9 +216,6 @@ export class SelectionController {
     } else if (this.drag.kind === 'transform') {
       this.pendingChanges = transformImageSelection({ ...this.drag, current: world });
       this.options.preview(this.pendingChanges);
-    } else if (this.drag.kind === 'annotation') {
-      this.options.previewAnnotation(this.drag.ids, world.x - this.drag.last.x, world.y - this.drag.last.y);
-      this.drag.last = world;
     } else if (this.drag.kind === 'group') {
       this.options.previewGroup(this.drag.id, world.x - this.drag.last.x, world.y - this.drag.last.y);
       this.drag.last = world;
@@ -258,7 +237,6 @@ export class SelectionController {
       this.options.groupSelectionChanged(this.selectedGroupId);
     }
     if (this.pendingChanges.length) this.options.commit(this.pendingChanges);
-    if (this.drag.kind === 'annotation') this.options.commitAnnotation(this.drag.ids, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
     if (this.drag.kind === 'group') this.options.commitGroup(this.drag.id, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
     if (this.drag.kind === 'group-resize') this.options.commitGroupResize(this.drag.id, this.drag.bounds);
     this.pendingChanges = [];

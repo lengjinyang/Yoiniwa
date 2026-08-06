@@ -57,10 +57,11 @@ export function PerformancePanel() {
     ['React renders / s', snapshot.reactRendersPerSecond.toFixed(1)],
     ['spatial query avg', formatMs(snapshot.spatialQueryMs)],
     ['image decode avg', formatMs(snapshot.imageDecodeMs)],
+    ['color sample avg', formatMs(snapshot.colorSampleMs)],
     ['thumbnail avg', `${formatMs(snapshot.thumbnailMs)} (${snapshot.thumbnailCount}, fail ${snapshot.thumbnailFailures})`],
   ];
   return <aside className="performance-panel no-drag" data-testid="performance-panel">
-    <header title="按 F10 隐藏">RefCanvas Performance · F10</header>
+    <header title="按 F10 隐藏">Yoiniwa Performance · F10</header>
     <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
   </aside>;
 }

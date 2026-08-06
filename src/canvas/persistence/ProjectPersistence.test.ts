@@ -5,12 +5,13 @@ import { loadProjectScene } from './ProjectLoader';
 import { serializeProjectScene } from './ProjectSerializer';
 
 const scene = {
-  format: 'refcanvas', version: 2, name: 'roundtrip', savedAt: '', viewport: { x: 12, y: -8, scale: 2 },
+  format: 'refcanvas', version: 3, name: 'roundtrip', savedAt: '', viewport: { x: 12, y: -8, scale: 2 },
   canvas: { background: '#000', padding: 20, snap: true, includeBackgroundOnExport: true },
   assets: { missing: { id: 'missing', hash: 'hash', mimeType: 'image/png', byteLength: 1, naturalWidth: 10, naturalHeight: 10, originalName: 'gone.png' } },
   items: [{ id: 'image', name: 'gone', sourceType: 'file', assetId: 'missing', naturalWidth: 10, naturalHeight: 10,
     x: 1, y: 2, width: 10, height: 10, rotation: 5, flipX: false, flipY: false, opacity: 1, zIndex: 7, locked: false,
-    crop: { x: 1, y: 1, width: 8, height: 8 } }], groups: [], annotations: [],
+    crop: { x: 1, y: 1, width: 8, height: 8 } }], groups: [],
+  visualNotes: { visible: true, nextNumber: 1, marks: [] },
 } satisfies Scene;
 
 describe('project persistence boundary', () => {
@@ -22,7 +23,7 @@ describe('project persistence boundary', () => {
   });
 
   it('migrates a version-one scene and rejects malformed viewport state', () => {
-    expect(loadProjectScene({ ...scene, version: 1 })?.version).toBe(2);
+    expect(loadProjectScene({ ...scene, version: 1 })?.version).toBe(3);
     expect(loadProjectScene({ ...scene, viewport: { x: 0, y: 0, scale: 0 } })).toBeUndefined();
   });
 

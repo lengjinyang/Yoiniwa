@@ -1,9 +1,10 @@
-import type { AnnotationItem, CropRect, GroupMember, ImageGroup, ImageItem, Scene } from './types';
+import type { CropRect, GroupMember, ImageGroup, ImageItem, Scene } from './types';
 import { normalizeTags } from './tags';
+import { markWorldBounds, moveSceneMark } from './visualNotes/VisualNoteGeometry';
 
 export const createScene = (): Scene => ({
   format: 'refcanvas',
-  version: 2,
+  version: 3,
   name: '未命名画板',
   savedAt: new Date().toISOString(),
   viewport: { x: 0, y: 0, scale: 1 },
@@ -11,7 +12,7 @@ export const createScene = (): Scene => ({
   assets: {},
   items: [],
   groups: [],
-  annotations: [],
+  visualNotes: { visible: true, nextNumber: 1, marks: [] },
 });
 
 /** Clone mutable scene metadata while sharing immutable asset records and image source strings. */
@@ -24,7 +25,10 @@ export const cloneScene = (scene: Scene): Scene => ({
   groups: scene.groups.map((group) => ({ ...group, tags: group.tags ? [...group.tags] : undefined,
     detachedImageIds: group.detachedImageIds ? [...group.detachedImageIds] : undefined,
     members: group.members.map((member) => ({ ...member })) })),
-  annotations: scene.annotations.map((annotation) => ({ ...annotation, tags: annotation.tags ? [...annotation.tags] : undefined, points: annotation.points ? [...annotation.points] : undefined })),
+  visualNotes: {
+    ...scene.visualNotes,
+    marks: scene.visualNotes.marks.map((mark) => structuredClone(mark)),
+  },
 });
 
 export const normalizeZIndexes = (items: ImageItem[]) =>
@@ -129,28 +133,6 @@ export function topmostVisibleGroupAtPoint(
   return undefined;
 }
 
-export function annotationSceneBounds(annotation: AnnotationItem) {
-  const padding = annotation.type === 'arrow' ? annotation.strokeWidth * 4 : annotation.strokeWidth / 2;
-  if (annotation.points?.length) {
-    const xs = annotation.points.filter((_, index) => index % 2 === 0);
-    const ys = annotation.points.filter((_, index) => index % 2 === 1);
-    const x = Math.min(...xs) - padding;
-    const y = Math.min(...ys) - padding;
-    return { x, y, width: Math.max(1, Math.max(...xs) + padding - x), height: Math.max(1, Math.max(...ys) + padding - y) };
-  }
-  return {
-    x: (annotation.x ?? 0) - padding,
-    y: (annotation.y ?? 0) - padding,
-    width: Math.max(1, (annotation.width ?? 0) + padding * 2),
-    height: Math.max(1, (annotation.height ?? 0) + padding * 2),
-  };
-}
-
-export function moveAnnotation(annotation: AnnotationItem, deltaX: number, deltaY: number) {
-  if (annotation.points) annotation.points = annotation.points.map((value, index) => value + (index % 2 === 0 ? deltaX : deltaY));
-  else { annotation.x = (annotation.x ?? 0) + deltaX; annotation.y = (annotation.y ?? 0) + deltaY; }
-}
-
 function unionBounds(bounds: Array<{ x: number; y: number; width: number; height: number }>) {
   if (!bounds.length) return { x: 0, y: 0, width: 240, height: 160 };
   const x = Math.min(...bounds.map((value) => value.x));
@@ -166,13 +148,13 @@ export function createGroupFrame(scene: Scene, members: GroupMember[], name: str
       const item = scene.items.find((value) => value.id === member.id);
       return item ? [itemBounds(item)] : [];
     }
-    if (member.type === 'annotation') {
-      const annotation = scene.annotations.find((value) => value.id === member.id);
-      return annotation ? [annotationSceneBounds(annotation)] : [];
-    }
     if (member.type === 'group') {
       const group = scene.groups.find((value) => value.id === member.id);
       return group ? [{ x: group.x, y: group.y, width: group.width, height: group.height }] : [];
+    }
+    if (member.type === 'mark') {
+      const mark = scene.visualNotes.marks.find((value) => value.id === member.id);
+      return mark ? [markWorldBounds(mark, scene.items)] : [];
     }
     return [];
   }));
@@ -249,13 +231,13 @@ export function memberBounds(scene: Scene, member: GroupMember): Bounds | undefi
     const item = scene.items.find((value) => value.id === member.id);
     return item ? itemBounds(item) : undefined;
   }
-  if (member.type === 'annotation') {
-    const annotation = scene.annotations.find((value) => value.id === member.id);
-    return annotation ? annotationSceneBounds(annotation) : undefined;
-  }
   if (member.type === 'group') {
     const group = scene.groups.find((value) => value.id === member.id);
     return group ? groupContentBounds(group) : undefined;
+  }
+  if (member.type === 'mark') {
+    const mark = scene.visualNotes.marks.find((value) => value.id === member.id);
+    return mark ? markWorldBounds(mark, scene.items) : undefined;
   }
   return undefined;
 }
@@ -335,7 +317,9 @@ export function reconcileMemberBounds(scene: Scene, member: GroupMember, bounds:
 
 export function reconcileAllMemberships(scene: Scene) {
   scene.items.forEach((item) => reconcileMemberBounds(scene, { type: 'image', id: item.id }, itemBounds(item)));
-  scene.annotations.forEach((annotation) => reconcileMemberBounds(scene, { type: 'annotation', id: annotation.id }, annotationSceneBounds(annotation)));
+  scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'scene').forEach((mark) => {
+    reconcileMemberBounds(scene, { type: 'mark', id: mark.id }, markWorldBounds(mark, scene.items));
+  });
   scene.groups.forEach((group) => {
     reconcileMemberBounds(scene, { type: 'group', id: group.id }, groupContentBounds(group));
   });
@@ -352,14 +336,18 @@ export function moveGroupWithContents(scene: Scene, groupId: string, deltaX: num
     if (member.type === 'image') {
       const item = scene.items.find((value) => value.id === member.id);
       if (item) { item.x += deltaX; item.y += deltaY; }
-    } else if (member.type === 'annotation') {
-      const annotation = scene.annotations.find((value) => value.id === member.id);
-      if (annotation) moveAnnotation(annotation, deltaX, deltaY);
+    } else if (member.type === 'mark') {
+      scene.visualNotes.marks = scene.visualNotes.marks.map((mark) => mark.id === member.id ? moveSceneMark(mark, deltaX, deltaY) : mark);
     } else if (member.type === 'group') moveGroupWithContents(scene, member.id, deltaX, deltaY, visited);
   }
 }
 
 export function normalizeScene(scene: Scene): Scene {
+  scene.visualNotes = scene.visualNotes ?? { visible: true, nextNumber: 1, marks: [] };
+  scene.visualNotes.visible = scene.visualNotes.visible !== false;
+  scene.visualNotes.nextNumber = Math.max(1, Number(scene.visualNotes.nextNumber) || 1);
+  scene.visualNotes.marks = Array.isArray(scene.visualNotes.marks)
+    ? scene.visualNotes.marks.filter((mark) => mark.kind !== 'number') : [];
   scene.canvas.backgroundOpacity = scene.canvas.backgroundOpacity ?? 1;
   const rawGroups = scene.groups ?? [];
   scene.groups = rawGroups.map((raw) => {
@@ -396,24 +384,19 @@ export function normalizeScene(scene: Scene): Scene {
     else delete item.tags;
     item.groupId = undefined;
   });
-  scene.annotations.forEach((annotation) => {
-    annotation.opacity = annotation.opacity ?? 1;
-    const tags = normalizeTags(annotation.tags);
-    if (tags) annotation.tags = tags;
-    else delete annotation.tags;
-  });
   // Repair stale references and derive hierarchy from the member lists. A
   // member belongs to at most one group; first occurrence preserves file order.
   const imageIds = new Set(scene.items.map((item) => item.id));
-  const annotationIds = new Set(scene.annotations.map((annotation) => annotation.id));
+  scene.visualNotes.marks = scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'scene' || imageIds.has(mark.anchor.imageId));
+  const markIds = new Set(scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'scene').map((mark) => mark.id));
   const groupIds = new Set(scene.groups.map((group) => group.id));
   const claimed = new Set<string>();
   scene.groups.forEach((group) => { group.parentId = undefined; });
   scene.groups.forEach((group) => {
     group.members = group.members.filter((member) => {
       const exists = member.type === 'image' ? imageIds.has(member.id)
-        : member.type === 'annotation' ? annotationIds.has(member.id)
-          : member.type === 'group' ? groupIds.has(member.id) && member.id !== group.id : false;
+        : member.type === 'group' ? groupIds.has(member.id) && member.id !== group.id
+          : member.type === 'mark' ? markIds.has(member.id) : false;
       const key = `${member.type}:${member.id}`;
       if (!exists || claimed.has(key)) return false;
       if (member.type === 'group') {
@@ -475,6 +458,7 @@ export function resetImageTransform(item: ImageItem) {
 export function validateScene(value: unknown): value is Scene {
   if (!value || typeof value !== 'object') return false;
   const scene = value as Partial<Scene>;
-  return scene.format === 'refcanvas' && scene.version === 2 && Array.isArray(scene.items)
-    && !!scene.assets && typeof scene.assets === 'object' && !!scene.viewport && !!scene.canvas;
+  return scene.format === 'refcanvas' && scene.version === 3 && Array.isArray(scene.items)
+    && !!scene.assets && typeof scene.assets === 'object' && !!scene.viewport && !!scene.canvas
+    && !!scene.visualNotes && Array.isArray(scene.visualNotes.marks);
 }

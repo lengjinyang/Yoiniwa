@@ -1,5 +1,5 @@
 import { Application } from 'pixi.js';
-import type { Scene, Viewport } from '../../types';
+import type { PickedColor, Scene, Viewport, VisualNotesState } from '../../types';
 import { boundedDevicePixelRatio } from '../runtime/CanvasConfig';
 import { ImageRenderer } from './ImageRenderer';
 import { RenderLayers } from './RenderLayers';
@@ -8,11 +8,19 @@ import type { ImageItem } from '../../types';
 import { TextureManager } from '../textures/TextureManager';
 import { performanceMonitor } from '../../performanceMonitor';
 import { GroupRenderer } from './GroupRenderer';
-import { AnnotationRenderer } from './AnnotationRenderer';
-import { CommentRenderer } from './CommentRenderer';
 import { GroupResizeOverlay } from '../selection/GroupResizeOverlay';
 import type { GroupResizeHandle } from '../selection/GroupResizeController';
 import type { GroupHeaderAction } from '../selection/HitTestService';
+import { VisualNotesRenderer } from './VisualNotesRenderer';
+import type { VisualMark } from '../../types';
+import { compositeDisplayedColor } from '../interaction/colorSampling';
+
+interface PendingColorReadback {
+  buffer: WebGLBuffer;
+  fence: WebGLSync;
+  startedAt: number;
+  premultipliedAlpha: boolean;
+}
 
 export class PixiRenderer {
   private readonly app = new Application();
@@ -22,13 +30,14 @@ export class PixiRenderer {
   private groupResize?: GroupResizeOverlay;
   private textures?: TextureManager;
   private groups?: GroupRenderer;
-  private annotations?: AnnotationRenderer;
-  private comments?: CommentRenderer;
+  private visualNotes?: VisualNotesRenderer;
   private contextDisposer?: () => void;
   private pendingScene?: Scene;
   private selectedImages = 0;
   private selectedGroupId?: string;
   private viewportScale = 1;
+  private previewSampleBlockedUntil = 0;
+  private pendingColorReadback?: PendingColorReadback;
 
   constructor(private readonly requestRender: () => void) {}
 
@@ -51,7 +60,12 @@ export class PixiRenderer {
     }
     this.app.canvas.className = 'pixi-canvas';
     container.appendChild(this.app.canvas);
-    const lost = (event: Event) => { event.preventDefault(); this.advanceTextureGeneration(); };
+    const lost = (event: Event) => {
+      event.preventDefault();
+      // WebGL objects from the lost context must never be polled after restore.
+      this.pendingColorReadback = undefined;
+      this.advanceTextureGeneration();
+    };
     const restored = () => { if (this.pendingScene) this.images?.sync(this.pendingScene); this.requestRender(); };
     this.app.canvas.addEventListener('webglcontextlost', lost);
     this.app.canvas.addEventListener('webglcontextrestored', restored);
@@ -65,8 +79,7 @@ export class PixiRenderer {
     });
     this.images = new ImageRenderer(this.layers.images, this.textures, this.requestRender);
     this.groups = new GroupRenderer(this.layers.groups, this.layers.groupHeaderSurfaces, this.layers.groupHeaders, container);
-    this.annotations = new AnnotationRenderer(this.layers.annotations);
-    this.comments = new CommentRenderer(this.layers.annotations);
+    this.visualNotes = new VisualNotesRenderer(this.layers.marks);
     this.selection = new SelectionOverlay(this.layers.overlay);
     this.groupResize = new GroupResizeOverlay(this.layers.overlay);
     if (this.pendingScene) this.setScene(this.pendingScene);
@@ -76,9 +89,13 @@ export class PixiRenderer {
     this.pendingScene = scene;
     this.images?.sync(scene);
     this.groups?.sync(scene.groups);
-    this.annotations?.sync(scene.annotations);
-    this.comments?.sync(scene.items);
+    this.visualNotes?.sync(scene.visualNotes, scene.items);
     this.syncGroupResizeOverlay();
+  }
+  previewVisualNotes(notes: VisualNotesState, images: ImageItem[]) {
+    if (this.pendingScene) this.pendingScene = { ...this.pendingScene, visualNotes: notes };
+    this.visualNotes?.sync(notes, images);
+    this.requestRender();
   }
   setSelectedImageCount(count: number) { this.selectedImages = count; }
   setSelectedGroup(id?: string) {
@@ -94,17 +111,18 @@ export class PixiRenderer {
     this.requestRender();
   }
   setGroupDropTarget(id?: string) { return this.groups?.setDropTarget(id) ?? false; }
+  setVisualNotesTemporaryHidden(hidden: boolean) { this.visualNotes?.setTemporaryHidden(hidden); this.requestRender(); }
+  setVisualNotePreview(mark?: VisualMark) { this.visualNotes?.setPreview(mark); this.requestRender(); }
+  setVisualNoteEraserCursor(point?: { x: number; y: number }, radiusScreen?: number) {
+    this.visualNotes?.setEraserCursor(point, radiusScreen); this.requestRender();
+  }
+  setSelectedVisualNote(id?: string) { this.visualNotes?.setSelection(id); this.requestRender(); }
   drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }) {
     this.selection?.draw(items, scale, box);
     this.requestRender();
   }
   hitSelectionHandle(point: { x: number; y: number }): TransformHandle | undefined { return this.selection?.hit(point); }
   hitGroupResizeHandle(point: { x: number; y: number }): GroupResizeHandle | undefined { return this.groupResize?.hit(point); }
-  annotationLayer() {
-    if (!this.layers) throw new Error('Pixi renderer has not started');
-    return this.layers.annotations;
-  }
-
   render(viewport: Viewport, workset?: {
     visible: ReadonlySet<string>; prefetch: ReadonlySet<string>;
     visibleBounds: { x: number; y: number; width: number; height: number };
@@ -114,6 +132,7 @@ export class PixiRenderer {
     if (!this.layers) return;
     const startedAt = performance.now();
     this.viewportScale = viewport.scale;
+    this.visualNotes?.setViewportScale(viewport.scale);
     this.groups?.setViewport(viewport);
     this.syncGroupResizeOverlay();
     this.textures?.processFrame();
@@ -182,9 +201,124 @@ export class PixiRenderer {
     }
   }
 
+  sampleColor(point: { x: number; y: number }, final = true): PickedColor | undefined {
+    const gl = (this.app.renderer as typeof this.app.renderer & { gl?: WebGL2RenderingContext }).gl;
+    if (!gl || !this.app.canvas.isConnected) return undefined;
+    const now = performance.now();
+    const bounds = this.app.canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return undefined;
+    const x = Math.max(0, Math.min(gl.drawingBufferWidth - 1,
+      Math.floor(point.x * gl.drawingBufferWidth / bounds.width)));
+    const y = Math.max(0, Math.min(gl.drawingBufferHeight - 1,
+      gl.drawingBufferHeight - 1 - Math.floor(point.y * gl.drawingBufferHeight / bounds.height)));
+    if (final) {
+      this.discardPendingColorReadback(gl);
+      return this.readColorSynchronously(gl, x, y);
+    }
+
+    const completed = this.consumePendingColorReadback(gl);
+    if (!this.pendingColorReadback && now >= this.previewSampleBlockedUntil) {
+      if (!this.beginAsyncColorReadback(gl, x, y)) {
+        // WebGL 1 and uncommon drivers without pixel-pack buffers retain the
+        // limited synchronous fallback. The controller calls this at only 30 Hz.
+        return completed ?? this.readColorSynchronously(gl, x, y, false);
+      }
+    }
+    return completed;
+  }
+
+  private readColorSynchronously(gl: WebGL2RenderingContext, x: number, y: number, final = true) {
+    const rgba = new Uint8Array(4);
+    const startedAt = performance.now();
+    // The default framebuffer may be discarded after compositing, so the final
+    // release sample always renders immediately before its exact readback.
+    this.app.render();
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+    const duration = performance.now() - startedAt;
+    performanceMonitor.recordColorSample(duration);
+    if (!final && duration > 4) {
+      this.previewSampleBlockedUntil = performance.now() + Math.min(80, Math.max(16, duration * 2));
+    }
+    return this.colorFromFramebuffer(gl, rgba);
+  }
+
+  private beginAsyncColorReadback(gl: WebGL2RenderingContext, x: number, y: number) {
+    if (typeof gl.fenceSync !== 'function' || typeof gl.getBufferSubData !== 'function') return false;
+    const buffer = gl.createBuffer();
+    if (!buffer) return false;
+    const startedAt = performance.now();
+    // Rendering is CPU-cheap compared with a synchronous GPU read. Pairing it
+    // with a pixel-pack buffer keeps the displayed frame valid without stalling
+    // pointer delivery while the GPU finishes the one-pixel transfer.
+    this.app.render();
+    const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    const fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous);
+    if (!fence) {
+      gl.deleteBuffer(buffer);
+      return false;
+    }
+    gl.flush();
+    this.pendingColorReadback = {
+      buffer, fence, startedAt,
+      premultipliedAlpha: Boolean(gl.getContextAttributes()?.premultipliedAlpha),
+    };
+    performanceMonitor.recordColorSample(performance.now() - startedAt);
+    return true;
+  }
+
+  private consumePendingColorReadback(gl: WebGL2RenderingContext): PickedColor | undefined {
+    const pending = this.pendingColorReadback;
+    if (!pending) return undefined;
+    const status = gl.clientWaitSync(pending.fence, 0, 0);
+    if (status === gl.TIMEOUT_EXPIRED) return undefined;
+    if (status === gl.WAIT_FAILED) {
+      this.discardPendingColorReadback(gl);
+      this.previewSampleBlockedUntil = performance.now() + 50;
+      return undefined;
+    }
+    const rgba = new Uint8Array(4);
+    const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pending.buffer);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, rgba);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, previous);
+    gl.deleteSync(pending.fence);
+    gl.deleteBuffer(pending.buffer);
+    this.pendingColorReadback = undefined;
+    return compositeDisplayedColor(
+      { r: rgba[0], g: rgba[1], b: rgba[2], a: rgba[3] },
+      { r: 23, g: 25, b: 29 },
+      pending.premultipliedAlpha,
+    );
+  }
+
+  private colorFromFramebuffer(gl: WebGL2RenderingContext, rgba: Uint8Array) {
+    return compositeDisplayedColor(
+      { r: rgba[0], g: rgba[1], b: rgba[2], a: rgba[3] },
+      { r: 23, g: 25, b: 29 },
+      Boolean(gl.getContextAttributes()?.premultipliedAlpha),
+    );
+  }
+
+  private discardPendingColorReadback(gl?: WebGL2RenderingContext) {
+    const pending = this.pendingColorReadback;
+    if (!pending || !gl) {
+      this.pendingColorReadback = undefined;
+      return;
+    }
+    gl.deleteSync(pending.fence);
+    gl.deleteBuffer(pending.buffer);
+    this.pendingColorReadback = undefined;
+  }
+
   advanceTextureGeneration() { this.images?.invalidateTextures(); this.textures?.advanceGeneration(); }
 
   destroy() {
+    const gl = (this.app.renderer as typeof this.app.renderer & { gl?: WebGL2RenderingContext }).gl;
+    this.discardPendingColorReadback(gl);
     this.contextDisposer?.();
     this.contextDisposer = undefined;
     this.images?.destroy();
@@ -192,16 +326,14 @@ export class PixiRenderer {
     this.groupResize?.destroy();
     this.textures?.destroy();
     this.groups?.destroy();
-    this.annotations?.destroy();
-    this.comments?.destroy();
+    this.visualNotes?.destroy();
     this.app.destroy({ removeView: true }, { children: true, texture: false, textureSource: false });
     this.images = undefined;
     this.selection = undefined;
     this.groupResize = undefined;
     this.textures = undefined;
     this.groups = undefined;
-    this.annotations = undefined;
-    this.comments = undefined;
+    this.visualNotes = undefined;
     this.layers = undefined;
   }
 

@@ -431,7 +431,7 @@ export async function runProjectZoomBenchmark({
       }
     }
     const migratedScene = await mainWindow.webContents.executeJavaScript('structuredClone(window.__refCanvasPerf.getScene())', true);
-    if (migratedScene.version !== 2) throw new Error(`Renderer did not migrate project to version 2 (got ${migratedScene.version})`);
+    if (migratedScene.version !== 3) throw new Error(`Renderer did not migrate project to version 3 (got ${migratedScene.version})`);
     const migratedPath = path.join(outputDirectory, 'migrated-roundtrip.refcanvas');
     const saveStartedAt = performance.now();
     await writeScenePackage(migratedPath, migratedScene);

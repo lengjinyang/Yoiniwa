@@ -13,7 +13,7 @@ describe('group-aware clipboard', () => {
   it('copies a group frame with selectable cloned members and relationships', () => {
     const scene = createScene(); scene.items = [image('a', 0), image('b', 120)];
     const group = createGroupFrame(scene, [{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }], '参考', 'group');
-    const payload = captureSceneSelection(scene, [], [], group.id)!;
+    const payload = captureSceneSelection(scene, [], group.id)!;
     const pasted = pasteScenePayload(scene, payload, 30);
     const cloned = scene.groups.find((value) => value.id === pasted.rootGroupId)!;
     expect(cloned).toBeTruthy(); expect(cloned.id).not.toBe(group.id);
@@ -24,7 +24,7 @@ describe('group-aware clipboard', () => {
   it('deep-copies tags with clipboard payloads', () => {
     const scene = createScene();
     scene.items = [{ ...image('a', 0), tags: ['角色'] }];
-    const payload = captureSceneSelection(scene, ['a'], [])!;
+    const payload = captureSceneSelection(scene, ['a'])!;
     payload.items[0].tags!.push('草图');
     expect(scene.items[0].tags).toEqual(['角色']);
     pasteScenePayload(scene, payload, 30);
@@ -34,7 +34,7 @@ describe('group-aware clipboard', () => {
 
   it('centers pasted content on an explicit mouse world position', () => {
     const scene = createScene(); scene.items = [image('a', 0), image('b', 120)];
-    const payload = captureSceneSelection(scene, ['a', 'b'], [])!;
+    const payload = captureSceneSelection(scene, ['a', 'b'])!;
     const pasted = pasteScenePayload(scene, payload, { x: 500, y: 300 });
     const pastedIds = new Set<string>(pasted.imageIds);
     const copies = scene.items.filter((item) => pastedIds.has(item.id));

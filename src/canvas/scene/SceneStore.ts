@@ -1,15 +1,16 @@
-import type { AnnotationItem, ImageGroup, ImageItem, Scene } from '../../types';
+import type { ImageGroup, ImageItem, Scene, VisualNotesState } from '../../types';
 import type { SceneNode } from './SceneNode';
 import { SpatialIndex } from './SpatialIndex';
 import { fitAutoGroupsToContents } from '../../scene';
+import { moveSceneMark } from '../../visualNotes/VisualNoteGeometry';
 
 export class SceneStore {
   private scene: Scene;
   private readonly nodes = new Map<string, SceneNode>();
   private readonly spatial = new SpatialIndex();
   private hiddenImages = new Set<string>();
-  private hiddenAnnotations = new Set<string>();
   private hiddenGroups = new Set<string>();
+  private hiddenMarks = new Set<string>();
 
   constructor(scene: Scene) {
     this.scene = scene;
@@ -25,12 +26,14 @@ export class SceneStore {
   node(id: string) { return this.nodes.get(id); }
   images() { return this.scene.items.map((item) => this.hiddenImages.has(item.id) ? { ...item, hidden: true } : item).sort((a, b) => a.zIndex - b.zIndex); }
   groups() { return this.scene.groups.map((group) => this.hiddenGroups.has(group.id) ? { ...group, hidden: true } : group); }
-  annotations() { return this.scene.annotations.map((item) => this.hiddenAnnotations.has(item.id) ? { ...item, hidden: true } : item); }
   renderScene(): Scene {
     return { ...this.scene,
       items: this.scene.items.map((item) => this.hiddenImages.has(item.id) ? { ...item, hidden: true } : item),
-      annotations: this.scene.annotations.map((item) => this.hiddenAnnotations.has(item.id) ? { ...item, hidden: true } : item),
       groups: this.scene.groups.map((group) => this.hiddenGroups.has(group.id) ? { ...group, hidden: true } : group),
+      visualNotes: {
+        ...this.scene.visualNotes,
+        marks: this.scene.visualNotes.marks.filter((mark) => !this.hiddenMarks.has(mark.id)),
+      },
     };
   }
   queryImages(bounds: { x: number; y: number; width: number; height: number }) {
@@ -54,40 +57,31 @@ export class SceneStore {
     this.rebuildIndex();
   }
 
-  previewAnnotationMove(ids: string[], deltaX: number, deltaY: number) {
-    const selected = new Set(ids);
-    const next: Scene = { ...this.scene, groups: this.cloneGroups(), annotations: this.scene.annotations.map((annotation) => {
-      if (!selected.has(annotation.id)) return annotation;
-      if (annotation.points) return { ...annotation, points: annotation.points.map((value, index) => value + (index % 2 ? deltaY : deltaX)) };
-      return { ...annotation, x: (annotation.x ?? 0) + deltaX, y: (annotation.y ?? 0) + deltaY };
-    }) };
-    fitAutoGroupsToContents(next);
-    this.scene = next;
-    this.rebuildIndex();
+  previewVisualNotes(visualNotes: VisualNotesState) {
+    this.scene = { ...this.scene, visualNotes };
   }
 
   previewGroupMove(id: string, deltaX: number, deltaY: number) {
-    const groupIds = new Set<string>(); const imageIds = new Set<string>(); const annotationIds = new Set<string>();
+    const groupIds = new Set<string>(); const imageIds = new Set<string>(); const markIds = new Set<string>();
     const collect = (groupId: string) => {
       if (groupIds.has(groupId)) return;
       groupIds.add(groupId);
       this.scene.groups.find((group) => group.id === groupId)?.members.forEach((member) => {
         if (member.type === 'image') imageIds.add(member.id);
-        else if (member.type === 'annotation') annotationIds.add(member.id);
         else if (member.type === 'group') collect(member.id);
+        else if (member.type === 'mark') markIds.add(member.id);
       });
     };
     collect(id);
     const next: Scene = {
       ...this.scene,
       items: this.scene.items.map((item) => imageIds.has(item.id) ? { ...item, x: item.x + deltaX, y: item.y + deltaY } : item),
-      annotations: this.scene.annotations.map((annotation) => {
-        if (!annotationIds.has(annotation.id)) return annotation;
-        if (annotation.points) return { ...annotation, points: annotation.points.map((value, index) => value + (index % 2 ? deltaY : deltaX)) };
-        return { ...annotation, x: (annotation.x ?? 0) + deltaX, y: (annotation.y ?? 0) + deltaY };
-      }),
       groups: this.scene.groups.map((group) => ({ ...group, members: group.members.map((member) => ({ ...member })),
         ...(groupIds.has(group.id) ? { x: group.x + deltaX, y: group.y + deltaY } : {}) })),
+      visualNotes: {
+        ...this.scene.visualNotes,
+        marks: this.scene.visualNotes.marks.map((mark) => markIds.has(mark.id) ? moveSceneMark(mark, deltaX, deltaY) : mark),
+      },
     };
     fitAutoGroupsToContents(next);
     this.scene = next;
@@ -113,16 +107,15 @@ export class SceneStore {
     this.nodes.clear();
     this.scene.items.forEach((value: ImageItem) => this.nodes.set(value.id, { kind: 'image', id: value.id, value }));
     this.scene.groups.forEach((value: ImageGroup) => this.nodes.set(value.id, { kind: 'group', id: value.id, value }));
-    this.scene.annotations.forEach((value: AnnotationItem) => this.nodes.set(value.id, { kind: 'annotation', id: value.id, value }));
-    this.hiddenImages = new Set(); this.hiddenAnnotations = new Set(); this.hiddenGroups = new Set();
+    this.hiddenImages = new Set(); this.hiddenGroups = new Set(); this.hiddenMarks = new Set();
     const visited = new Set<string>();
     const hideMembers = (groupId: string) => {
       if (visited.has(groupId)) return;
       visited.add(groupId);
       this.scene.groups.find((group) => group.id === groupId)?.members.forEach((member) => {
         if (member.type === 'image') this.hiddenImages.add(member.id);
-        else if (member.type === 'annotation') this.hiddenAnnotations.add(member.id);
         else if (member.type === 'group') { this.hiddenGroups.add(member.id); hideMembers(member.id); }
+        else if (member.type === 'mark') this.hiddenMarks.add(member.id);
       });
     };
     this.scene.groups.filter((group) => group.hidden || group.contentsHidden || group.collapsed).forEach((group) => hideMembers(group.id));

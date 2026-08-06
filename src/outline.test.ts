@@ -16,10 +16,10 @@ const group: ImageGroup = {
 };
 
 describe('outline filters', () => {
-  it('searches names, comments, and tags', () => {
-    const value = { ...image('image', ['Environment']), comment: '远景' };
+  it('searches names and tags', () => {
+    const value = image('image', ['Environment']);
     expect(outlineObjectMatches(value, 'image', { query: 'environment' })).toBe(true);
-    expect(outlineObjectMatches(value, 'image', { query: '远景' })).toBe(true);
+    expect(outlineObjectMatches(value, 'image', { query: '城市' })).toBe(true);
   });
 
   it('supports ANY and ALL tag filters', () => {

@@ -1,9 +1,8 @@
 import { Container, Graphics, type Container as PixiContainer } from 'pixi.js';
+import { UI_ICON_PATHS } from '../../app/icons/uiIconPaths';
 import type { ImageGroup, Viewport } from '../../types';
 import {
   GROUP_HEADER_ACTION_SCREEN_WIDTH,
-  GROUP_MORE_ICON_DOT_RADIUS,
-  GROUP_MORE_ICON_DOT_SPACING,
   GROUP_MORE_ICON_RIGHT_INSET,
   GROUP_TITLE_SCREEN_FONT_SIZE,
   GROUP_TITLE_SCREEN_LINE_HEIGHT,
@@ -22,8 +21,8 @@ interface GroupObject {
   title: HTMLSpanElement;
   dropHint: HTMLSpanElement;
   colorMark: Graphics;
-  more: Graphics;
-  expand: Graphics;
+  more: SVGSVGElement;
+  expand: SVGSVGElement;
   actionState: Graphics;
   destroy(): void;
 }
@@ -38,6 +37,18 @@ function darkenGroupColor(color: string, ratio: number) {
   const value = /^#[0-9a-f]{6}$/i.test(color) ? color.slice(1) : '536778';
   const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
   return (channels.reduce((result, channel) => (result << 8) | Math.round(channel * (1 - ratio)), 0)) >>> 0;
+}
+
+function createHeaderIcon(pathData: string) {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const icon = document.createElementNS(namespace, 'svg');
+  icon.classList.add('group-header-icon');
+  icon.setAttribute('viewBox', '0 0 16 16');
+  icon.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(namespace, 'path');
+  path.setAttribute('d', pathData);
+  icon.appendChild(path);
+  return icon;
 }
 
 export class GroupRenderer {
@@ -84,12 +95,16 @@ export class GroupRenderer {
         dropHint.textContent = '释放以加入组';
         this.titleLayer.appendChild(dropHint);
         const colorMark = new Graphics({ roundPixels: true });
-        const more = new Graphics({ roundPixels: true });
-        const expand = new Graphics({ roundPixels: true });
+        const more = createHeaderIcon(UI_ICON_PATHS.moreHorizontal);
+        more.classList.add('group-header-more-icon');
+        this.titleLayer.appendChild(more);
+        const expand = createHeaderIcon(UI_ICON_PATHS.chevronDown);
+        expand.classList.add('group-header-expand-icon');
+        this.titleLayer.appendChild(expand);
         const actionState = new Graphics({ roundPixels: true });
-        header.addChild(actionState, colorMark, more, expand);
+        header.addChild(actionState, colorMark);
         object = { body, header, headerBackground, title, dropHint, actionState, colorMark, more, expand,
-          destroy() { title.remove(); dropHint.remove(); body.destroy(); headerBackground.destroy(); header.destroy({ children: true }); } };
+          destroy() { title.remove(); dropHint.remove(); more.remove(); expand.remove(); body.destroy(); headerBackground.destroy(); header.destroy({ children: true }); } };
         this.objects.set(group.id, object);
         this.bodyLayer.addChild(body);
         this.headerSurfaceLayer.addChild(headerBackground);
@@ -215,27 +230,26 @@ export class GroupRenderer {
     object.colorMark.clear().roundRect(4, 3, 3, Math.max(8, headerHeight - 6), 1.5)
       .fill({ color: group.color, alpha: 1 });
     object.colorMark.visible = headerWidth >= 8;
-    object.more.clear();
-    if (hovered || selected) {
-      const iconColor = 0xa4aeba;
-      const iconAlpha = hoveredAction === 'more' ? 0.96 : 0.68;
-      [-GROUP_MORE_ICON_DOT_SPACING, 0, GROUP_MORE_ICON_DOT_SPACING]
-        .forEach((offset) => object.more.circle(moreX + offset, actionY, GROUP_MORE_ICON_DOT_RADIUS)
-        .fill({ color: iconColor, alpha: iconAlpha }));
-    }
-    object.more.visible = headerWidth >= (group.collapsed ? 44 : 24) && !dropTarget && (hovered || selected);
-    object.expand.clear();
-    if (group.collapsed) object.expand.moveTo(expandX - 3.25, actionY - 1.75)
-      .lineTo(expandX, actionY + 1.75).lineTo(expandX + 3.25, actionY - 1.75)
-      .stroke({ color: 0x73a0d8, width: 1.15,
-        alpha: hoveredAction === 'expand' ? 0.92 : 0.68, cap: 'round', join: 'round' });
-    object.expand.visible = group.collapsed && headerWidth >= 24 && !dropTarget;
+    object.more.style.color = '#a4aeba';
+    object.more.style.opacity = String(hoveredAction === 'more' ? 0.96 : 0.68);
+    object.more.style.display = !group.hidden && headerWidth >= (group.collapsed ? 44 : 24)
+      && !dropTarget && (hovered || selected) ? '' : 'none';
+    object.expand.style.color = '#73a0d8';
+    object.expand.style.opacity = String(hoveredAction === 'expand' ? 0.92 : 0.68);
+    object.expand.style.display = !group.hidden && group.collapsed && headerWidth >= 24 && !dropTarget ? '' : 'none';
+    this.positionHeaderIcons(object, group, moreX, expandX, actionY);
   }
 
   private positionTitles() {
     this.groups.forEach((group) => {
       const object = this.objects.get(group.id);
-      if (object) this.positionDom(object, group);
+      if (!object) return;
+      this.positionDom(object, group);
+      const headerWidth = groupHeaderScreenWidth(group, this.scale);
+      const expandX = headerWidth - GROUP_HEADER_ACTION_SCREEN_WIDTH * 0.5;
+      const moreX = headerWidth - GROUP_MORE_ICON_RIGHT_INSET
+        - (group.collapsed ? GROUP_HEADER_ACTION_SCREEN_WIDTH : 0);
+      this.positionHeaderIcons(object, group, moreX, expandX, groupHeaderScreenHeight(this.scale) / 2);
     });
   }
 
@@ -247,5 +261,14 @@ export class GroupRenderer {
       + (groupHeaderScreenHeight(this.scale) - GROUP_TITLE_SCREEN_LINE_HEIGHT) / 2;
     object.title.style.transform = `translate3d(${snap(x)}px, ${snap(y)}px, 0)`;
     object.dropHint.style.transform = `translate3d(${snap(this.viewport.x + (group.x + group.width / 2) * this.scale)}px, ${snap(this.viewport.y + (group.y + group.height / 2) * this.scale)}px, 0) translate(-50%, -50%)`;
+  }
+
+  private positionHeaderIcons(object: GroupObject, group: ImageGroup, moreX: number, expandX: number, actionY: number) {
+    const dpr = Math.max(1, globalThis.devicePixelRatio || 1);
+    const snap = (value: number) => Math.round(value * dpr) / dpr;
+    const originX = this.viewport.x + group.x * this.scale;
+    const originY = this.viewport.y + groupHeaderWorldY(group, this.scale) * this.scale;
+    object.more.style.transform = `translate3d(${snap(originX + moreX - 8)}px, ${snap(originY + actionY - 8)}px, 0)`;
+    object.expand.style.transform = `translate3d(${snap(originX + expandX - 8)}px, ${snap(originY + actionY - 8)}px, 0)`;
   }
 }

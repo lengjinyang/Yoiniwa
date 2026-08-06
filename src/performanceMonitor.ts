@@ -27,6 +27,7 @@ export interface PerformanceSnapshot {
   reactRendersPerSecond: number;
   spatialQueryMs: number;
   imageDecodeMs: number;
+  colorSampleMs: number;
   thumbnailMs: number;
   thumbnailCount: number;
   thumbnailFailures: number;
@@ -58,6 +59,7 @@ class PerformanceMonitor {
   private cpuFrames: number[] = [];
   private spatialQueries: number[] = [];
   private imageDecodes: number[] = [];
+  private colorSamples: number[] = [];
   private pointerMoves = 0;
   private reactRenders = 0;
   private lastRateAt = performance.now();
@@ -130,6 +132,10 @@ class PerformanceMonitor {
     if (!this.active) return;
     this.imageDecodes.push(durationMs); trim(this.imageDecodes);
   }
+  recordColorSample(durationMs: number) {
+    if (!this.active) return;
+    this.colorSamples.push(durationMs); trim(this.colorSamples);
+  }
   setSceneCounts(visibleImages: number, totalImages: number, backend: string) {
     if (!this.active) return;
     this.visibleImages = visibleImages;
@@ -176,6 +182,7 @@ class PerformanceMonitor {
       reactRendersPerSecond: this.reactRate,
       spatialQueryMs: mean(this.spatialQueries),
       imageDecodeMs: mean(this.imageDecodes),
+      colorSampleMs: mean(this.colorSamples),
       thumbnailMs: this.pipelineStats.thumbnailCount ? this.pipelineStats.thumbnailMs / this.pipelineStats.thumbnailCount : 0,
       thumbnailCount: this.pipelineStats.thumbnailCount,
       thumbnailFailures: this.pipelineStats.thumbnailFailures,

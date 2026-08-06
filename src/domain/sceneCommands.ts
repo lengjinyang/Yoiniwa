@@ -4,17 +4,16 @@ import type { ImageItem, Scene } from '../types';
 
 export type ImageChange = Partial<ImageItem> & { id: string };
 
-export function deleteSceneSelection(scene: Scene, imageIds: readonly string[], annotationIds: readonly string[]) {
+export function deleteSceneSelection(scene: Scene, imageIds: readonly string[]) {
   const images = new Set(imageIds);
-  const annotations = new Set(annotationIds);
+  const removedMarkIds = new Set(scene.visualNotes.marks
+    .filter((mark) => mark.anchor.type === 'image' && images.has(mark.anchor.imageId))
+    .map((mark) => mark.id));
   scene.items = normalizeZIndexes(scene.items.filter((item) => !images.has(item.id)));
-  scene.annotations = scene.annotations.filter((annotation) => !annotations.has(annotation.id));
+  scene.visualNotes.marks = scene.visualNotes.marks.filter((mark) => !removedMarkIds.has(mark.id));
   scene.groups.forEach((group) => {
-    group.members = group.members.filter((member) => (
-      member.type !== 'image' || !images.has(member.id)
-    ) && (
-      member.type !== 'annotation' || !annotations.has(member.id)
-    ));
+    group.members = group.members.filter((member) => (member.type !== 'image' || !images.has(member.id))
+      && (member.type !== 'mark' || !removedMarkIds.has(member.id)));
     if (group.detachedImageIds) {
       group.detachedImageIds = group.detachedImageIds.filter((id) => !images.has(id));
       if (!group.detachedImageIds.length) delete group.detachedImageIds;

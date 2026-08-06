@@ -1,5 +1,6 @@
 import { groupVisibleBounds, GROUP_TITLE_HEIGHT } from '../scene';
-import type { AnnotationItem, ImageGroup, ImageItem } from '../types';
+import type { ImageGroup, ImageItem, VisualNotesState } from '../types';
+import { markWorldPoints } from '../visualNotes/VisualNoteGeometry';
 
 interface ExportImage extends ImageItem { resourceUrl: string }
 interface ExportRequest {
@@ -11,40 +12,39 @@ interface ExportRequest {
   background?: string;
   backgroundOpacity?: number;
   items: ExportImage[];
-  annotations: AnnotationItem[];
   groups: ImageGroup[];
+  visualNotes?: VisualNotesState;
 }
 
-function drawAnnotation(context: OffscreenCanvasRenderingContext2D, annotation: AnnotationItem) {
-  context.save();
-  context.strokeStyle = annotation.color;
-  context.fillStyle = annotation.color;
-  context.globalAlpha = annotation.opacity ?? 1;
-  context.lineWidth = annotation.strokeWidth;
-  context.lineCap = 'round';
-  context.lineJoin = 'round';
-  if (annotation.type === 'pen' && annotation.points?.length) {
-    context.beginPath(); context.moveTo(annotation.points[0], annotation.points[1]);
-    for (let index = 2; index < annotation.points.length; index += 2) context.lineTo(annotation.points[index], annotation.points[index + 1]);
-    context.stroke();
-  } else if (annotation.type === 'arrow' && annotation.points?.length === 4) {
-    const [x1, y1, x2, y2] = annotation.points;
-    context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2); context.stroke();
-    const angle = Math.atan2(y2 - y1, x2 - x1);
-    const length = annotation.strokeWidth * 4;
-    context.beginPath(); context.moveTo(x2, y2);
-    context.lineTo(x2 - length * Math.cos(angle - Math.PI / 6), y2 - length * Math.sin(angle - Math.PI / 6));
-    context.lineTo(x2 - length * Math.cos(angle + Math.PI / 6), y2 - length * Math.sin(angle + Math.PI / 6));
-    context.closePath(); context.fill();
-  } else if (annotation.type === 'rectangle') {
-    context.strokeRect(annotation.x ?? 0, annotation.y ?? 0, annotation.width ?? 0, annotation.height ?? 0);
-  } else if (annotation.type === 'ellipse') {
-    context.beginPath();
-    context.ellipse((annotation.x ?? 0) + (annotation.width ?? 0) / 2, (annotation.y ?? 0) + (annotation.height ?? 0) / 2,
-      (annotation.width ?? 0) / 2, (annotation.height ?? 0) / 2, 0, 0, Math.PI * 2);
-    context.stroke();
+function drawVisualNotes(context: OffscreenCanvasRenderingContext2D, request: ExportRequest) {
+  const notes = request.visualNotes;
+  if (!notes?.visible) return;
+  for (const mark of notes.marks) {
+    const points = markWorldPoints(mark, request.items);
+    if (!points.length) continue;
+    context.save(); context.globalAlpha = mark.style.opacity; context.strokeStyle = mark.style.color;
+    context.fillStyle = mark.style.color; context.lineCap = 'round'; context.lineJoin = 'round';
+    if (mark.kind === 'stroke') {
+      for (let index = 1; index < points.length; index += 1) {
+        context.beginPath(); context.lineWidth = mark.style.baseWidth * (points[index - 1].widthFactor + points[index].widthFactor) / 2;
+        context.moveTo(points[index - 1].x, points[index - 1].y); context.lineTo(points[index].x, points[index].y); context.stroke();
+      }
+    } else if (mark.kind === 'arrow') {
+      const [start, end] = points; const angle = Math.atan2(end.y - start.y, end.x - start.x);
+      const head = Math.max(9, Math.min(24, mark.style.baseWidth * 4));
+      context.lineWidth = mark.style.baseWidth; context.beginPath(); context.moveTo(start.x, start.y); context.lineTo(end.x, end.y); context.stroke();
+      context.beginPath(); context.moveTo(end.x, end.y);
+      context.lineTo(end.x - Math.cos(angle - Math.PI / 6) * head, end.y - Math.sin(angle - Math.PI / 6) * head);
+      context.lineTo(end.x - Math.cos(angle + Math.PI / 6) * head, end.y - Math.sin(angle + Math.PI / 6) * head);
+      context.closePath(); context.fill();
+    } else {
+      const point = points[0]; const radius = 12;
+      context.beginPath(); context.arc(point.x, point.y, radius, 0, Math.PI * 2); context.fill();
+      context.globalAlpha = 1; context.fillStyle = '#17191c'; context.font = '600 12px "Segoe UI", sans-serif';
+      context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(String(mark.number), point.x, point.y);
+    }
+    context.restore();
   }
-  context.restore();
 }
 
 async function render(request: ExportRequest) {
@@ -78,7 +78,7 @@ async function render(request: ExportRequest) {
       context.restore();
     } finally { bitmap.close(); }
   }
-  request.annotations.forEach((annotation) => drawAnnotation(context, annotation));
+  drawVisualNotes(context, request);
   for (const group of request.groups) {
     const bounds = groupVisibleBounds(group);
     const headerY = group.y - GROUP_TITLE_HEIGHT;

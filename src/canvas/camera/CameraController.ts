@@ -14,13 +14,13 @@ export class CameraController {
     private readonly camera: Camera,
     private readonly lifecycle: RuntimeLifecycle,
     private readonly changed: (committed: boolean) => void,
-    private readonly interactionBlocked: () => boolean = () => false,
+    private readonly interactionBlocked: (event: PointerEvent) => boolean = () => false,
   ) {}
 
   start() {
     const down = (event: PointerEvent) => {
       if (event.button !== 1 && !(event.button === 0 && event.altKey)) return;
-      if (event.button === 0 && this.interactionBlocked()) return;
+      if (event.button === 0 && this.interactionBlocked(event)) return;
       this.pointerId = event.pointerId;
       this.last = { x: event.clientX, y: event.clientY };
       try { this.element.setPointerCapture(event.pointerId); } catch { /* Synthetic benchmark events have no native capture target. */ }

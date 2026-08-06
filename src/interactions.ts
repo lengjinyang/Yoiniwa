@@ -36,8 +36,16 @@ export function matchesColorPickerShortcut(shortcut: ColorPickerShortcut, event:
   return !event.altKey && (event.key.toLowerCase() === 's' || event.code === 'KeyS');
 }
 
-export function isAltColorPickerPointer(shortcut: ColorPickerShortcut, event: PointerModifiers & { button: number }) {
-  return shortcut === 'alt' && event.button === 0 && event.altKey && !event.ctrlKey && !event.shiftKey;
+export function isAltColorPickerPointer(
+  shortcut: ColorPickerShortcut,
+  event: PointerModifiers & { button: number; buttons?: number; pointerType?: string },
+) {
+  const buttons = event.buttons ?? (event.button === 0 ? 1 : 0);
+  const penTip = event.pointerType === 'pen'
+    && (event.button === 0 || (event.button === -1 && (buttons & 1) !== 0))
+    && (buttons & ~1) === 0;
+  const primaryContact = event.pointerType === 'pen' ? penTip : event.button === 0;
+  return shortcut === 'alt' && primaryContact && event.altKey && !event.ctrlKey && !event.shiftKey;
 }
 
 export function getImageDragMode(modifiers: PointerModifiers): ImageDragMode {

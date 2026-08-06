@@ -1,4 +1,4 @@
-import type { Scene, Viewport } from '../../types';
+import type { Scene, Viewport, VisualNotesState } from '../../types';
 import { Camera } from '../camera/Camera';
 import { CameraController } from '../camera/CameraController';
 import { PixiRenderer } from '../renderer/PixiRenderer';
@@ -7,16 +7,17 @@ import { RuntimeLifecycle } from './RuntimeLifecycle';
 import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
 import { SelectionController } from '../selection/SelectionController';
-import type { AnnotationItem, ImageItem, PickedColor } from '../../types';
+import type { ImageItem, PickedColor } from '../../types';
 import { ImageTransformCommand } from '../commands/ImageTransformCommand';
 import { PREFETCH_VIEWPORT_MARGIN } from '../textures/TextureConfig';
 import { performanceMonitor } from '../../performanceMonitor';
-import { AnnotationToolController, type AnnotationToolState, type EraserSample } from '../interaction/AnnotationToolController';
 import { ColorPickerController } from '../interaction/ColorPickerController';
 import { groupHeaderActionAtPoint, groupHeaderAtPoint, topmostImageAtPoint } from '../selection/HitTestService';
 import { WindowMoveController } from '../interaction/WindowMoveController';
 import type { GroupFrameBounds } from '../selection/GroupResizeController';
 import { groupHeaderScreenWidth, groupHeaderWorldY } from '../groups/GroupPresentation';
+import { VisualNotesController, type VisualNotesToolState } from '../interaction/VisualNotesController';
+import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../interactions';
 
 export interface CanvasRuntimeOptions {
   background: string;
@@ -24,13 +25,10 @@ export interface CanvasRuntimeOptions {
   viewport: Viewport;
   onViewportCommit?(viewport: Viewport): void;
   selectedIds?: string[];
-  selectedAnnotationIds?: string[];
   selectedGroupId?: string;
   onSelectionChange?(ids: string[]): void;
-  onAnnotationSelectionChange?(ids: string[]): void;
   onGroupSelectionChange?(id?: string): void;
   onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>): void;
-  onAnnotationsChanged?(changes: Array<{ id: string; deltaX: number; deltaY: number }>): void;
   onGroupMoved?(id: string, deltaX: number, deltaY: number): void;
   onGroupResized?(id: string, bounds: GroupFrameBounds): void;
   onRenameGroup?(id: string): void;
@@ -39,15 +37,16 @@ export interface CanvasRuntimeOptions {
   onGroupPreviewAnchor?(id: string, position: { x: number; y: number }): void;
   onFocusItem?(item: ImageItem): void;
   onContextMenu?(position: { x: number; y: number }): void;
-  annotationState?: AnnotationToolState;
   colorPickerHeld?: boolean;
+  colorPickerShortcut?: ColorPickerShortcut;
   onColorPicked?(color: PickedColor): void;
-  onAddAnnotation?(annotation: AnnotationItem): void;
-  onErase?(samples: readonly EraserSample[]): void;
   windowLocked?: boolean;
   onWindowMoveStart?(): void;
   onWindowMove?(): void;
   onWindowMoveEnd?(): void;
+  visualNotesState?: VisualNotesToolState;
+  onVisualNotesChanged?(notes: VisualNotesState): void;
+  onVisualNoteSelectionChange?(id?: string): void;
 }
 
 export class CanvasRuntime {
@@ -60,15 +59,27 @@ export class CanvasRuntime {
   private selectionController?: SelectionController;
   private projectEpoch = 0;
   private cameraChangedAt = 0;
-  private annotationState: AnnotationToolState;
   private colorPickerHeld = false;
+  private colorPickerShortcut: ColorPickerShortcut = 'alt';
+  private altPointerArmed = false;
   private windowLocked = false;
+  private visualNotesController?: VisualNotesController;
+  private visualNotesState: VisualNotesToolState;
+  private colorPickerHud?: HTMLDivElement;
+  private colorPickerReticle?: HTMLDivElement;
+  private colorPickerSwatch?: HTMLDivElement;
+  private colorPickerHex?: HTMLElement;
+  private colorPickerRgb?: HTMLElement;
+  private colorPickerSampling = false;
+  private colorPickerPoint?: { x: number; y: number };
+  private colorPickerColor?: PickedColor;
 
   constructor(private readonly container: HTMLElement, private readonly options: CanvasRuntimeOptions) {
     this.camera = new Camera(options.viewport);
-    this.annotationState = options.annotationState ?? { enabled: false, tool: 'pen', color: '#ffcc00', opacity: 1, width: 4 };
     this.colorPickerHeld = Boolean(options.colorPickerHeld);
+    this.colorPickerShortcut = options.colorPickerShortcut ?? 'alt';
     this.windowLocked = Boolean(options.windowLocked);
+    this.visualNotesState = options.visualNotesState ?? { enabled: false, tool: 'brush', color: '#c6a15b', opacity: 0.82, width: 'medium', pressureEnabled: true, eraserSize: 'medium', selectedMarkId: undefined };
   }
 
   async start() {
@@ -79,6 +90,35 @@ export class CanvasRuntime {
       this.renderer.destroy();
       return;
     }
+    this.createColorPickerHud();
+    const armAltFromPointer = (event: PointerEvent) => {
+      if (event.type === 'pointerenter') this.altPointerArmed = event.altKey;
+      else if (event.altKey) this.altPointerArmed = true;
+      if (event.pointerType === 'pen' && event.buttons === 0 && !this.colorPickerSampling) {
+        if (this.colorPickerHeld || event.altKey || this.altPointerArmed) {
+          const bounds = this.container.getBoundingClientRect();
+          this.showColorPickerHover({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+        } else this.showColorPickerHover();
+      }
+    };
+    const hideAltHover = () => { if (!this.colorPickerSampling) this.showColorPickerHover(); };
+    const updateAltFromKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt' && event.code !== 'AltLeft' && event.code !== 'AltRight') return;
+      this.altPointerArmed = event.type === 'keydown';
+      if (event.type === 'keyup') hideAltHover();
+    };
+    this.container.addEventListener('pointerenter', armAltFromPointer, true);
+    this.container.addEventListener('pointermove', armAltFromPointer, true);
+    this.container.addEventListener('pointerleave', hideAltHover, true);
+    window.addEventListener('keydown', updateAltFromKeyboard, true);
+    window.addEventListener('keyup', updateAltFromKeyboard, true);
+    this.lifecycle.add(() => {
+      this.container.removeEventListener('pointerenter', armAltFromPointer, true);
+      this.container.removeEventListener('pointermove', armAltFromPointer, true);
+      this.container.removeEventListener('pointerleave', hideAltHover, true);
+      window.removeEventListener('keydown', updateAltFromKeyboard, true);
+      window.removeEventListener('keyup', updateAltFromKeyboard, true);
+    });
     const input = new InputRouter(this.container, this.lifecycle);
     const cameraController = new CameraController(this.container, input, this.camera, this.lifecycle, (committed) => {
       this.cameraChangedAt = performance.now();
@@ -87,7 +127,7 @@ export class CanvasRuntime {
       this.scheduleRender();
       this.selectionController?.refresh();
       if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
-    }, () => this.colorPickerHeld);
+    }, (event) => this.isColorPickerPointer(event));
     cameraController.start();
     this.selectionController = new SelectionController({
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
@@ -108,14 +148,7 @@ export class CanvasRuntime {
         this.options.onItemsChanged?.(changes);
       },
       selectionChanged: (ids) => { this.renderer.setSelectedImageCount(ids.length); this.options.onSelectionChange?.(ids); },
-      annotationSelectionChanged: (ids) => this.options.onAnnotationSelectionChange?.(ids),
       groupSelectionChanged: (id) => { this.renderer.setSelectedGroup(id); this.options.onGroupSelectionChange?.(id); },
-      previewAnnotation: (ids, deltaX, deltaY) => {
-        this.sceneStore?.previewAnnotationMove(ids, deltaX, deltaY);
-        if (this.sceneStore) this.renderer.setScene(this.sceneStore.renderScene());
-        this.scheduleRender();
-      },
-      commitAnnotation: (ids, deltaX, deltaY) => this.options.onAnnotationsChanged?.(ids.map((id) => ({ id, deltaX, deltaY }))),
       previewGroup: (id, deltaX, deltaY) => {
         this.sceneStore?.previewGroupMove(id, deltaX, deltaY);
         if (this.sceneStore) this.renderer.setScene(this.sceneStore.renderScene());
@@ -138,7 +171,7 @@ export class CanvasRuntime {
       drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
-      interactionBlocked: () => this.annotationState.enabled || this.colorPickerHeld,
+      interactionBlocked: () => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked,
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
         if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
@@ -147,19 +180,39 @@ export class CanvasRuntime {
     this.selectionController.start();
     this.selectionController.setSelection(this.options.selectedIds ?? []);
     this.renderer.setSelectedImageCount(this.options.selectedIds?.length ?? 0);
-    this.selectionController.setAnnotationSelection(this.options.selectedAnnotationIds ?? []);
     this.selectionController.setGroupSelection(this.options.selectedGroupId);
     this.renderer.setSelectedGroup(this.options.selectedGroupId);
-    const annotationTools = new AnnotationToolController({
+    this.visualNotesController = new VisualNotesController({
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
-      layer: this.renderer.annotationLayer(), state: () => this.annotationState,
-      add: (annotation) => this.options.onAddAnnotation?.(annotation),
-      erase: (samples) => this.options.onErase?.(samples), requestRender: () => this.scheduleRender(),
+      scene: () => this.sceneStore, state: () => this.visualNotesState,
+      preview: (mark) => { this.renderer.setVisualNotePreview(mark); this.scheduleRender(); },
+      previewErase: (notes) => {
+        if (!this.sceneStore) return;
+        this.sceneStore.previewVisualNotes(notes);
+        this.renderer.previewVisualNotes(notes, this.sceneStore.images());
+        this.scheduleRender();
+      },
+      eraserCursor: (point, radiusScreen) => {
+        this.renderer.setVisualNoteEraserCursor(point, radiusScreen);
+        this.scheduleRender();
+      },
+      commit: (notes) => {
+        const current = this.sceneStore?.snapshot();
+        if (current) {
+          const next = { ...current, visualNotes: notes };
+          this.sceneStore?.replace(next); this.renderer.setScene(this.sceneStore?.renderScene() ?? next);
+        }
+        this.options.onVisualNotesChanged?.(notes);
+      },
+      selectionChanged: (id) => { this.renderer.setSelectedVisualNote(id); this.options.onVisualNoteSelectionChange?.(id); },
     });
-    annotationTools.start();
+    this.visualNotesController.start();
     const picker = new ColorPickerController({
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
-      scene: () => this.sceneStore, enabled: () => this.colorPickerHeld,
+      scene: () => this.sceneStore, enabled: (event) => this.isColorPickerPointer(event),
+      sample: (point, final) => this.renderer.sampleColor(point, final),
+      position: (point) => this.positionColorPickerPreview(point),
+      preview: (color) => this.updateColorPickerPreview(color),
       picked: (color) => this.options.onColorPicked?.(color),
     });
     picker.start();
@@ -168,22 +221,35 @@ export class CanvasRuntime {
       begin: () => this.options.onWindowMoveStart?.(), move: () => this.options.onWindowMove?.(), end: () => this.options.onWindowMoveEnd?.(),
     }).startListening();
     const disposeContext = input.onContextMenu((event) => {
+      if (this.windowLocked) {
+        this.options.onContextMenu?.({ x: event.clientX, y: event.clientY });
+        return;
+      }
       const bounds = this.container.getBoundingClientRect();
       const point = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
       const group = groupHeaderAtPoint(this.sceneStore?.groups() ?? [], point, this.camera.snapshot().scale);
       if (group) {
         this.selectionController?.setSelection([]);
-        this.selectionController?.setAnnotationSelection([]);
         this.selectionController?.setGroupSelection(group.id);
         this.renderer.setSelectedImageCount(0);
         this.renderer.setSelectedGroup(group.id);
         this.options.onSelectionChange?.([]);
-        this.options.onAnnotationSelectionChange?.([]);
         this.options.onGroupSelectionChange?.(group.id);
+      } else {
+        const image = topmostImageAtPoint(this.sceneStore?.images() ?? [], point);
+        if (image) {
+          this.selectionController?.setGroupSelection(undefined);
+          this.selectionController?.setSelection([image.id]);
+          this.renderer.setSelectedGroup(undefined);
+          this.renderer.setSelectedImageCount(1);
+          this.options.onGroupSelectionChange?.(undefined);
+          this.options.onSelectionChange?.([image.id]);
+        }
       }
       this.options.onContextMenu?.({ x: event.clientX, y: event.clientY });
     });
     const disposeDouble = input.onDoubleClick((event) => {
+      if (this.windowLocked) return;
       const bounds = this.container.getBoundingClientRect();
       const point = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
       const group = groupHeaderAtPoint(this.sceneStore?.groups() ?? [], point, this.camera.snapshot().scale);
@@ -243,12 +309,32 @@ export class CanvasRuntime {
     this.scheduleRender();
   }
   setSelection(ids: string[]) { this.selectionController?.setSelection(ids); this.renderer.setSelectedImageCount(ids.length); }
-  setAnnotationSelection(ids: string[]) { this.selectionController?.setAnnotationSelection(ids); }
   setGroupSelection(id?: string) { this.selectionController?.setGroupSelection(id); this.renderer.setSelectedGroup(id); }
   setGroupMenuOpen(open: boolean) { this.renderer.setGroupControlsMuted(open); }
-  setAnnotationState(state: AnnotationToolState) { this.annotationState = state; }
-  setColorPickerHeld(held: boolean) { this.colorPickerHeld = held; }
-  setWindowLocked(locked: boolean) { this.windowLocked = locked; }
+  setColorPickerHeld(held: boolean) {
+    this.colorPickerHeld = held;
+    this.container.classList.toggle('color-picker-active', held);
+    if (!held && !this.colorPickerSampling) this.showColorPickerHover();
+  }
+  setColorPickerShortcut(shortcut: ColorPickerShortcut) { this.colorPickerShortcut = shortcut; }
+  setVisualNotesState(state: VisualNotesToolState) {
+    this.visualNotesState = state; this.renderer.setSelectedVisualNote(state.enabled ? state.selectedMarkId : undefined);
+    if (!state.enabled) this.visualNotesController?.cancel();
+    if (!state.enabled || state.tool !== 'eraser') this.renderer.setVisualNoteEraserCursor();
+  }
+  setVisualNotesTemporaryHidden(hidden: boolean) { this.renderer.setVisualNotesTemporaryHidden(hidden); }
+  cancelVisualNotesGesture() { this.visualNotesController?.cancel(); return this.visualNotesController?.active() ?? false; }
+  setWindowLocked(locked: boolean) {
+    this.windowLocked = locked;
+    this.container.classList.toggle('canvas-content-locked', locked);
+    if (!locked) return;
+    this.selectionController?.setSelection([]);
+    this.selectionController?.setGroupSelection(undefined);
+    this.renderer.setSelectedImageCount(0);
+    this.renderer.setSelectedGroup(undefined);
+    this.options.onSelectionChange?.([]);
+    this.options.onGroupSelectionChange?.(undefined);
+  }
   setProjectEpoch(epoch: number) {
     if (epoch === this.projectEpoch) return;
     this.projectEpoch = epoch;
@@ -257,6 +343,117 @@ export class CanvasRuntime {
   }
   setBackground(background: string, opacity: number) { this.renderer.setBackground(background, opacity); }
   getViewport() { return this.camera.snapshot(); }
+
+  private isColorPickerPointer(event: PointerEvent) {
+    // Locked reference mode always mirrors Photoshop's Alt+pen gesture, even
+    // when the editable-board shortcut preference is still set to S.
+    const shortcut = this.windowLocked ? 'alt' : this.colorPickerShortcut;
+    const altKey = event.altKey || (event.pointerType === 'pen' && this.altPointerArmed);
+    const enabled = this.colorPickerHeld || isAltColorPickerPointer(shortcut, {
+      button: event.button, buttons: event.buttons, pointerType: event.pointerType,
+      ctrlKey: event.ctrlKey, altKey, shiftKey: event.shiftKey,
+    });
+    // The pointer-enter latch only bridges the focus transition. Consume it on
+    // the first pen contact so a missed key-up cannot arm later normal taps.
+    if (enabled && event.pointerType === 'pen' && (event.button === 0 || event.button === -1)) {
+      this.altPointerArmed = false;
+    }
+    return enabled;
+  }
+
+  private createColorPickerHud() {
+    const reticle = document.createElement('div');
+    reticle.className = 'color-picker-reticle';
+    reticle.hidden = true;
+    const reticleDot = document.createElement('i');
+    reticleDot.className = 'color-picker-reticle-dot';
+    const reticleIcon = document.createElement('i');
+    reticleIcon.className = 'color-picker-reticle-icon';
+    reticle.append(reticleDot, reticleIcon);
+    const hud = document.createElement('div');
+    hud.className = 'color-picker-hud';
+    hud.hidden = true;
+    const swatch = document.createElement('div');
+    swatch.className = 'color-picker-swatch';
+    const values = document.createElement('div');
+    values.className = 'color-picker-values';
+    const hex = document.createElement('strong');
+    const rgb = document.createElement('small');
+    values.append(hex, rgb);
+    hud.append(swatch, values);
+    this.container.append(reticle, hud);
+    this.colorPickerReticle = reticle;
+    this.colorPickerHud = hud;
+    this.colorPickerSwatch = swatch;
+    this.colorPickerHex = hex;
+    this.colorPickerRgb = rgb;
+  }
+
+  private positionColorPickerPreview(point?: { x: number; y: number }) {
+    this.colorPickerSampling = Boolean(point);
+    this.colorPickerPoint = point;
+    if (!point) {
+      this.hideColorPickerOverlay();
+      this.container.classList.remove('color-picker-sampling');
+      return;
+    }
+    this.container.classList.add('color-picker-sampling');
+    this.positionColorPickerReticle(point, this.colorPickerColor);
+    if (this.colorPickerColor && this.colorPickerHud && !this.colorPickerHud.hidden) {
+      this.positionColorPickerHud(point);
+    }
+  }
+
+  private updateColorPickerPreview(color?: PickedColor) {
+    const hud = this.colorPickerHud;
+    this.colorPickerColor = color;
+    if (!hud || !color || !this.colorPickerPoint) {
+      if (hud) hud.hidden = true;
+      if (this.colorPickerPoint) this.positionColorPickerReticle(this.colorPickerPoint);
+      return;
+    }
+    this.positionColorPickerReticle(this.colorPickerPoint, color);
+    if (this.colorPickerSwatch) this.colorPickerSwatch.style.setProperty('--picked-color', color.hex);
+    if (this.colorPickerHex) this.colorPickerHex.textContent = color.hex;
+    if (this.colorPickerRgb) this.colorPickerRgb.textContent = `RGB ${color.r}  ${color.g}  ${color.b}`;
+    hud.hidden = false;
+    this.positionColorPickerHud(this.colorPickerPoint);
+  }
+
+  private positionColorPickerHud(point: { x: number; y: number }) {
+    const hud = this.colorPickerHud;
+    if (!hud) return;
+    const width = 178; const height = 54; const gap = 32;
+    const preferredX = point.x + gap + width <= this.container.clientWidth ? point.x + gap : point.x - gap - width;
+    const preferredY = point.y + gap + height <= this.container.clientHeight ? point.y + gap : point.y - gap - height;
+    hud.style.left = `${Math.max(8, Math.min(this.container.clientWidth - width - 8, preferredX))}px`;
+    hud.style.top = `${Math.max(8, Math.min(this.container.clientHeight - height - 8, preferredY))}px`;
+  }
+
+  private showColorPickerHover(point?: { x: number; y: number }) {
+    if (!point) {
+      this.hideColorPickerOverlay();
+      return;
+    }
+    this.positionColorPickerReticle(point);
+  }
+
+  private positionColorPickerReticle(point: { x: number; y: number }, color?: PickedColor) {
+    const reticle = this.colorPickerReticle;
+    if (!reticle) return;
+    reticle.hidden = false;
+    reticle.style.left = `${point.x}px`;
+    reticle.style.top = `${point.y}px`;
+    if (color) reticle.style.setProperty('--picked-color', color.hex);
+    else reticle.style.removeProperty('--picked-color');
+  }
+
+  private hideColorPickerOverlay() {
+    if (this.colorPickerHud) this.colorPickerHud.hidden = true;
+    if (this.colorPickerReticle) this.colorPickerReticle.hidden = true;
+    this.colorPickerPoint = undefined;
+    this.colorPickerColor = undefined;
+  }
 
   private scheduleRender() {
     this.frames.request((now) => {
@@ -282,6 +479,14 @@ export class CanvasRuntime {
   }
 
   destroy() {
+    this.container.classList.remove('color-picker-active', 'color-picker-sampling', 'canvas-content-locked');
+    this.colorPickerHud?.remove();
+    this.colorPickerReticle?.remove();
+    this.colorPickerHud = undefined;
+    this.colorPickerReticle = undefined;
+    this.colorPickerSwatch = undefined;
+    this.colorPickerHex = undefined;
+    this.colorPickerRgb = undefined;
     this.lifecycle.destroy();
     this.frames.destroy();
     this.renderer.destroy();
