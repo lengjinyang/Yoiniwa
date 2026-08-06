@@ -1,25 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { annotationBounds, exportVisibility } from './exportScene';
-import type { AnnotationItem, ImageGroup } from './types';
-
-const base = { id: 'annotation', color: '#fff', strokeWidth: 4 } as const;
-
-describe('annotation bounds', () => {
-  it('contains freehand strokes including their stroke radius', () => {
-    const annotation: AnnotationItem = { ...base, type: 'pen', points: [10, 20, 40, 60] };
-    expect(annotationBounds(annotation)).toEqual({ x: 8, y: 18, width: 34, height: 44 });
-  });
-
-  it('leaves room for arrow heads so export does not clip them', () => {
-    const annotation: AnnotationItem = { ...base, type: 'arrow', points: [10, 20, 40, 60] };
-    expect(annotationBounds(annotation)).toEqual({ x: -6, y: 4, width: 62, height: 72 });
-  });
-
-  it('contains rectangular marks', () => {
-    const annotation: AnnotationItem = { ...base, type: 'rectangle', x: 10, y: 20, width: 30, height: 40 };
-    expect(annotationBounds(annotation)).toEqual({ x: 8, y: 18, width: 34, height: 44 });
-  });
-});
+import { exportVisibility } from './exportScene';
+import type { ImageGroup } from './types';
 
 const group = (id: string, members: ImageGroup['members'] = []): ImageGroup => ({
   id, name: id, x: 0, y: 0, width: 200, height: 120,
@@ -29,7 +10,7 @@ const group = (id: string, members: ImageGroup['members'] = []): ImageGroup => (
 
 describe('group export visibility', () => {
   it('keeps a hidden-content frame visible while hiding all recursive members', () => {
-    const child = group('child', [{ type: 'annotation', id: 'mark' }]);
+    const child = group('child', [{ type: 'image', id: 'nested-image' }]);
     const parent = group('parent', [{ type: 'image', id: 'image' }, { type: 'group', id: child.id }]);
     parent.contentsHidden = true;
 
@@ -38,7 +19,7 @@ describe('group export visibility', () => {
     expect(visibility.hiddenGroups.has(parent.id)).toBe(false);
     expect(visibility.hiddenGroups.has(child.id)).toBe(true);
     expect(visibility.hiddenImages.has('image')).toBe(true);
-    expect(visibility.hiddenAnnotations.has('mark')).toBe(true);
+    expect(visibility.hiddenImages.has('nested-image')).toBe(true);
   });
 
   it('does not hide members for an expanded visible frame', () => {

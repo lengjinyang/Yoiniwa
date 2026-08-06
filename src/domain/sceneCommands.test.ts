@@ -15,7 +15,7 @@ describe('scene commands', () => {
     scene.groups = [{ id: 'g', name: 'g', x: 0, y: 0, width: 200, height: 100, color: '#fff', opacity: 1,
       titleColor: '#fff', collapsed: false, sizeLocked: false, contentsHidden: false,
       members: [{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }] }];
-    deleteSceneSelection(scene, ['a'], []);
+    deleteSceneSelection(scene, ['a']);
     expect(scene.items.map((item) => item.id)).toEqual(['b']);
     expect(scene.groups[0].members).toEqual([{ type: 'image', id: 'b' }]);
   });

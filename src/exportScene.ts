@@ -1,16 +1,13 @@
-import { annotationSceneBounds, groupVisibleBounds, sceneBounds } from './scene';
-import type { AnnotationItem, ImageGroup, ImageItem } from './types';
+import { groupVisibleBounds, sceneBounds } from './scene';
+import type { ImageGroup, ImageItem, VisualNotesState } from './types';
 import { imageSource } from './imageResources';
 import ExportSceneWorker from './workers/exportScene.worker?worker';
-
-export function annotationBounds(annotation: AnnotationItem) {
-  return annotationSceneBounds(annotation);
-}
+import { markWorldBounds } from './visualNotes/VisualNoteGeometry';
 
 export function exportVisibility(groups: ImageGroup[]) {
   const hiddenImages = new Set<string>();
-  const hiddenAnnotations = new Set<string>();
   const hiddenGroups = new Set<string>();
+  const hiddenMarks = new Set<string>();
   const visit = (id: string, hideFrame: boolean, visited = new Set<string>()) => {
     if (visited.has(id)) return;
     visited.add(id);
@@ -19,24 +16,24 @@ export function exportVisibility(groups: ImageGroup[]) {
     if (hideFrame) hiddenGroups.add(id);
     group.members.forEach((member) => {
       if (member.type === 'image') hiddenImages.add(member.id);
-      else if (member.type === 'annotation') hiddenAnnotations.add(member.id);
       else if (member.type === 'group') visit(member.id, true, visited);
+      else if (member.type === 'mark') hiddenMarks.add(member.id);
     });
   };
-  groups.forEach((group) => { if (group.collapsed || group.contentsHidden) group.members.forEach((member) => {
-    if (member.type === 'image') hiddenImages.add(member.id);
-    else if (member.type === 'annotation') hiddenAnnotations.add(member.id);
-    else if (member.type === 'group') visit(member.id, true);
-  }); });
-  return { hiddenImages, hiddenAnnotations, hiddenGroups };
+  groups.forEach((group) => {
+    if (!group.collapsed && !group.contentsHidden) return;
+    group.members.forEach((member) => {
+      if (member.type === 'image') hiddenImages.add(member.id);
+      else if (member.type === 'group') visit(member.id, true);
+      else if (member.type === 'mark') hiddenMarks.add(member.id);
+    });
+  });
+  return { hiddenImages, hiddenGroups, hiddenMarks };
 }
 
-function combinedBounds(items: ImageItem[], annotations: AnnotationItem[], groups: ImageGroup[]) {
-  const parts = [
-    ...(items.length ? [sceneBounds(items)] : []),
-    ...annotations.map(annotationBounds),
-    ...groups.map(groupVisibleBounds),
-  ];
+function combinedBounds(items: ImageItem[], groups: ImageGroup[], visualNotes?: VisualNotesState) {
+  const parts = [...(items.length ? [sceneBounds(items)] : []), ...groups.map(groupVisibleBounds),
+    ...(visualNotes?.visible ? visualNotes.marks.flatMap((mark) => markWorldBounds(mark, items) ?? []) : [])];
   if (!parts.length) return { x: 0, y: 0, width: 1, height: 1 };
   const x = Math.min(...parts.map((part) => part.x));
   const y = Math.min(...parts.map((part) => part.y));
@@ -46,17 +43,22 @@ function combinedBounds(items: ImageItem[], annotations: AnnotationItem[], group
 }
 
 export async function renderItems(
-  items: ImageItem[], background?: string, annotations: AnnotationItem[] = [], groups: ImageGroup[] = [], backgroundOpacity = 1,
+  items: ImageItem[], background?: string, groups: ImageGroup[] = [], backgroundOpacity = 1,
+  visualNotes?: VisualNotesState,
 ): Promise<ArrayBuffer> {
   const visibility = exportVisibility(groups);
   const visibleGroups = groups.filter((group) => !visibility.hiddenGroups.has(group.id));
   const visibleItems = items.filter((item) => !item.hidden && !visibility.hiddenImages.has(item.id));
-  const visibleAnnotations = annotations.filter((annotation) => !annotation.hidden && !visibility.hiddenAnnotations.has(annotation.id));
-  const bounds = combinedBounds(visibleItems, visibleAnnotations, visibleGroups);
+  const visibleImageIds = new Set(visibleItems.map((item) => item.id));
+  const exportNotes = visualNotes && visualNotes.visible ? {
+    ...structuredClone(visualNotes),
+    marks: visualNotes.marks.filter((mark) => !visibility.hiddenMarks.has(mark.id)
+      && (mark.anchor.type === 'scene' || visibleImageIds.has(mark.anchor.imageId))),
+  } : visualNotes;
+  const bounds = combinedBounds(visibleItems, visibleGroups, exportNotes);
   const margin = 24;
   const maxSide = 12000;
   const scale = Math.min(1, maxSide / Math.max(bounds.width + margin * 2, bounds.height + margin * 2));
-  const ordered = [...visibleItems].sort((a, b) => a.zIndex - b.zIndex);
   const worker = new ExportSceneWorker();
   try {
     return await new Promise<ArrayBuffer>((resolve, reject) => {
@@ -69,8 +71,10 @@ export async function renderItems(
         width: Math.max(1, Math.ceil((bounds.width + margin * 2) * scale)),
         height: Math.max(1, Math.ceil((bounds.height + margin * 2) * scale)),
         scale, offsetX: -bounds.x + margin, offsetY: -bounds.y + margin, background, backgroundOpacity,
-        items: ordered.map((item) => ({ ...item, resourceUrl: imageSource(item, 'original') })),
-        annotations: visibleAnnotations, groups: visibleGroups,
+        items: [...visibleItems].sort((a, b) => a.zIndex - b.zIndex)
+          .map((item) => ({ ...item, resourceUrl: imageSource(item, 'original') })),
+        groups: visibleGroups,
+        visualNotes: exportNotes,
       });
     });
   } finally { worker.terminate(); }

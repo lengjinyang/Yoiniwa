@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
-import { execFile, fork as forkChildProcess, spawn } from 'node:child_process';
+import { fork as forkChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { constants as osConstants, setPriority } from 'node:os';
 import sharp from 'sharp';
@@ -28,6 +28,9 @@ import { WorkerAssetRegistrations } from './services/worker-asset-registrations.
 import { collectRecentAssetIds, hydrateRecentAssetIds } from './services/recent-assets.js';
 import type { ImportedImage, PhotoshopColorSyncResult } from '../src/types.js';
 import { createDirtyRevisionState, markRevisionSaved, updateDirtyRevision } from '../src/shared/dirtyRevision.js';
+import { PhotoshopColorBridge } from './services/photoshop-color-bridge.js';
+import { shouldAutoPhotoshopRoundTrip, shouldUseFocuslessPhotoshopPicker } from '../src/shared/photoshopIntegration.js';
+import { createPhotoshopSyncQueue } from './services/photoshop-sync-queue.js';
 
 process.on('uncaughtExceptionMonitor', (error, origin) => logError('process.uncaught-exception', error, { origin }));
 process.on('unhandledRejection', (reason) => logError('process.unhandled-rejection', reason));
@@ -46,11 +49,12 @@ const electronRuntimeDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = app.getAppPath();
 const runtimeFlags = parseRuntimeFlags(process.env, process.argv);
 const pixiCanvasSmoke = process.env.REFCANVAS_PIXI_SMOKE === '1';
+const photoshopRoundTripSmoke = process.env.REFCANVAS_PHOTOSHOP_SMOKE === '1';
 const {
   stressTest, performanceBenchmark, projectZoomBenchmark, devSmokeTest, realImageTest,
   forceThumbnailFailure, smokeTest, cleanTestSession,
 } = runtimeFlags;
-const sceneFilters = [{ name: 'RefCanvas 场景', extensions: ['refcanvas'] }];
+const sceneFilters = [{ name: 'Yoiniwa 画板', extensions: ['refcanvas'] }];
 const imageFilters = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }];
 const mimeByExt = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.bmp': 'image/bmp', '.gif': 'image/gif' };
 const extByMime = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/bmp': '.bmp', 'image/gif': '.gif' };
@@ -74,8 +78,9 @@ const WINDOW_MOVE_FRAME_MS = 1000 / 60;
 let nativeWindowMoveHelper;
 let nativeWindowMoveReady = false;
 let nativeWindowMoveOutput = '';
-let photoshopSyncActive = false;
-let pendingPhotoshopSync;
+let nonActivatingWindowReady = false;
+let taskbarPlacementPending = false;
+const photoshopColorBridge = new PhotoshopColorBridge();
 let imageWorker;
 let imageWorkerPaused = false;
 let imageWorkerRequest = 0;
@@ -867,73 +872,54 @@ function normalizedColor(value) {
   return { r: value.r, g: value.g, b: value.b, hex };
 }
 
-function applyPhotoshopForeground(color): Promise<PhotoshopColorSyncResult> {
+async function applyPhotoshopForeground(color, returnFocus: boolean, settleAlt = false): Promise<PhotoshopColorSyncResult> {
+  const startedAt = performance.now();
+  const result = (
+    syncStatus: PhotoshopColorSyncResult['syncStatus'],
+    focusStatus: PhotoshopColorSyncResult['focusStatus'],
+    copied: boolean,
+    message?: string,
+  ): PhotoshopColorSyncResult => ({
+    ok: syncStatus === 'synced', status: syncStatus, syncStatus, focusStatus, copied,
+    syncLatencyMs: performance.now() - startedAt, message,
+  });
   const fakeMode = process.env.REFCANVAS_FAKE_PHOTOSHOP;
   if (smokeTest || fakeMode) {
     const mode = fakeMode || 'synced';
-    if (mode === 'synced' || mode === '1') return Promise.resolve({ ok: true, status: 'synced', copied: false });
+    if (mode === 'synced' || mode === '1') return result('synced', returnFocus ? 'activated' : 'skipped', false);
     clipboard.writeText(color.hex);
-    if (mode === 'not-running') return Promise.resolve({ ok: false, status: 'not-running', copied: true, message: 'Photoshop 未运行，颜色已复制' });
-    if (mode === 'timeout') return Promise.resolve({ ok: false, status: 'automation-error', copied: true, message: 'Photoshop 同步超时，颜色已复制' });
-    if (mode === 'automation-error') return Promise.resolve({ ok: false, status: 'automation-error', copied: true, message: 'Photoshop 自动化失败，颜色已复制' });
-    return Promise.resolve({ ok: true, status: 'synced', copied: false });
+    if (mode === 'not-running') return result('not-running', returnFocus ? 'not-found' : 'skipped', true, 'Photoshop 未运行，颜色已复制');
+    if (mode === 'timeout') return result('automation-error', returnFocus ? 'automation-error' : 'skipped', true, 'Photoshop 同步超时，颜色已复制');
+    if (mode === 'automation-error') return result('automation-error', returnFocus ? 'automation-error' : 'skipped', true, 'Photoshop 自动化失败，颜色已复制');
+    return result('synced', returnFocus ? 'activated' : 'skipped', false);
   }
   if (process.platform !== 'win32') {
     clipboard.writeText(color.hex);
-    return Promise.resolve({ ok: false, status: 'unsupported', copied: true, message: '当前平台不支持 Photoshop COM，颜色已复制' });
+    return result('unsupported', 'skipped', true, '当前平台不支持 Photoshop COM，颜色已复制');
   }
-  const command = [
-    '$ErrorActionPreference="Stop"',
-    '$r=[int]$env:REFCANVAS_PS_R', '$g=[int]$env:REFCANVAS_PS_G', '$b=[int]$env:REFCANVAS_PS_B',
-    'try{$photoshop=[Runtime.InteropServices.Marshal]::GetActiveObject("Photoshop.Application")}catch{exit 10}',
-    '$jsx="var color = new SolidColor(); color.rgb.red = "+$r+"; color.rgb.green = "+$g+"; color.rgb.blue = "+$b+"; app.foregroundColor = color;"',
-    'try{$null=$photoshop.DoJavaScript($jsx)}catch{exit 11}',
-  ].join(';');
-  return new Promise<PhotoshopColorSyncResult>((resolve) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', command], {
-      windowsHide: true,
-      timeout: 4000,
-      env: { ...process.env, REFCANVAS_PS_R: String(color.r), REFCANVAS_PS_G: String(color.g), REFCANVAS_PS_B: String(color.b) },
-    }, (error) => {
-      if (!error) { resolve({ ok: true, status: 'synced', copied: false }); return; }
-      clipboard.writeText(color.hex);
-      const exitCode = Number(error.code);
-      if (exitCode === 10) {
-        resolve({ ok: false, status: 'not-running', copied: true, message: 'Photoshop 未运行，颜色已复制' });
-        return;
-      }
-      resolve({ ok: false, status: 'automation-error', copied: true, message: error.killed ? 'Photoshop 同步超时，颜色已复制' : 'Photoshop 自动化失败，颜色已复制' });
-    });
-  });
+  const bridgeResult = await photoshopColorBridge.commit(color, returnFocus, settleAlt);
+  if (bridgeResult.syncStatus === 'synced') {
+    return result('synced', bridgeResult.focusStatus, false,
+      returnFocus && bridgeResult.focusStatus !== 'activated' ? '颜色已同步，但未能自动返回 Photoshop' : undefined);
+  }
+  clipboard.writeText(color.hex);
+  if (bridgeResult.syncStatus === 'not-running') {
+    return result('not-running', bridgeResult.focusStatus, true, 'Photoshop 未运行，颜色已复制');
+  }
+  return result('automation-error', bridgeResult.focusStatus, true, 'Photoshop 自动化失败，颜色已复制');
 }
 
-function enqueuePhotoshopForeground(color): Promise<PhotoshopColorSyncResult> {
-  return new Promise<PhotoshopColorSyncResult>((resolve) => {
-    if (photoshopSyncActive) {
-      if (pendingPhotoshopSync) {
-        pendingPhotoshopSync.color = color;
-        pendingPhotoshopSync.waiters.push(resolve);
-      } else pendingPhotoshopSync = { color, waiters: [resolve] };
-      return;
-    }
-    const run = async (entry) => {
-      photoshopSyncActive = true;
-      let result;
-      try {
-        result = await applyPhotoshopForeground(entry.color);
-      } catch {
-        clipboard.writeText(entry.color.hex);
-        result = { ok: false, status: 'automation-error', copied: true, message: 'Photoshop 自动化失败，颜色已复制' };
-      }
-      entry.waiters.forEach((waiter) => waiter(result));
-      const next = pendingPhotoshopSync;
-      pendingPhotoshopSync = undefined;
-      if (next) await run(next);
-      else photoshopSyncActive = false;
+const photoshopSyncQueue = createPhotoshopSyncQueue(async ({ color, returnFocus, settleAlt }) => {
+  try { return await applyPhotoshopForeground(color, returnFocus, settleAlt); }
+  catch {
+    clipboard.writeText(color.hex);
+    return {
+      ok: false, status: 'automation-error', syncStatus: 'automation-error',
+      focusStatus: returnFocus ? 'automation-error' : 'skipped', copied: true,
+      syncLatencyMs: 0, message: 'Photoshop 自动化失败，颜色已复制',
     };
-    void run({ color, waiters: [resolve] });
-  });
-}
+  }
+});
 
 const statePath = () => path.join(app.getPath('userData'), 'state.json');
 
@@ -1156,19 +1142,58 @@ function handleNativeWindowMoveOutput(chunk) {
   const lines = nativeWindowMoveOutput.split(/\r?\n/);
   nativeWindowMoveOutput = lines.pop() ?? '';
   for (const line of lines) {
-    if (line === 'READY') nativeWindowMoveReady = true;
-    else if (line === 'DONE' || line === 'SKIPPED' || line.startsWith('ERROR ')) notifyNativeWindowMoveFinished();
+    if (line === 'READY' || line.startsWith('FOCUSLESS')) {
+      logInfo('window.native-helper-output', { line });
+    }
+    if (line === 'READY') {
+      nativeWindowMoveReady = true;
+      if (mainWindow && shouldUseFocuslessPhotoshopPicker(windowState)) {
+        setImmediate(() => { setMainWindowNoActivate(true); });
+      }
+    }
+    else if (line === 'TASKBAR_DONE') {
+      // Taskbar ordering is best-effort and must not gate input or focus.
+    }
+    else if (line === 'FOCUSLESS_DONE') {
+      nonActivatingWindowReady = true;
+      if (taskbarPlacementPending && shouldUseFocuslessPhotoshopPicker(windowState)) {
+        taskbarPlacementPending = false;
+        // WS_EX_NOACTIVATE redraws the non-client frame asynchronously. Put
+        // the window under the taskbar only after that redraw is acknowledged.
+        setImmediate(placeMainWindowBelowTaskbar);
+      }
+    }
+    else if (line === 'FOCUSLESS_SKIPPED') {
+      nonActivatingWindowReady = false;
+      const placeBelowTaskbar = taskbarPlacementPending && shouldUseFocuslessPhotoshopPicker(windowState);
+      taskbarPlacementPending = false;
+      if (placeBelowTaskbar) setImmediate(placeMainWindowBelowTaskbar);
+      logWarn('window.no-activate-unavailable');
+    }
+    else if (line === 'TASKBAR_SKIPPED') logWarn('window.taskbar-order-unavailable');
+    else if (line.startsWith('ERROR ')) {
+      logWarn('window.native-helper-command-failed', { message: line });
+      notifyNativeWindowMoveFinished();
+    } else if (line === 'DONE' || line === 'SKIPPED') {
+      notifyNativeWindowMoveFinished();
+    }
   }
 }
 
 function startNativeWindowMoveHelper() {
   if (process.platform !== 'win32' || nativeWindowMoveHelper) return;
   nativeWindowMoveReady = false;
+  nonActivatingWindowReady = false;
+  taskbarPlacementPending = false;
   nativeWindowMoveHelper = spawn('powershell.exe', [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(rootDir, 'electron', 'native', 'native-window-move.ps1'),
-  ], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   nativeWindowMoveHelper.stdout.on('data', handleNativeWindowMoveOutput);
+  nativeWindowMoveHelper.stderr.setEncoding('utf8');
+  nativeWindowMoveHelper.stderr.on('data', (chunk: string) => {
+    logWarn('window.native-helper-stderr', { message: chunk.trim() });
+  });
   nativeWindowMoveHelper.stdin.on('error', (error) => {
     logWarn('window.native-move-stdin-failed', { code: error?.code, message: error?.message });
     nativeWindowMoveHelper?.kill();
@@ -1178,6 +1203,8 @@ function startNativeWindowMoveHelper() {
   nativeWindowMoveHelper.on('exit', () => {
     nativeWindowMoveHelper = undefined;
     nativeWindowMoveReady = false;
+    nonActivatingWindowReady = false;
+    taskbarPlacementPending = false;
     nativeWindowMoveOutput = '';
   });
   nativeWindowMoveHelper.on('error', () => {
@@ -1200,6 +1227,40 @@ function beginNativeWindowMove() {
   return true;
 }
 
+function nativeWindowHandleValue() {
+  if (!mainWindow || mainWindow.isDestroyed()) return undefined;
+  const handleBuffer = mainWindow.getNativeWindowHandle();
+  return handleBuffer.length >= 8 ? handleBuffer.readBigUInt64LE(0) : BigInt(handleBuffer.readUInt32LE(0));
+}
+
+function setMainWindowNoActivate(enabled: boolean) {
+  taskbarPlacementPending = enabled;
+  if (!nativeWindowMoveReady || !nativeWindowMoveHelper?.stdin.writable) {
+    logWarn('window.no-activate-request-skipped', {
+      enabled, helperReady: nativeWindowMoveReady, stdinWritable: Boolean(nativeWindowMoveHelper?.stdin.writable),
+    });
+    return;
+  }
+  const handle = nativeWindowHandleValue();
+  if (handle === undefined) return;
+  nonActivatingWindowReady = false;
+  logInfo('window.no-activate-requested', { enabled });
+  nativeWindowMoveHelper.stdin.write(`FOCUSLESS|${handle}|${enabled ? '1' : '0'}\n`, (error) => {
+    if (!error) return;
+    logWarn('window.no-activate-write-failed', { code: error.code, message: error.message });
+  });
+}
+
+function placeMainWindowBelowTaskbar() {
+  if (!nativeWindowMoveReady || !nativeWindowMoveHelper?.stdin.writable) return;
+  const handle = nativeWindowHandleValue();
+  if (handle === undefined) return;
+  nativeWindowMoveHelper.stdin.write(`TASKBAR|${handle}\n`, (error) => {
+    if (!error) return;
+    logWarn('window.taskbar-order-write-failed', { code: error.code, message: error.message });
+  });
+}
+
 function finishWindowMove() {
   if (windowMoveTimer) clearTimeout(windowMoveTimer);
   windowMoveTimer = undefined;
@@ -1209,6 +1270,8 @@ function finishWindowMove() {
 function createWindow() {
   logInfo('window.create', { width: 1280, height: 820, smokeTest, projectZoomBenchmark });
   mainWindow = new BrowserWindow({
+    title: 'Yoiniwa · 宵庭',
+    icon: path.join(rootDir, app.isPackaged ? 'dist' : 'public', 'yoiniwa-icon.png'),
     width: 1280,
     height: 820,
     minWidth: 1,
@@ -1245,7 +1308,53 @@ function createWindow() {
   });
   mainWindow.on('unresponsive', () => logWarn('window.unresponsive'));
   mainWindow.on('responsive', () => logInfo('window.responsive'));
-  if (pixiCanvasSmoke) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
+  if (photoshopRoundTripSmoke) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
+    try {
+      const results = await mainWindow.webContents.executeJavaScript(`(async () => {
+        const api = window.refCanvas;
+        const combinations = [
+          { locked: false, alwaysOnTop: false },
+          { locked: true, alwaysOnTop: false },
+          { locked: false, alwaysOnTop: true },
+          { locked: true, alwaysOnTop: true },
+        ];
+        const outcomes = [];
+        for (const mode of combinations) {
+          await api.setWindowMode(mode);
+          outcomes.push(await api.syncPhotoshopForeground({ r: 12, g: 34, b: 56, hex: '#0C2238' }, true));
+        }
+        const optedOut = await api.syncPhotoshopForeground({ r: 65, g: 43, b: 21, hex: '#412B15' }, false);
+        return { outcomes, optedOut };
+      })()`);
+      // WS_EX_NOACTIVATE makes Electron report isFocusable() as false even
+      // though WS_EX_APPWINDOW preserves the taskbar entry and clicks are
+      // still delivered to the window. Verify the native style acknowledgement
+      // instead of Electron's derived focusable flag.
+      // PowerShell needs longer than one frame to compile its native bridge
+      // on a cold start, so wait for that bridge rather than guessing.
+      const focuslessDeadline = Date.now() + 3000;
+      while (process.platform === 'win32' && !nonActivatingWindowReady && Date.now() < focuslessDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const expectedFocus = ['skipped', 'skipped', 'skipped', 'skipped'];
+      const focuslessWindowReady = mainWindow.isAlwaysOnTop()
+        && (process.platform !== 'win32' || nonActivatingWindowReady);
+      const valid = results.outcomes.every((result, index) => result.syncStatus === 'synced'
+        && result.focusStatus === expectedFocus[index] && result.copied === false)
+        && results.optedOut.syncStatus === 'synced' && results.optedOut.focusStatus === 'skipped'
+        && focuslessWindowReady;
+      console.log(`Yoiniwa Photoshop round-trip smoke: ${JSON.stringify({
+        ...results, focuslessWindowReady,
+      })}`);
+      if (!valid) process.exitCode = 1;
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+    dirtyRevisionState = createDirtyRevisionState();
+    app.exit(Number(process.exitCode) || 0);
+  }, 300));
+  else if (pixiCanvasSmoke) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
       const canvasReady = await mainWindow.webContents.executeJavaScript(
         `Boolean(document.querySelector('[data-canvas-runtime="pixi-v8"] canvas.pixi-canvas'))`,
@@ -1569,7 +1678,7 @@ function createWindow() {
         })()`);
         lifecycleResult = await mainWindow.webContents.executeJavaScript(`(async () => {
           const api = window.__refCanvasPerf; const populated = structuredClone(api.getScene());
-          const empty = { ...structuredClone(populated), items: [], groups: [], annotations: [] };
+          const empty = { ...structuredClone(populated), items: [], groups: [] };
           const heap = []; let allReleased = true; let singleCanvas = true;
           for (let cycle = 0; cycle < 10; cycle += 1) {
             api.loadScene(populated); await new Promise((resolve) => setTimeout(resolve, 60));
@@ -1612,7 +1721,7 @@ function createWindow() {
       })`);
       const packagePath = path.join(app.getPath('temp'), `refcanvas-smoke-${process.pid}.refcanvas`);
       const packageScene = {
-        format: 'refcanvas', version: 2, name: 'smoke', savedAt: new Date().toISOString(),
+        format: 'refcanvas', version: 3, name: 'smoke', savedAt: new Date().toISOString(),
         viewport: { x: 0, y: 0, scale: 1 },
         canvas: { background: '#202124', padding: 20, snap: true, includeBackgroundOnExport: true },
         assets: { [smokeAsset.assetId]: smokeAsset.asset },
@@ -1621,12 +1730,12 @@ function createWindow() {
           naturalWidth: 1, naturalHeight: 1, x: 0, y: 0, width: 1, height: 1, rotation: 0,
           flipX: false, flipY: false, opacity: 1, zIndex: 0, locked: false,
           crop: { x: 0, y: 0, width: 1, height: 1 },
-        }], groups: [], annotations: [],
+        }], groups: [], visualNotes: { visible: true, nextNumber: 1, marks: [], localTags: [] },
       };
       await writeScenePackage(packagePath, packageScene);
       const reopened = await readScenePackage(packagePath);
       await fs.rm(packagePath, { force: true });
-      const packageReady = reopened.version === 2 && Boolean(reopened.assets[smokeAsset.assetId]);
+      const packageReady = reopened.version === 3 && Boolean(reopened.assets[smokeAsset.assetId]);
       let cacheMigrationReady = true;
       let cacheMigrationDiagnostic: Record<string, unknown> | undefined;
       if (process.env.REFCANVAS_CACHE_MIGRATION_SMOKE === '1') {
@@ -1680,6 +1789,8 @@ function createWindow() {
   mainWindow.on('blur', finishWindowMove);
 }
 
+app.setName('Yoiniwa');
+app.setAppUserModelId('com.yoiniwa.app');
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 else app.whenReady().then(async () => {
@@ -1691,6 +1802,7 @@ else app.whenReady().then(async () => {
   await initializeSessionCache();
   protocol.handle('refcanvas-asset', assetResponse);
   startNativeWindowMoveHelper();
+  photoshopColorBridge.start();
   createWindow();
   const recentIndexTimer = setTimeout(() => {
     void hydrateLegacyRecentAssetIndexes().catch((error) => logWarn('recent-assets.hydrate-failed', { error: String(error) }));
@@ -1700,7 +1812,7 @@ else app.whenReady().then(async () => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }).catch((error) => {
   logError('app.startup-failed', error);
-  console.error('RefCanvas startup failed:', error);
+  console.error('Yoiniwa startup failed:', error);
   app.exit(1);
 });
 
@@ -1716,6 +1828,7 @@ app.on('will-quit', () => {
   void flushLogs();
   globalShortcut.unregisterAll();
   nativeWindowMoveHelper?.kill();
+  photoshopColorBridge.stop();
   if (sessionCachePath) void fs.rm(sessionCachePath, { recursive: true, force: true });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -1989,18 +2102,51 @@ handleIpc('image:show-source', async (_event, requestedPath) => {
   try { await fs.access(requestedPath); shell.showItemInFolder(requestedPath); return { ok: true }; }
   catch { return { ok: false, message: '源文件已经移动或不存在' }; }
 });
-handleIpc('photoshop:set-foreground', async (_event, rawColor) => {
+handleIpc('photoshop:set-foreground', async (_event, rawColor, requestedReturnFocus) => {
   const color = normalizedColor(rawColor);
-  if (!color) return { ok: false, status: 'automation-error', copied: false, message: '颜色数据无效' };
-  return enqueuePhotoshopForeground(color);
+  if (!color) return {
+    ok: false, status: 'automation-error', syncStatus: 'automation-error', focusStatus: 'skipped',
+    copied: false, syncLatencyMs: 0, message: '颜色数据无效',
+  };
+  const requestedRoundTrip = shouldAutoPhotoshopRoundTrip(windowState, Boolean(requestedReturnFocus));
+  const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
+  const returnFocus = requestedRoundTrip && !focuslessPicker;
+  const settleAlt = requestedRoundTrip && focuslessPicker;
+  return new Promise<PhotoshopColorSyncResult>((resolve) => {
+    setImmediate(() => { void photoshopSyncQueue.enqueue({ color, returnFocus, settleAlt }).then(resolve); });
+  });
 });
 
 handleIpc('window:set-mode', (_event, patch) => {
+  const wasFocusless = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
   windowState = { ...windowState, ...patch };
+  const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
   mainWindow.setAlwaysOnTop(windowState.alwaysOnTop);
   mainWindow.setOpacity(Math.max(0.25, Math.min(1, windowState.opacity)));
   mainWindow.setMovable(!windowState.locked);
   mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
+  // Keep Electron focusable so it remains visible in the Windows taskbar and
+  // its buttons always receive pointer events. The native helper adds only
+  // WS_EX_NOACTIVATE during reference picking, which prevents mouse/pen input
+  // from stealing Photoshop's foreground ownership.
+  mainWindow.setFocusable(true);
+  mainWindow.setSkipTaskbar(false);
+  if (focuslessPicker) {
+    setImmediate(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && shouldUseFocuslessPhotoshopPicker(windowState)) {
+        setMainWindowNoActivate(true);
+      }
+    });
+    void photoshopColorBridge.warm().then(() => photoshopColorBridge.captureFocus(300))
+      .then(() => photoshopColorBridge.activate()).catch(() => undefined);
+  } else if (wasFocusless) {
+    setMainWindowNoActivate(false);
+  }
+  if (!focuslessPicker && wasFocusless && !mainWindow.isDestroyed()) {
+    setImmediate(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && !shouldUseFocuslessPhotoshopPicker(windowState)) mainWindow.focus();
+    });
+  }
   return windowState;
 });
 handleIpc('window:get-mode', () => windowState);

@@ -41,13 +41,12 @@ export interface ImageItem {
   locked: boolean;
   hidden?: boolean;
   grayscale?: boolean;
-  comment?: string;
   tags?: string[];
   groupId?: string;
   crop: CropRect;
 }
 
-type GroupMemberType = 'image' | 'annotation' | 'group' | 'video';
+type GroupMemberType = 'image' | 'group' | 'mark' | 'video';
 
 export interface GroupMember {
   type: GroupMemberType;
@@ -84,6 +83,55 @@ export interface ImageGroup {
 
 export interface Viewport { x: number; y: number; scale: number }
 
+export type VisualNoteTool = 'brush' | 'arrow' | 'eraser';
+export type VisualNoteWidth = 'thin' | 'medium' | 'thick';
+export type EraserSize = 'small' | 'medium' | 'large';
+
+export interface VisualNoteStyle {
+  color: string;
+  opacity: number;
+  width: VisualNoteWidth;
+  baseWidth: number;
+}
+
+export interface VisualNotePoint { x: number; y: number; widthFactor: number }
+
+export type VisualNoteAnchor =
+  | { type: 'scene' }
+  | { type: 'image'; imageId: string };
+
+interface VisualNoteBase {
+  id: string;
+  anchor: VisualNoteAnchor;
+  createdAt: number;
+  style: VisualNoteStyle;
+}
+
+export interface BrushVisualMark extends VisualNoteBase {
+  kind: 'stroke';
+  points: VisualNotePoint[];
+}
+
+export interface ArrowVisualMark extends VisualNoteBase {
+  kind: 'arrow';
+  start: VisualNotePoint;
+  end: VisualNotePoint;
+}
+
+export interface NumberVisualMark extends VisualNoteBase {
+  kind: 'number';
+  point: VisualNotePoint;
+  number: number;
+}
+
+export type VisualMark = BrushVisualMark | ArrowVisualMark | NumberVisualMark;
+
+export interface VisualNotesState {
+  visible: boolean;
+  nextNumber: number;
+  marks: VisualMark[];
+}
+
 interface CanvasSettings {
   background: string;
   backgroundOpacity?: number;
@@ -92,27 +140,9 @@ interface CanvasSettings {
   includeBackgroundOnExport: boolean;
 }
 
-export type AnnotationTool = 'pen' | 'arrow' | 'rectangle' | 'ellipse' | 'eraser';
-
-export interface AnnotationItem {
-  id: string;
-  type: Exclude<AnnotationTool, 'eraser'>;
-  color: string;
-  opacity?: number;
-  strokeWidth: number;
-  locked?: boolean;
-  hidden?: boolean;
-  tags?: string[];
-  points?: number[];
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-}
-
 export interface Scene {
   format: 'refcanvas';
-  version: 2;
+  version: 3;
   name: string;
   savedAt: string;
   viewport: Viewport;
@@ -120,7 +150,7 @@ export interface Scene {
   assets: Record<string, AssetRecord>;
   items: ImageItem[];
   groups: ImageGroup[];
-  annotations: AnnotationItem[];
+  visualNotes: VisualNotesState;
 }
 
 export interface ImportedImage {
@@ -137,7 +167,10 @@ export interface PickedColor { r: number; g: number; b: number; a: number; hex: 
 export interface PhotoshopColorSyncResult {
   ok: boolean;
   status: 'synced' | 'not-running' | 'automation-error' | 'unsupported';
+  syncStatus: 'synced' | 'not-running' | 'automation-error' | 'unsupported';
+  focusStatus: 'activated' | 'not-found' | 'automation-error' | 'skipped';
   copied: boolean;
+  syncLatencyMs: number;
   message?: string;
 }
 
@@ -213,7 +246,10 @@ interface RefCanvasAPI {
   exportImage(data: ArrayBuffer, suggestedName: string): Promise<{ canceled: boolean; path?: string }>;
   copyImage(data: ArrayBuffer): Promise<void>;
   showSourceInFolder(path: string): Promise<{ ok: boolean; message?: string }>;
-  syncPhotoshopForeground(color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>): Promise<PhotoshopColorSyncResult>;
+  syncPhotoshopForeground(
+    color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,
+    returnFocus?: boolean,
+  ): Promise<PhotoshopColorSyncResult>;
   setWindowMode(mode: Partial<WindowState>): Promise<WindowState>;
   getWindowMode(): Promise<WindowState>;
   minimize(): void;

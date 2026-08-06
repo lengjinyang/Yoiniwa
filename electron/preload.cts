@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('refCanvas', {
   exportImage: (data, suggestedName) => invoke('image:export', data, suggestedName),
   copyImage: (data) => invoke('image:copy', data),
   showSourceInFolder: (path) => invoke('image:show-source', path),
-  syncPhotoshopForeground: (color) => invoke('photoshop:set-foreground', color),
+  syncPhotoshopForeground: (color, returnFocus) => invoke('photoshop:set-foreground', color, returnFocus),
   setWindowMode: (mode) => invoke('window:set-mode', mode),
   getWindowMode: () => invoke('window:get-mode'),
   minimize: () => ipcRenderer.send('window:minimize'),

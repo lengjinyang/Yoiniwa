@@ -1,8 +1,8 @@
-# RefCanvas
+# Yoiniwa · 宵庭
 
 > 接手开发前请先阅读 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 和 [`docs/DEBUGGING.md`](./docs/DEBUGGING.md)。历史性能证据保存在 [`docs/performance/PERFORMANCE_AUDIT.md`](./docs/performance/PERFORMANCE_AUDIT.md)。
 
-RefCanvas 是一款 Windows 优先、完全离线的参考图画板。项目使用 Electron、React、TypeScript 和 Konva 构建，场景文件扩展名为 `.refcanvas`。
+Yoiniwa（宵庭）是一款 Windows 优先、完全离线的参考图画板。项目使用 Electron、React、TypeScript 和 PixiJS 构建，场景文件扩展名为 `.refcanvas`。
 
 ## 已实现
 
@@ -67,4 +67,4 @@ Windows 安装包输出到 `release` 目录。
 - 右键“视图 → 大纲视图”：查看图片、标注与嵌套分组关系
 - 图片菜单支持灰度去色、气泡评论和在资源管理器中定位源文件
 
-RefCanvas 不使用 PureRef 的名称、素材、快捷键全集或 `.pur` 文件格式。
+Yoiniwa（宵庭）不使用 PureRef 的名称、素材、快捷键全集或 `.pur` 文件格式。

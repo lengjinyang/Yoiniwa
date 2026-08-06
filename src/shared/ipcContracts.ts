@@ -28,7 +28,10 @@ export interface IpcContractMap {
   'image:export': IpcContract<[data: ArrayBuffer, suggestedName: string], { canceled: boolean; path?: string }>;
   'image:copy': IpcContract<[data: ArrayBuffer], void>;
   'image:show-source': IpcContract<[path: string], { ok: boolean; message?: string }>;
-  'photoshop:set-foreground': IpcContract<[color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>], PhotoshopColorSyncResult>;
+  'photoshop:set-foreground': IpcContract<[
+    color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,
+    returnFocus?: boolean,
+  ], PhotoshopColorSyncResult>;
   'window:set-mode': IpcContract<[mode: Partial<WindowState>], WindowState>;
   'window:get-mode': IpcContract<[], WindowState>;
   'logs:write': IpcContract<[entries: Array<{ level: string; event: string; data?: unknown }>], void>;

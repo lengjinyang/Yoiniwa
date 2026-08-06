@@ -95,7 +95,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
   function serializableScene(scene: any) {
     const usedAssets = new Set(scene.items.flatMap((item) => item.assetId ? [item.assetId] : []));
     return {
-      ...scene, version: 2,
+      ...scene, version: 3,
       assets: Object.fromEntries(Object.entries(scene.assets ?? {}).filter(([id]) => usedAssets.has(id))),
       items: scene.items.map(({ dataUrl: _dataUrl, ...item }) => item),
     };
@@ -122,6 +122,9 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
       void completed.catch(() => undefined);
       archive.abort();
       output.destroy();
+      // On Windows the stream may still create/hold the file after destroy().
+      // Wait for its close event before removing the incomplete package.
+      await completed.catch(() => undefined);
       await fs.rm(tempPath, { force: true }).catch(() => undefined);
       throw error;
     }
@@ -142,14 +145,14 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     const registerAssets = options.registerAssets !== false;
     let directory;
     try { directory = await unzipper.Open.file(filePath); }
-    catch { throw new Error('该文件不是新版 RefCanvas 场景，旧版场景格式已不受支持'); }
+    catch { throw new Error('该文件不是新版 Yoiniwa 画板，旧版场景格式已不受支持'); }
     const manifestEntry = directory.files.find((entry) => entry.path === 'manifest.json');
     if (!manifestEntry) throw new Error('场景包缺少 manifest.json');
     const manifestBuffer = await readEntryBuffer(manifestEntry, packageLimits.manifestBytes, '场景清单');
     let scene;
     try { scene = JSON.parse(manifestBuffer.toString('utf8')); }
     catch { throw new Error('场景清单不是有效的 JSON'); }
-    if (scene?.format !== 'refcanvas' || (scene?.version !== 1 && scene?.version !== 2)) throw new Error('该场景版本不受支持');
+    if (scene?.format !== 'refcanvas' || ![1, 2, 3].includes(scene?.version)) throw new Error('该场景版本不受支持');
     if (!scene.assets || typeof scene.assets !== 'object' || Array.isArray(scene.assets)) scene.assets = {};
     const records = Object.values(scene.assets ?? {}) as any[];
     if (records.length > packageLimits.assetCount) throw new Error('场景资源数量超过限制');
@@ -225,7 +228,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     let scene: any;
     try { scene = JSON.parse(manifestBuffer.toString('utf8')); }
     catch { throw new Error('场景清单不是有效的 JSON'); }
-    if (scene?.format !== 'refcanvas' || (scene?.version !== 1 && scene?.version !== 2)) throw new Error('该场景版本不受支持');
+    if (scene?.format !== 'refcanvas' || ![1, 2, 3].includes(scene?.version)) throw new Error('该场景版本不受支持');
     const ids = Object.keys(scene.assets ?? {});
     if (ids.length > packageLimits.assetCount || ids.some((id) => !/^[a-f0-9]{64}$/i.test(id))) {
       throw new Error('场景资源索引无效');

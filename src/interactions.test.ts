@@ -19,6 +19,12 @@ describe('PureRef-style image gestures', () => {
     expect(matchesColorPickerShortcut('s', { key: 'Alt', code: 'AltLeft', ctrlKey: false, altKey: true, shiftKey: false })).toBe(false);
     expect(matchesColorPickerShortcut('alt', { key: 'Alt', code: 'AltLeft', ctrlKey: false, altKey: true, shiftKey: false })).toBe(true);
     expect(isAltColorPickerPointer('alt', { button: 0, ctrlKey: false, altKey: true, shiftKey: false })).toBe(true);
+    expect(isAltColorPickerPointer('alt', {
+      button: -1, buttons: 1, pointerType: 'pen', ctrlKey: false, altKey: true, shiftKey: false,
+    })).toBe(true);
+    expect(isAltColorPickerPointer('alt', {
+      button: 0, buttons: 3, pointerType: 'pen', ctrlKey: false, altKey: true, shiftKey: false,
+    })).toBe(false);
     expect(isAltColorPickerPointer('s', { button: 0, ctrlKey: false, altKey: true, shiftKey: false })).toBe(false);
   });
 

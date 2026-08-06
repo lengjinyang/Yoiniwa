@@ -15,8 +15,6 @@ export const GROUP_HEADER_FULL_HEIGHT_SCALE = 1.5;
 export const GROUP_RESIZE_HANDLE_SCREEN_SIZE = 6;
 export const GROUP_HEADER_ACTION_SCREEN_WIDTH = 20;
 export const GROUP_MORE_ICON_RIGHT_INSET = 14;
-export const GROUP_MORE_ICON_DOT_RADIUS = 1.18;
-export const GROUP_MORE_ICON_DOT_SPACING = 3.65;
 
 export function groupTitleScreenWidth(name: string) {
   return Array.from(name).reduce((width, character) => width + (/^[\x00-\xff]$/.test(character) ? 6.5 : 11), 0);

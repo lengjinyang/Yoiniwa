@@ -120,7 +120,7 @@ export function useSceneHistory() {
     if (viewportFrame.current !== undefined) cancelAnimationFrame(viewportFrame.current);
     viewportFrame.current = undefined;
     pendingViewport.current = undefined;
-    setScene(normalizeScene(cloneScene({ ...next, groups: next.groups ?? [], annotations: next.annotations ?? [] })));
+    setScene(normalizeScene(cloneScene({ ...next, groups: next.groups ?? [] })));
     past.current = [];
     future.current = [];
     transactionStart.current = undefined;

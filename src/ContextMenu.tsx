@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { UiIcon } from './app/components/UiIcon';
 
 export type ContextMenuEntry =
   | { type: 'separator' }
@@ -86,10 +87,10 @@ const MenuList = ({ entries, onClose, className = '', style, ref }: {
             onClose();
           }}
         >
-          <span className="context-check">{entry.checked ? '✓' : ''}</span>
+          <span className="context-check">{entry.checked ? <UiIcon name="check" size={13} /> : null}</span>
           <span className="context-label">{entry.label}</span>
           {entry.shortcut && <span className="context-shortcut">{entry.shortcut}</span>}
-          {entry.children && <span className="context-arrow">›</span>}
+          {entry.children && <span className="context-arrow"><UiIcon name="chevron-right" size={14} /></span>}
           {!entry.disabled && entry.children && openIndex === index && <Submenu entries={entry.children} onClose={onClose} />}
         </li>)}
   </ul>;

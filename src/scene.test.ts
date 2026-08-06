@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addMemberToGroup, applyNonDestructiveCrop, createGroupFrame, createScene, groupVisibleBounds, GROUP_TITLE_HEIGHT, moveGroupWithContents, normalizeScene, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, rotateItemsAsGroup, scaleItemsAsGroup, topmostVisibleGroupAtPoint, translateItems } from './scene';
-import type { AnnotationItem, ImageGroup, ImageItem } from './types';
+import type { ImageGroup, ImageItem } from './types';
 
 const image = (id: string, x: number, width = 100): ImageItem => ({
   id, name: id, sourceType: 'file', dataUrl: '', naturalWidth: 1000, naturalHeight: 500,
@@ -13,7 +13,7 @@ describe('group transforms', () => {
     const scene = createScene();
     scene.items = [image('a', 0), image('b', 200), image('c', 400)];
     const group = createGroupFrame(scene, [{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }], '人物参考', 'group-1');
-    expect(group).toMatchObject({ id: 'group-1', name: '人物参考', x: -18, y: -26, width: 336, height: 114 });
+    expect(group).toMatchObject({ id: 'group-1', name: '人物参考', x: -8, y: 12, width: 316, height: 66 });
     expect(group.members).toEqual([{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }]);
   });
 
@@ -22,20 +22,11 @@ describe('group transforms', () => {
     scene.items = [image('a', 0), image('b', 200)];
     const group = createGroupFrame(scene, [{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }], '组', 'group-1');
     moveGroupWithContents(scene, group.id, 30, -10);
-    expect(group).toMatchObject({ x: 12, y: -36 });
+    expect(group).toMatchObject({ x: 22, y: 2 });
     expect(scene.items.map((item) => ({ x: item.x, y: item.y }))).toEqual([{ x: 30, y: 10 }, { x: 230, y: 10 }]);
   });
 
-  it('moves freehand annotations exactly once with the frame', () => {
-    const scene = createScene();
-    const annotation: AnnotationItem = { id: 'mark', type: 'pen', color: '#fff', strokeWidth: 3, points: [10, 20, 30, 40] };
-    scene.annotations = [annotation];
-    const group = createGroupFrame(scene, [{ type: 'annotation', id: annotation.id }], '标注组', 'group-1');
-    moveGroupWithContents(scene, group.id, 25, -10);
-    expect(annotation.points).toEqual([35, 10, 55, 30]);
-  });
-
-  it('joins only when fully contained, retains partial overlap, and leaves when fully outside', () => {
+  it('joins only when fully contained and keeps auto-fit members until explicitly detached', () => {
     const scene = createScene();
     scene.items = [image('a', 0), image('b', 200), image('c', 30)];
     const group = createGroupFrame(scene, [{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }], '组', 'group-1');
@@ -43,8 +34,8 @@ describe('group transforms', () => {
     expect(group.members.some((member) => member.id === 'c')).toBe(true);
     expect(reconcileMemberBounds(scene, { type: 'image', id: 'c' }, { x: 300, y: 20, width: 100, height: 50 })).toBe(group.id);
     expect(group.members.some((member) => member.id === 'c')).toBe(true);
-    expect(reconcileMemberBounds(scene, { type: 'image', id: 'c' }, { x: 1000, y: 1000, width: 100, height: 50 })).toBeUndefined();
-    expect(group.members.some((member) => member.id === 'c')).toBe(false);
+    expect(reconcileMemberBounds(scene, { type: 'image', id: 'c' }, { x: 1000, y: 1000, width: 100, height: 50 })).toBe(group.id);
+    expect(group.members.some((member) => member.id === 'c')).toBe(true);
   });
 
   it('does not accept new members while collapsed', () => {
@@ -61,10 +52,11 @@ describe('group transforms', () => {
     const group = createGroupFrame(scene, [{ type: 'image', id: 'a' }, { type: 'image', id: 'b' }], '组 1', 'group-1');
     const storedSize = { width: group.width, height: group.height };
     group.collapsed = true;
-    expect(groupVisibleBounds(group)).toMatchObject({ x: group.x, y: group.y, width: 88, height: GROUP_TITLE_HEIGHT });
+    expect(groupVisibleBounds(group)).toMatchObject({ x: group.x, y: group.y - GROUP_TITLE_HEIGHT, width: group.width, height: GROUP_TITLE_HEIGHT });
     expect({ width: group.width, height: group.height }).toEqual(storedSize);
     group.collapsed = false;
-    expect(groupVisibleBounds(group)).toMatchObject(storedSize);
+    expect(groupVisibleBounds(group)).toMatchObject({ x: group.x, y: group.y - GROUP_TITLE_HEIGHT,
+      width: storedSize.width, height: storedSize.height + GROUP_TITLE_HEIGHT });
   });
 
   it('finds the topmost group at a pointer using visible bounds', () => {
@@ -77,18 +69,16 @@ describe('group transforms', () => {
 
   it('uses the compact bounds of a collapsed group for hit testing', () => {
     const group = { id: 'collapsed', name: '组', x: 10, y: 20, width: 300, height: 180, color: '#000', opacity: 1, titleColor: '#fff', collapsed: true, sizeLocked: false, contentsHidden: false, members: [] } satisfies ImageGroup;
-    expect(topmostVisibleGroupAtPoint([group], [group.id], new Set(), { x: 20, y: 20 + GROUP_TITLE_HEIGHT / 2 })).toBe(group.id);
+    expect(topmostVisibleGroupAtPoint([group], [group.id], new Set(), { x: 20, y: 20 - GROUP_TITLE_HEIGHT / 2 })).toBe(group.id);
     expect(topmostVisibleGroupAtPoint([group], [group.id], new Set(), { x: 20, y: 20 + GROUP_TITLE_HEIGHT + 1 })).toBeUndefined();
   });
 
   it('normalizes object tags when loading an existing v2 scene', () => {
     const scene = createScene();
     scene.items = [{ ...image('tagged', 0), tags: ['  环境 ', '环境', '', '角色'] }];
-    scene.annotations = [{ id: 'mark', type: 'pen', color: '#fff', strokeWidth: 2, tags: ['草图', '草图'] }];
     scene.groups = [{ id: 'group', name: '组', x: 0, y: 0, width: 100, height: 100, color: '#000', opacity: 1, titleColor: '#fff', collapsed: false, sizeLocked: false, contentsHidden: false, tags: ['参考'], members: [] }];
     normalizeScene(scene);
     expect(scene.items[0].tags).toEqual(['环境', '角色']);
-    expect(scene.annotations[0].tags).toEqual(['草图']);
     expect(scene.groups[0].tags).toEqual(['参考']);
   });
 

@@ -1,12 +1,12 @@
 {
-  "name": "refcanvas",
+  "name": "yoiniwa",
   "version": "0.1.0",
-  "description": "A lightweight offline reference image board for Windows",
+  "description": "Yoiniwa (宵庭), a quiet offline reference board for Windows",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "npm run build:electron && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --strictPort\" \"tsc -p tsconfig.electron.json --watch --noEmit --preserveWatchOutput\" \"wait-on http://localhost:5173 && electron .\"",
-    "dev:test": "npm run build:electron && set \"REFCANVAS_CLEAN_TEST_SESSION=1\" && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5173\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --strictPort\" \"tsc -p tsconfig.electron.json --watch --noEmit --preserveWatchOutput\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev:test": "npm run build:electron && set \"REFCANVAS_CLEAN_TEST_SESSION=1\" && set \"REFCANVAS_DEV_SERVER_URL=http://localhost:5174\" && concurrently -k --success command-electron -n vite,electron-ts,electron \"vite --port 5174 --strictPort\" \"tsc -p tsconfig.electron.json --watch --noEmit --preserveWatchOutput\" \"wait-on http://localhost:5174 && electron .\"",
     "typecheck:renderer": "tsc --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json --noEmit",
     "typecheck": "npm run typecheck:renderer && npm run typecheck:electron",
@@ -27,6 +27,7 @@
     "smoke:real-images": "npm run build:electron && set \"REFCANVAS_REAL_IMAGE_TEST=1\" && set \"REFCANVAS_TEST_CACHE_ROOT=%TEMP%\\refcanvas-real-images-%RANDOM%\" && electron . --user-data-dir=\"%TEMP%\\refcanvas-real-images-%RANDOM%\"",
     "bench:image-pipeline": "npm run build:electron && node tools/benchmarks/image-pipeline-benchmark.mjs",
     "smoke:thumbnail-fallback": "npm run build:electron && set \"REFCANVAS_REAL_IMAGE_TEST=1\" && set \"REFCANVAS_FORCE_THUMBNAIL_FAILURE=1\" && set \"REFCANVAS_TEST_CACHE_ROOT=%TEMP%\\refcanvas-thumbnail-fallback-%RANDOM%\" && electron . --user-data-dir=\"%TEMP%\\refcanvas-thumbnail-fallback-%RANDOM%\"",
+    "smoke:photoshop": "npm run build && set \"REFCANVAS_FAKE_PHOTOSHOP=synced\" && set \"REFCANVAS_PHOTOSHOP_SMOKE=1\" && electron .",
     "dist": "npm run build && electron-builder --win nsis",
     "test": "vitest run"
   },
@@ -60,8 +61,8 @@
     "wait-on": "^9.0.0"
   },
   "build": {
-    "appId": "com.refcanvas.app",
-    "productName": "RefCanvas",
+    "appId": "com.yoiniwa.app",
+    "productName": "Yoiniwa",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -78,7 +79,8 @@
     },
     "win": {
       "target": "nsis",
-      "artifactName": "RefCanvas-${version}-Setup.${ext}"
+      "icon": "build/yoiniwa.ico",
+      "artifactName": "Yoiniwa-${version}-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -88,8 +90,8 @@
     "fileAssociations": [
       {
         "ext": "refcanvas",
-        "name": "RefCanvas Scene",
-        "description": "RefCanvas reference board"
+        "name": "Yoiniwa Board",
+        "description": "Yoiniwa reference board"
       }
     ]
   }

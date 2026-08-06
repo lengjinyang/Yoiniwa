@@ -1,50 +1,51 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { eraseAnnotationsAt } from './annotationEraser';
 import { CanvasView } from './canvas/CanvasView';
 import { AutosaveCoordinator } from './canvas/persistence/AutosaveCoordinator';
 import { loadProjectScene } from './canvas/persistence/ProjectLoader';
 import { serializeProjectScene } from './canvas/persistence/ProjectSerializer';
 import { ContextMenu, type ContextMenuEntry, type MenuPosition } from './ContextMenu';
-import { annotationBounds, renderItems } from './exportScene';
+import { renderItems } from './exportScene';
 import { applyLayout, type LayoutAction } from './layout';
 import { matchesColorPickerShortcut, MAX_ZOOM, MIN_ZOOM, type ColorPickerShortcut } from './interactions';
 import { arrangeImportedItems } from './importPlacement';
 import { preloadImagePreview } from './imageResources';
-import { annotationLabel, groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from './outline';
+import { groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from './outline';
 import { startOperation, settleOperation, clearOperation, type OperationKind, type OperationState } from './operationState';
-import { addMemberToGroup, annotationSceneBounds, createGroupFrame, createScene, detachImageFromGroup, fitAutoGroupsToContents, fitGroupToContents, groupVisibleBounds, itemBounds, memberBounds, moveAnnotation, moveGroupWithContents, reconcileAllMemberships, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
+import { addMemberToGroup, createGroupFrame, createScene, detachImageFromGroup, fitAutoGroupsToContents, fitGroupToContents, groupVisibleBounds, itemBounds, memberBounds, moveGroupWithContents, reconcileAllMemberships, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
 import type { GroupFrameBounds } from './canvas/selection/GroupResizeController';
 import { captureSceneSelection, pasteScenePayload, type SceneClipboardPayload } from './sceneClipboard';
 import { mergeSceneInto } from './sceneMerge';
-import type { AnnotationItem, AnnotationTool, CacheInfo, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, RecentScene, WindowState } from './types';
+import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, RecentScene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
 import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
 import { Button, formatBytes, OutlineThumbnail } from './app/components/CommonControls';
+import { UiIcon, type UiIconName } from './app/components/UiIcon';
 import { appCommand, createAppCommandRegistry } from './app/AppCommand';
 import { ColorControl, type ColorControlHandle } from './ColorControl';
 import './styles.css';
 import './styles/quiet-tokens.css';
 import './styles/quiet-controls.css';
 import './styles/quiet-surfaces.css';
+import type { VisualNotesToolState } from './canvas/interaction/VisualNotesController';
+import { shouldAutoPhotoshopRoundTrip } from './shared/photoshopIntegration';
 
 const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, opacity: 1 };
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
-
-function commentScreenAnchor(item: ImageItem, viewport: { x: number; y: number; scale: number }) {
-  const radians = item.rotation * Math.PI / 180;
-  const centerX = item.x + item.width / 2; const centerY = item.y + item.height / 2;
-  const localX = item.width / 2 + 14 / viewport.scale; const localY = -item.height / 2;
-  const worldX = centerX + localX * Math.cos(radians) - localY * Math.sin(radians);
-  const worldY = centerY + localX * Math.sin(radians) + localY * Math.cos(radians);
-  return { x: viewport.x + worldX * viewport.scale, y: viewport.y + worldY * viewport.scale };
-}
+const VISUAL_NOTE_TOOL_OPTIONS: ReadonlyArray<{ tool: VisualNoteTool; label: string; shortcut: string; icon: UiIconName }> = [
+  { tool: 'brush', label: '画笔', shortcut: '1 / B', icon: 'pen' },
+  { tool: 'arrow', label: '箭头', shortcut: '2', icon: 'note-arrow' },
+  { tool: 'eraser', label: '橡皮擦', shortcut: '3 / E', icon: 'eraser' },
+];
+const VISUAL_NOTE_COLOR_OPTIONS = [
+  ['#d5d8dc', '白色'], ['#c97c80', '暖红'], ['#c6a15b', '暖黄'],
+  ['#78a089', '青绿'], ['#7595b8', '冷蓝'], ['#9383ae', '灰紫'],
+] as const;
 
 export default function App() {
   performanceMonitor.markReactRender();
   const history = useSceneHistory();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [selectedAnnotationIds, setSelectedAnnotationIds] = useState<string[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
   const [renamingGroupId, setRenamingGroupId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState('');
@@ -61,17 +62,20 @@ export default function App() {
   const [propertiesOpen, setPropertiesOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineQuery, setOutlineQuery] = useState('');
+  const [visualNotesEnabled, setVisualNotesEnabled] = useState(false);
+  const [visualNoteTool, setVisualNoteTool] = useState<VisualNoteTool>('brush');
+  const [visualNoteColor, setVisualNoteColor] = useState('#c6a15b');
+  const [visualNoteOpacity, setVisualNoteOpacity] = useState(0.82);
+  const [visualNoteWidth, setVisualNoteWidth] = useState<VisualNoteWidth>('medium');
+  const [visualNotePressure, setVisualNotePressure] = useState(true);
+  const [eraserSize, setEraserSize] = useState<EraserSize>('medium');
+  const [visualNotesTemporaryHidden, setVisualNotesTemporaryHidden] = useState(false);
+  const [selectedVisualMarkId, setSelectedVisualMarkId] = useState<string>();
   const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
   const [sceneNameVisible, setSceneNameVisible] = useState(false);
-  const [commentEditingId, setCommentEditingId] = useState<string>();
-  const [commentDraft, setCommentDraft] = useState('');
+  const sceneNameVisibleRef = useRef(false);
   const [contextMenu, setContextMenu] = useState<MenuPosition>();
   const [groupActionMenu, setGroupActionMenu] = useState<{ id: string; position: MenuPosition }>();
-  const [annotationMode, setAnnotationMode] = useState(false);
-  const [annotationTool, setAnnotationTool] = useState<AnnotationTool>('pen');
-  const [annotationColor, setAnnotationColor] = useState('#ffcc45');
-  const [annotationOpacity, setAnnotationOpacity] = useState(1);
-  const [annotationWidth, setAnnotationWidth] = useState(4);
   const [colorPickerHeld, setColorPickerHeld] = useState(false);
   const [groupColorEditor, setGroupColorEditor] = useState<{ id: string; anchor: { x: number; y: number } }>();
   const groupColorEditorRef = useRef<ColorControlHandle>(null);
@@ -88,6 +92,8 @@ export default function App() {
   const sceneClipboardRef = useRef<SceneClipboardPayload | undefined>(undefined);
   const lastPointerRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const api = window.refCanvas;
+  const autoPhotoshopRoundTrip = shouldAutoPhotoshopRoundTrip(windowMode);
+  const activeColorPickerShortcut: ColorPickerShortcut = windowMode.locked ? 'alt' : colorPickerShortcut;
   const autosaveExecuteRef = useRef<(scene: typeof history.scene, revision: number) => Promise<void>>(async () => undefined);
   const autosaveCoordinatorRef = useRef<AutosaveCoordinator | undefined>(undefined);
   if (!autosaveCoordinatorRef.current) {
@@ -102,6 +108,10 @@ export default function App() {
   performanceSceneRef.current = history.scene;
   useEffect(() => { liveViewportRef.current = history.scene.viewport; }, [history.scene.viewport]);
   useEffect(() => {
+    setSelectedVisualMarkId(undefined);
+    setVisualNotesTemporaryHidden(false);
+  }, [history.projectEpoch]);
+  useEffect(() => {
     const autosave = autosaveCoordinatorRef.current;
     if (!history.dirty) autosave?.cancel();
     else autosave?.schedule(history.scene, history.revision);
@@ -115,12 +125,12 @@ export default function App() {
     smokeWindow.__refCanvasSmokeExport = () => renderItems(
       history.scene.items,
       history.scene.canvas.includeBackgroundOnExport ? history.scene.canvas.background : undefined,
-      history.scene.annotations,
       history.scene.groups,
       history.scene.canvas.backgroundOpacity ?? 1,
+      visualNotesTemporaryHidden ? { ...history.scene.visualNotes, visible: false } : history.scene.visualNotes,
     );
     return () => { delete smokeWindow.__refCanvasSmokeExport; };
-  }, [history.scene]);
+  }, [history.scene, visualNotesTemporaryHidden]);
 
   useEffect(() => {
     if (!new URLSearchParams(window.location.search).has('perf-bench')) return undefined;
@@ -155,11 +165,9 @@ export default function App() {
               rotation: 0,
               zIndex: index,
               locked: false,
-              comment: undefined,
             };
           });
           scene.groups = [];
-          scene.annotations = [];
           const rows = Math.ceil(count / columns);
           const scale = Math.min(
             (window.innerWidth - 80) / Math.max(1, columns * cellWidth),
@@ -170,10 +178,9 @@ export default function App() {
       },
       selectImages: (count) => {
         setSelectedGroupId(undefined);
-        setSelectedAnnotationIds([]);
         setSelectedIds(performanceSceneRef.current.items.slice(0, count).map((item) => item.id));
       },
-      clearSelection: () => { setSelectedIds([]); setSelectedAnnotationIds([]); setSelectedGroupId(undefined); },
+      clearSelection: () => { setSelectedIds([]); setSelectedGroupId(undefined); },
       loadScene: (scene) => history.load(scene),
     };
     return () => { delete perfWindow.__refCanvasPerf; };
@@ -190,12 +197,16 @@ export default function App() {
       setStatus(`无法连接桌面取色服务 ${color.hex}`);
       return;
     }
-    const result = await api.syncPhotoshopForeground(color);
+    const result = await api.syncPhotoshopForeground(color, autoPhotoshopRoundTrip);
     if (request !== colorSyncRequestRef.current) return;
-    setStatus(result.ok
-      ? `已同步 Photoshop 前景色 ${color.hex}`
-      : `${result.message ?? 'Photoshop 同步失败'} · ${color.hex}`);
-  }, [api]);
+    if (!result.ok) {
+      setStatus(`${result.message ?? 'Photoshop 同步失败'} · ${color.hex}`);
+      return;
+    }
+    setStatus(result.focusStatus === 'automation-error' || result.focusStatus === 'not-found'
+      ? `已同步 Photoshop 前景色，但未能自动返回窗口 · ${color.hex}`
+      : `已同步 Photoshop 前景色 ${color.hex}`);
+  }, [api, autoPhotoshopRoundTrip]);
 
   const selectedItems = useMemo(() => selectedIds.flatMap((id) => {
     const item = history.scene.items.find((value) => value.id === id);
@@ -222,17 +233,84 @@ export default function App() {
       collect(selectedGroup);
       return [...new Set(ids)];
     }
-    if (selectedAnnotationIds.length) return [];
     return history.scene.items.filter((item) => !item.locked).map((item) => item.id);
-  }, [history.scene.groups, history.scene.items, selectedAnnotationIds.length, selectedGroup, selectedIds]);
+  }, [history.scene.groups, history.scene.items, selectedGroup, selectedIds]);
   const primary = selectedItems[0];
+  const visualNotesToolState = useMemo<VisualNotesToolState>(() => ({
+    enabled: visualNotesEnabled,
+    tool: visualNoteTool,
+    color: visualNoteColor,
+    opacity: visualNoteOpacity,
+    width: visualNoteWidth,
+    pressureEnabled: visualNotePressure,
+    eraserSize,
+    selectedMarkId: selectedVisualMarkId,
+  }), [eraserSize, selectedVisualMarkId, visualNoteColor, visualNoteOpacity, visualNotePressure, visualNoteTool, visualNoteWidth, visualNotesEnabled]);
+
+  useEffect(() => {
+    if (!visualNotesEnabled) return undefined;
+    const closeVisualNoteFolds = (event: PointerEvent) => {
+      document.querySelectorAll<HTMLDetailsElement>('.visual-note-fold[open]').forEach((details) => {
+        if (!details.contains(event.target as Node)) details.removeAttribute('open');
+      });
+    };
+    window.addEventListener('pointerdown', closeVisualNoteFolds, true);
+    return () => window.removeEventListener('pointerdown', closeVisualNoteFolds, true);
+  }, [visualNotesEnabled]);
+
+  const updateSelectedVisualMarkStyle = useCallback((patch: { color?: string; opacity?: number; width?: VisualNoteWidth }) => {
+    if (!selectedVisualMarkId) return;
+    history.commit((scene) => {
+      const mark = scene.visualNotes.marks.find((value) => value.id === selectedVisualMarkId);
+      if (!mark) return;
+      Object.assign(mark.style, patch);
+      if (patch.width) mark.style.baseWidth = ({ thin: 1.6, medium: 3.2, thick: 6 } as const)[patch.width]
+        / Math.max(0.001, scene.viewport.scale);
+    });
+  }, [history, selectedVisualMarkId]);
+
+  const deleteSelectedVisualMark = useCallback(() => {
+    if (!selectedVisualMarkId) return false;
+    history.commit((scene) => {
+      scene.visualNotes.marks = scene.visualNotes.marks.filter((mark) => mark.id !== selectedVisualMarkId);
+      scene.groups.forEach((group) => { group.members = group.members.filter((member) => member.type !== 'mark' || member.id !== selectedVisualMarkId); });
+    });
+    setSelectedVisualMarkId(undefined);
+    return true;
+  }, [history, selectedVisualMarkId]);
+
+
+  const commitVisualNotes = useCallback((notes: VisualNotesState) => {
+    history.commit((scene) => {
+      scene.visualNotes = structuredClone(notes);
+      const markIds = new Set(notes.marks.map((mark) => mark.id));
+      scene.groups.forEach((group) => { group.members = group.members.filter((member) => member.type !== 'mark' || markIds.has(member.id)); });
+      notes.marks.filter((mark) => mark.anchor.type === 'scene').forEach((mark) => {
+        const bounds = memberBounds(scene, { type: 'mark', id: mark.id });
+        if (bounds) reconcileMemberBounds(scene, { type: 'mark', id: mark.id }, bounds);
+      });
+    });
+  }, [history]);
+
   const layoutTargetCount = targetIds.length;
-  const hasContent = history.scene.items.length > 0 || history.scene.annotations.length > 0 || history.scene.groups.length > 0;
+  const hasContent = history.scene.items.length > 0 || history.scene.groups.length > 0;
 
   const setMode = useCallback(async (patch: Partial<WindowState>) => {
     if (!api) return;
     const next = await api.setWindowMode(patch);
     setWindowMode(next);
+    if (next.locked) {
+      setSelectedIds([]);
+      setSelectedGroupId(undefined);
+      setSelectedVisualMarkId(undefined);
+      setContextMenu(undefined);
+      setGroupActionMenu(undefined);
+      setStatus(shouldAutoPhotoshopRoundTrip(next)
+        ? '无感取色已启用 · Photoshop 保持前台，Alt + 笔尖直接取色'
+        : '参考模式已锁定 · 同时开启始终置顶后可启用 Photoshop 无焦点取色');
+    } else if (patch.locked === false) {
+      setStatus('画板已解锁');
+    }
   }, [api]);
 
   useEffect(() => {
@@ -286,17 +364,25 @@ export default function App() {
     return () => window.removeEventListener('refcanvas-resource-error', resourceError);
   }, []);
   useEffect(() => {
-    if (!sceneNameVisible) return;
-    const timer = window.setTimeout(() => setSceneNameVisible(false), 2600);
-    return () => window.clearTimeout(timer);
-  }, [sceneNameVisible]);
-  useEffect(() => {
-    const rememberPointer = (event: MouseEvent) => { lastPointerRef.current = { x: event.clientX, y: event.clientY }; };
+    const rememberPointer = (event: MouseEvent) => {
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      const visible = event.clientY <= 40;
+      if (visible === sceneNameVisibleRef.current) return;
+      sceneNameVisibleRef.current = visible;
+      setSceneNameVisible(visible);
+    };
+    const hideSceneName = () => {
+      if (!sceneNameVisibleRef.current) return;
+      sceneNameVisibleRef.current = false;
+      setSceneNameVisible(false);
+    };
     window.addEventListener('mousemove', rememberPointer);
     window.addEventListener('mousedown', rememberPointer);
+    window.addEventListener('mouseleave', hideSceneName);
     return () => {
       window.removeEventListener('mousemove', rememberPointer);
       window.removeEventListener('mousedown', rememberPointer);
+      window.removeEventListener('mouseleave', hideSceneName);
     };
   }, []);
   const addImages = useCallback(async (sources: ImportedImage[], placement?: { screenX: number; screenY: number; pack?: boolean }) => {
@@ -342,7 +428,6 @@ export default function App() {
       placed.forEach((item) => reconcileMemberBounds(scene, { type: 'image', id: item.id }, memberBounds(scene, { type: 'image', id: item.id })!));
     });
     setSelectedIds(placed.map((item) => item.id));
-    setSelectedAnnotationIds([]);
     setSelectedGroupId(undefined);
     setStatus(decoded.length === sources.length ? `已添加 ${decoded.length} 张图片` : `已添加 ${decoded.length} 张图片，${sources.length - decoded.length} 张无法解码`);
   }, [history]);
@@ -414,7 +499,6 @@ export default function App() {
       const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision);
       if (!result.canceled) {
         const savedCurrentRevision = history.markSaved(result.scene, result.revision ?? saveRevision);
-        setSceneNameVisible(true);
         settleCurrentOperation(requestId, 'success', `已保存至 ${result.path}`);
         setStatus(savedCurrentRevision ? '' : '保存完成，但保存期间产生了新修改');
         api.recentScenes().then(setRecent).catch((error) => setStatus(`刷新最近画板失败：${String(error)}`));
@@ -436,11 +520,10 @@ export default function App() {
       if (!result.canceled && validateScene(loaded)) {
         history.load(loaded);
         setSelectedIds([]);
-        setSelectedAnnotationIds([]);
         setSelectedGroupId(undefined);
         settleCurrentOperation(requestId, 'success', `已打开 ${result.path}`);
         api.recentScenes().then(setRecent).catch((error) => setStatus(`刷新最近画板失败：${String(error)}`));
-      } else if (!result.canceled) settleCurrentOperation(requestId, 'error', '无法打开：不是有效的 RefCanvas 场景');
+      } else if (!result.canceled) settleCurrentOperation(requestId, 'error', '无法打开：不是有效的 Yoiniwa 画板');
       else clearCurrentOperation(requestId);
     } catch (error) { settleCurrentOperation(requestId, 'error', `打开失败：${String(error)}`); }
   }, [api, beginOperation, clearCurrentOperation, history, settleCurrentOperation]);
@@ -473,7 +556,7 @@ export default function App() {
       }
       const imported = loadProjectScene(result.scene);
       if (!validateScene(imported)) {
-        settleCurrentOperation(requestId, 'error', '无法导入：不是有效的 RefCanvas 场景');
+        settleCurrentOperation(requestId, 'error', '无法导入：不是有效的 Yoiniwa 画板');
         return;
       }
       const viewport = history.scene.viewport;
@@ -485,9 +568,8 @@ export default function App() {
         });
       });
       setSelectedIds(merged?.imageIds ?? []);
-      setSelectedAnnotationIds(merged?.annotationIds ?? []);
       setSelectedGroupId(merged?.rootGroupIds[0]);
-      const count = (merged?.imageIds.length ?? 0) + (merged?.annotationIds.length ?? 0) + (merged?.groupIds.length ?? 0);
+      const count = (merged?.imageIds.length ?? 0) + (merged?.groupIds.length ?? 0);
       settleCurrentOperation(requestId, 'success', `已导入 ${count} 个对象`);
     } catch (error) {
       settleCurrentOperation(requestId, 'error', `导入画板失败：${String(error)}`);
@@ -499,7 +581,6 @@ export default function App() {
     api?.resetScenePath();
     history.load(createScene());
     setSelectedIds([]);
-    setSelectedAnnotationIds([]);
     setSelectedGroupId(undefined);
     setStatus('已新建画板');
   }, [api, history]);
@@ -525,86 +606,34 @@ export default function App() {
     setStatus(`已恢复 ${cropped.length} 张图片被裁掉的区域`);
   }, [mutateSelected, selectedItems]);
 
-  const addAnnotation = useCallback((annotation: AnnotationItem) => {
-    history.commit((scene) => {
-      scene.annotations.push(annotation);
-      const bounds = annotationSceneBounds(annotation);
-      reconcileMemberBounds(scene, { type: 'annotation', id: annotation.id }, bounds);
-    });
-  }, [history]);
-
-  const eraseAnnotations = useCallback((samples: readonly { x: number; y: number; radius: number }[]) => {
-    if (!samples.length) return;
-    history.commit((scene) => samples.forEach(({ x, y, radius }) => {
-      const result = eraseAnnotationsAt(scene.annotations, x, y, radius);
-      if (!result.changed) return;
-      scene.annotations = result.annotations;
-      scene.groups.forEach((group) => {
-        const memberIds = new Set(group.members.filter((member) => member.type === 'annotation').map((member) => member.id));
-        group.members = group.members.filter((member) => member.type !== 'annotation' || !result.removedIds.includes(member.id));
-        result.splitMembers.forEach(({ sourceId, newId }) => {
-          if (memberIds.has(sourceId) && !group.members.some((member) => member.type === 'annotation' && member.id === newId)) {
-            group.members.push({ type: 'annotation', id: newId });
-          }
-        });
-      });
-      fitAutoGroupsToContents(scene);
-    }));
-  }, [history]);
-
-  const clearAnnotations = useCallback(() => {
-    if (!history.scene.annotations.length) return;
-    history.commit((scene) => {
-      scene.annotations = [];
-      scene.groups.forEach((group) => { group.members = group.members.filter((member) => member.type !== 'annotation'); });
-    });
-    setSelectedAnnotationIds([]);
-  }, [history]);
-
-  const toggleAnnotationMode = useCallback(() => {
-    setContextMenu(undefined);
-    setPropertiesOpen(false);
-    setAnnotationMode((enabled) => {
-      if (!enabled) setSelectedIds([]);
-      setStatus(enabled ? '已退出标注模式' : '标注模式：画笔');
-      return !enabled;
-    });
-  }, []);
-
   const deleteSelected = useCallback(() => {
-    if (!selectedIds.length && !selectedAnnotationIds.length) return;
-    history.commit((scene) => deleteSceneSelection(scene, selectedIds, selectedAnnotationIds));
+    if (!selectedIds.length) return;
+    history.commit((scene) => deleteSceneSelection(scene, selectedIds));
     setSelectedIds([]);
-    setSelectedAnnotationIds([]);
-  }, [history, selectedAnnotationIds, selectedIds]);
+  }, [history, selectedIds]);
 
   const duplicate = useCallback(() => {
-    const payload = captureSceneSelection(history.scene, selectedIds, selectedAnnotationIds, selectedGroupId);
+    const payload = captureSceneSelection(history.scene, selectedIds, selectedGroupId);
     if (!payload) return;
     const next = structuredClone(history.scene);
     const result = pasteScenePayload(next, payload, 30);
     history.commit((scene) => {
-      scene.items = next.items; scene.annotations = next.annotations; scene.groups = next.groups;
+      scene.items = next.items; scene.groups = next.groups; scene.visualNotes = next.visualNotes;
     });
     setSelectedIds(result?.rootGroupId ? [] : result?.imageIds ?? []);
-    setSelectedAnnotationIds(result?.rootGroupId ? [] : result?.annotationIds ?? []);
     setSelectedGroupId(result?.rootGroupId);
-  }, [history, selectedAnnotationIds, selectedGroupId, selectedIds]);
+  }, [history, selectedGroupId, selectedIds]);
 
   const createGroup = useCallback(() => {
-    const members: GroupMember[] = [
-      ...selectedIds.map((id) => ({ type: 'image' as const, id })),
-      ...selectedAnnotationIds.map((id) => ({ type: 'annotation' as const, id })),
-    ];
+    const members: GroupMember[] = selectedIds.map((id) => ({ type: 'image' as const, id }));
     if (members.length < 2) { setStatus('请先框选至少两个对象'); return; }
     const name = `组 ${history.scene.groups.length + 1}`;
     const id = crypto.randomUUID();
     history.commit((scene) => { createGroupFrame(scene, members, name, id); });
     setSelectedIds([]);
-    setSelectedAnnotationIds([]);
     setSelectedGroupId(id);
     setStatus(`已创建分组框“${name}”`);
-  }, [history, selectedAnnotationIds, selectedIds]);
+  }, [history, selectedIds]);
 
 
   const renameGroupById = useCallback((groupId: string) => {
@@ -754,10 +783,11 @@ export default function App() {
         if (!group) return;
         if (withContents) {
           const imageIds = new Set(group.members.filter((member) => member.type === 'image').map((member) => member.id));
-          const annotationIds = new Set(group.members.filter((member) => member.type === 'annotation').map((member) => member.id));
+          const markIds = new Set(group.members.filter((member) => member.type === 'mark').map((member) => member.id));
           group.members.filter((member) => member.type === 'group').forEach((member) => remove(member.id));
-          scene.items = scene.items.filter((item) => !imageIds.has(item.id));
-          scene.annotations = scene.annotations.filter((annotation) => !annotationIds.has(annotation.id));
+          deleteSceneSelection(scene, [...imageIds]);
+          scene.visualNotes.marks = scene.visualNotes.marks.filter((mark) => !markIds.has(mark.id));
+          scene.groups.forEach((value) => { value.members = value.members.filter((member) => member.type !== 'mark' || !markIds.has(member.id)); });
         } else {
           group.members.filter((member) => member.type === 'group').forEach((member) => {
             const child = scene.groups.find((value) => value.id === member.id);
@@ -781,12 +811,12 @@ export default function App() {
   }, [deleteGroupById, selectedGroup]);
 
   const copySelection = useCallback(() => {
-    const payload = captureSceneSelection(history.scene, selectedIds, selectedAnnotationIds, selectedGroupId);
+    const payload = captureSceneSelection(history.scene, selectedIds, selectedGroupId);
     if (!payload) { setStatus('没有可复制的内容'); return false; }
     sceneClipboardRef.current = payload;
-    setStatus(selectedGroupId ? '已复制分组框及其内容' : `已复制 ${payload.items.length + payload.annotations.length} 项`);
+    setStatus(selectedGroupId ? '已复制分组框及其内容' : `已复制 ${payload.items.length} 项`);
     return true;
-  }, [history.scene, selectedAnnotationIds, selectedGroupId, selectedIds]);
+  }, [history.scene, selectedGroupId, selectedIds]);
 
   const cutSelection = useCallback(() => {
     if (!copySelection()) return;
@@ -804,34 +834,11 @@ export default function App() {
       x: (pointer.x - viewport.x) / viewport.scale,
       y: (pointer.y - viewport.y) / viewport.scale,
     });
-    history.commit((scene) => { scene.items = next.items; scene.annotations = next.annotations; scene.groups = next.groups; });
+    history.commit((scene) => { scene.items = next.items; scene.groups = next.groups; scene.visualNotes = next.visualNotes; });
     setSelectedIds(result?.rootGroupId ? [] : result?.imageIds ?? []);
-    setSelectedAnnotationIds(result?.rootGroupId ? [] : result?.annotationIds ?? []);
     setSelectedGroupId(result?.rootGroupId);
     setStatus(result?.rootGroupId ? '已粘贴完整分组框' : '已粘贴内容');
   }, [history]);
-
-  const editImageComment = useCallback(() => {
-    if (!primary) return;
-    setCommentEditingId(primary.id);
-    setCommentDraft(primary.comment ?? '');
-  }, [primary]);
-
-  const finishImageComment = useCallback((saveComment: boolean) => {
-    const id = commentEditingId;
-    if (!id) return;
-    const comment = commentDraft.trim();
-    if (saveComment) {
-      const current = history.scene.items.find((item) => item.id === id)?.comment ?? '';
-      if (current !== comment) history.commit((scene) => {
-          const item = scene.items.find((value) => value.id === id);
-          if (item) item.comment = comment || undefined;
-        });
-      setStatus(comment ? '评论已收起到图片外侧' : '已删除图片评论');
-    }
-    setCommentEditingId(undefined);
-    setCommentDraft('');
-  }, [commentDraft, commentEditingId, history]);
 
   const showPrimarySource = useCallback(async () => {
     if (!primary?.sourcePath) { setStatus('这张图片来自剪贴板，或没有可用的本地源文件'); return; }
@@ -855,16 +862,6 @@ export default function App() {
     history.commit((scene) => applyImageChanges(scene, changes));
   }, [history]);
 
-  const commitAnnotationChanges = useCallback((changes: Array<{ id: string; deltaX: number; deltaY: number }>) => {
-    history.commit((scene) => changes.forEach((change) => {
-      const annotation = scene.annotations.find((value) => value.id === change.id);
-      if (!annotation) return;
-      moveAnnotation(annotation, change.deltaX, change.deltaY);
-      const bounds = annotationSceneBounds(annotation);
-      reconcileMemberBounds(scene, { type: 'annotation', id: annotation.id }, bounds);
-    }));
-  }, [history]);
-
   const fitBounds = useCallback((bounds: { x: number; y: number; width: number; height: number }, margin = 80) => {
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -880,7 +877,6 @@ export default function App() {
   const fitCanvas = useCallback(() => {
     const bounds = [
       ...(history.scene.items.length ? [sceneBounds(history.scene.items)] : []),
-      ...history.scene.annotations.map(annotationBounds),
       ...history.scene.groups.map(groupVisibleBounds),
     ];
     if (!bounds.length) return;
@@ -889,7 +885,7 @@ export default function App() {
     const right = Math.max(...bounds.map((part) => part.x + part.width));
     const bottom = Math.max(...bounds.map((part) => part.y + part.height));
     fitBounds({ x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) });
-  }, [fitBounds, history.scene.annotations, history.scene.groups, history.scene.items]);
+  }, [fitBounds, history.scene.groups, history.scene.items]);
 
   const toggleFocus = useCallback((items: ImageItem[]) => {
     if (!items.length) return;
@@ -908,6 +904,7 @@ export default function App() {
   }, [fitBounds, focusReturn, history.scene.viewport]);
 
   const focusStep = useCallback((direction: -1 | 1) => {
+    if (windowMode.locked) return;
     const ordered = [...history.scene.items].sort((a, b) => a.zIndex - b.zIndex);
     if (!ordered.length) return;
     const currentIndex = Math.max(0, ordered.findIndex((item) => item.id === primary?.id));
@@ -915,7 +912,7 @@ export default function App() {
     if (!focusReturn) setFocusReturn({ ...history.scene.viewport });
     setSelectedIds([next.id]);
     fitItems([next]);
-  }, [fitItems, focusReturn, history.scene.items, history.scene.viewport, primary?.id]);
+  }, [fitItems, focusReturn, history.scene.items, history.scene.viewport, primary?.id, windowMode.locked]);
 
   const resetZoom = useCallback(() => {
     const viewport = history.scene.viewport;
@@ -955,19 +952,17 @@ export default function App() {
   const exportItems = useCallback(async (onlySelected: boolean, copy = false, format: 'png' | 'jpg' = 'png') => {
     if (!api) return;
     const items = onlySelected ? selectedItems : history.scene.items;
-    const selectedBounds = onlySelected && items.length ? sceneBounds(items) : undefined;
-    const annotations = onlySelected && selectedBounds
-      ? history.scene.annotations.filter((annotation) => {
-        const bounds = annotationBounds(annotation);
-        return bounds.x < selectedBounds.x + selectedBounds.width && bounds.x + bounds.width > selectedBounds.x
-          && bounds.y < selectedBounds.y + selectedBounds.height && bounds.y + bounds.height > selectedBounds.y;
-      })
-      : onlySelected ? [] : history.scene.annotations;
-    if (!items.length && !annotations.length) { setStatus('没有可导出的内容'); return; }
+    if (!items.length) { setStatus('没有可导出的内容'); return; }
     const requestId = beginOperation('export', '正在渲染导出图片…');
     try {
+      const selectedImageIds = new Set(items.map((item) => item.id));
+      const notes = visualNotesTemporaryHidden ? { ...history.scene.visualNotes, visible: false } : {
+        ...history.scene.visualNotes,
+        marks: onlySelected ? history.scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'image'
+          && selectedImageIds.has(mark.anchor.imageId)) : history.scene.visualNotes.marks,
+      };
       const imageData = await renderItems(items, history.scene.canvas.includeBackgroundOnExport ? history.scene.canvas.background : undefined,
-        annotations, onlySelected ? [] : history.scene.groups, history.scene.canvas.backgroundOpacity ?? 1);
+        onlySelected ? [] : history.scene.groups, history.scene.canvas.backgroundOpacity ?? 1, notes);
       if (copy) {
         await api.copyImage(imageData);
         settleCurrentOperation(requestId, 'success', '已将合成结果复制到剪贴板');
@@ -985,18 +980,18 @@ export default function App() {
     } catch (error) {
       settleCurrentOperation(requestId, 'error', `导出失败：${String(error)}`);
     }
-  }, [api, beginOperation, clearCurrentOperation, history.scene, selectedItems, settleCurrentOperation]);
+  }, [api, beginOperation, clearCurrentOperation, history.scene, selectedItems, settleCurrentOperation, visualNotesTemporaryHidden]);
 
   const commands = useMemo(() => createAppCommandRegistry([
     { id: 'edit.undo', enabled: history.canUndo, execute: history.undo },
     { id: 'edit.redo', enabled: history.canRedo, execute: history.redo },
-    { id: 'edit.copy', enabled: selectedIds.length + selectedAnnotationIds.length > 0 || Boolean(selectedGroup), execute: copySelection },
-    { id: 'edit.cut', enabled: selectedIds.length + selectedAnnotationIds.length > 0 || Boolean(selectedGroup), execute: cutSelection },
+    { id: 'edit.copy', enabled: selectedIds.length > 0 || Boolean(selectedGroup), execute: copySelection },
+    { id: 'edit.cut', enabled: selectedIds.length > 0 || Boolean(selectedGroup), execute: cutSelection },
     { id: 'edit.paste', enabled: Boolean(sceneClipboardRef.current), execute: pasteClipboard },
-    { id: 'edit.duplicate', enabled: selectedIds.length + selectedAnnotationIds.length > 0 || Boolean(selectedGroup), execute: duplicate },
-    { id: 'edit.delete', enabled: selectedIds.length + selectedAnnotationIds.length > 0 || Boolean(selectedGroup), execute: () => selectedGroup ? deleteGroup(false) : deleteSelected() },
-    { id: 'group.create', enabled: selectedIds.length + selectedAnnotationIds.length >= 2, execute: createGroup },
-  ]), [copySelection, createGroup, cutSelection, deleteGroup, deleteSelected, duplicate, history.canRedo, history.canUndo, history.redo, history.undo, pasteClipboard, selectedAnnotationIds.length, selectedGroup, selectedIds.length]);
+    { id: 'edit.duplicate', enabled: selectedIds.length > 0 || Boolean(selectedGroup), execute: duplicate },
+    { id: 'edit.delete', enabled: selectedIds.length > 0 || Boolean(selectedGroup), execute: () => selectedGroup ? deleteGroup(false) : deleteSelected() },
+    { id: 'group.create', enabled: selectedIds.length >= 2, execute: createGroup },
+  ]), [copySelection, createGroup, cutSelection, deleteGroup, deleteSelected, duplicate, history.canRedo, history.canUndo, history.redo, history.undo, pasteClipboard, selectedGroup, selectedIds.length]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1008,20 +1003,17 @@ export default function App() {
       const shift = event.shiftKey;
       const run = (action: () => void) => { event.preventDefault(); action(); };
 
-      if (matchesColorPickerShortcut(colorPickerShortcut, event)) return run(() => {
+      if (!ctrl && !alt && !shift && key === 'q') return run(() => setVisualNotesEnabled((value) => !value));
+      if (visualNotesEnabled && !ctrl && !alt && !shift) {
+        if (key === 'h') return run(() => { if (!event.repeat) setVisualNotesTemporaryHidden(true); });
+        if (key === '1' || key === 'b') return run(() => setVisualNoteTool('brush'));
+        if (key === '2') return run(() => setVisualNoteTool('arrow'));
+        if (key === '3' || key === 'e') return run(() => setVisualNoteTool('eraser'));
+      }
+
+      if (matchesColorPickerShortcut(activeColorPickerShortcut, event)) return run(() => {
         if (!event.repeat) setColorPickerHeld(true);
       });
-
-      if (!ctrl && !alt && !shift && key === 'q') return run(() => {
-        toggleAnnotationMode();
-      });
-      if (annotationMode && !ctrl && !alt) {
-        if (key === '1') return run(() => setAnnotationTool('pen'));
-        if (key === '2') return run(() => setAnnotationTool('arrow'));
-        if (key === '3') return run(() => setAnnotationTool('rectangle'));
-        if (key === '4') return run(() => setAnnotationTool('ellipse'));
-        if (key === 'e') return run(() => setAnnotationTool('eraser'));
-      }
 
       if (ctrl && alt && shift && event.key === 'ArrowUp') return run(() => layout('distribute-horizontal'));
       if (ctrl && alt && shift && event.key === 'ArrowDown') return run(() => layout('distribute-vertical'));
@@ -1057,9 +1049,9 @@ export default function App() {
       if (ctrl && !alt && !shift && key === 'd') return run(appCommand(commands, 'edit.duplicate').execute);
       if (ctrl && !alt && !shift && key === 'g') return run(appCommand(commands, 'group.create').execute);
       if (ctrl && !alt && !shift && key === 'a') return run(() => {
+        if (windowMode.locked) return;
         setSelectedGroupId(undefined);
         setSelectedIds(history.scene.items.filter((item) => !item.locked).map((item) => item.id));
-        setSelectedAnnotationIds(history.scene.annotations.map((annotation) => annotation.id));
       });
       if (ctrl && !alt && !shift && key === 'p') return run(() => layout('pack'));
       if (ctrl && !alt && !shift && key === 'o') return run(fitCanvas);
@@ -1078,32 +1070,34 @@ export default function App() {
       if (!ctrl && alt && shift && key === 'v') return run(() => mutateSelected((item) => { item.flipY = !item.flipY; }));
       if (!ctrl && alt && !shift && key === 'l') return run(() => mutateSelected((item) => { item.locked = !item.locked; }));
       if (!ctrl && !alt && !shift && event.key === 'F2') return run(renameGroup);
-      if (!annotationMode && !ctrl && !alt && !shift && event.code === 'Space' && !event.repeat) return run(() => toggleFocus(selectedItems));
+      if (!ctrl && !alt && !shift && event.code === 'Space' && !event.repeat) return run(() => toggleFocus(selectedItems));
       if (!ctrl && !alt && !shift && event.key === 'ArrowRight') return run(() => focusStep(1));
       if (!ctrl && !alt && !shift && event.key === 'ArrowLeft') return run(() => focusStep(-1));
       if (!ctrl && !alt && !shift && event.key === 'ArrowUp') return run(() => moveLayer(true));
       if (!ctrl && !alt && !shift && event.key === 'ArrowDown') return run(() => moveLayer(false));
       if (!ctrl && !alt && event.key === 'Tab') { event.preventDefault(); setContextMenu(undefined); setPropertiesOpen((value) => !value); }
-      if (!annotationMode && !ctrl && !alt && event.key === 'Delete') {
-        appCommand(commands, 'edit.delete').execute();
+      if (!ctrl && !alt && event.key === 'Delete') {
+        if (!deleteSelectedVisualMark()) appCommand(commands, 'edit.delete').execute();
       }
       if (event.key === 'Escape') {
         setColorPickerHeld(false);
         if (renamingGroupId) setRenamingGroupId(undefined);
-        else if (annotationMode) setAnnotationMode(false);
         else if (contextMenu) setContextMenu(undefined);
         else if (outlineOpen) setOutlineOpen(false);
         else if (propertiesOpen) setPropertiesOpen(false);
-        else { setSelectedIds([]); setSelectedAnnotationIds([]); setSelectedGroupId(undefined); }
+        else if (selectedVisualMarkId) setSelectedVisualMarkId(undefined);
+        else if (visualNotesEnabled) setVisualNotesEnabled(false);
+        else { setSelectedIds([]); setSelectedGroupId(undefined); }
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      const releasedPickerKey = colorPickerShortcut === 's'
+      const releasedPickerKey = activeColorPickerShortcut === 's'
         ? event.key.toLowerCase() === 's' || event.code === 'KeyS'
         : event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight';
       if (releasedPickerKey) setColorPickerHeld(false);
+      if (event.key.toLowerCase() === 'h') setVisualNotesTemporaryHidden(false);
     };
-    const onBlur = () => setColorPickerHeld(false);
+    const onBlur = () => { setColorPickerHeld(false); setVisualNotesTemporaryHidden(false); };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
@@ -1112,7 +1106,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [annotationMode, api, colorPickerShortcut, commands, contextMenu, detachSelectedImages, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, setMode, toggleAnnotationMode, toggleFocus, ungroupSelected, windowMode, zoomBy]);
+  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
 
   useEffect(() => {
     const over = (event: DragEvent) => event.preventDefault();
@@ -1177,7 +1171,7 @@ export default function App() {
     return () => window.removeEventListener('refcanvas-smoke-add-paths', addTestPaths);
   }, [addImages, api]);
 
-  const selectedObjectCount = selectedIds.length + selectedAnnotationIds.length;
+  const selectedObjectCount = selectedIds.length;
   const hasSelection = selectedObjectCount > 0;
   const hasImageSelection = selectedIds.length > 0;
   const selectedGroupedImageIds = selectedIds.filter((id) => history.scene.groups.some((group) =>
@@ -1258,7 +1252,6 @@ export default function App() {
         { type: 'item', label: '移到底层', shortcut: '↓', action: () => moveLayer(false) },
         { type: 'item', label: '恢复裁剪区域', shortcut: 'Ctrl+Shift+C', action: restoreFullImages },
         { type: 'item', label: primary?.grayscale ? '恢复彩色' : '灰度去色', action: () => mutateSelected((item) => { item.grayscale = !item.grayscale; }) },
-        { type: 'item', label: primary?.comment ? '编辑气泡评论…' : '添加气泡评论…', action: editImageComment },
         { type: 'item', label: '打开源文件位置', disabled: !primary?.sourcePath, action: () => { void showPrimarySource(); } },
       ] : undefined,
     },
@@ -1333,8 +1326,10 @@ export default function App() {
   ] : [];
 
   const groupedImageIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'image').map((member) => member.id)));
-  const groupedAnnotationIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'annotation').map((member) => member.id)));
   const displaySceneName = history.scene.name === '未命名画板' ? history.scene.name : `${history.scene.name}.refcanvas`;
+  useEffect(() => {
+    document.title = `Yoiniwa · 宵庭 — ${displaySceneName}${history.dirty ? ' •' : ''}`;
+  }, [displaySceneName, history.dirty]);
   const normalizedOutlineQuery = outlineQuery.trim().toLocaleLowerCase();
   const hasOutlineFilter = Boolean(normalizedOutlineQuery);
   const outlineFilter = useMemo<OutlineFilter>(() => ({
@@ -1345,17 +1340,16 @@ export default function App() {
     fitBounds(bounds, 72);
   };
   const selectOutlineImage = (item: ImageItem) => {
-    setSelectedGroupId(undefined); setSelectedAnnotationIds([]); setSelectedIds([item.id]);
+    if (windowMode.locked) return;
+    setSelectedGroupId(undefined); setSelectedIds([item.id]);
   };
-  const focusOutlineImage = (item: ImageItem) => { selectOutlineImage(item); focusOutlineBounds(sceneBounds([item])); };
-  const selectOutlineAnnotation = (annotation: AnnotationItem) => {
-    setSelectedGroupId(undefined); setSelectedIds([]); setSelectedAnnotationIds([annotation.id]);
-  };
-  const focusOutlineAnnotation = (annotation: AnnotationItem) => { selectOutlineAnnotation(annotation); focusOutlineBounds(annotationSceneBounds(annotation)); };
+  const focusOutlineImage = (item: ImageItem) => { if (windowMode.locked) return; selectOutlineImage(item); focusOutlineBounds(sceneBounds([item])); };
   const selectOutlineGroup = (group: ImageGroup) => {
-    setSelectedIds([]); setSelectedAnnotationIds([]); setSelectedGroupId(group.id);
+    if (windowMode.locked) return;
+    setSelectedIds([]); setSelectedGroupId(group.id);
   };
   const focusOutlineGroup = (group: ImageGroup) => {
+    if (windowMode.locked) return;
     selectOutlineGroup(group);
     focusOutlineBounds(groupVisibleBounds(group));
   };
@@ -1371,29 +1365,17 @@ export default function App() {
     history.commit((scene) => { moveImageLayer(scene, id, direction); });
   };
   const imageMatchesOutline = (item: ImageItem) => outlineObjectMatches(item, 'image', outlineFilter);
-  const annotationMatchesOutline = (annotation: AnnotationItem) => outlineObjectMatches(annotation, 'annotation', outlineFilter);
   const groupMatchesOutline = (group: ImageGroup) => groupOrDescendantMatches(history.scene, group, outlineFilter);
   const renderOutlineImage = (item: ImageItem) => imageMatchesOutline(item) ? <li key={`image-${item.id}`}>
     <div className={`outline-row image${selectedIds.includes(item.id) ? ' selected' : ''}${item.hidden ? ' muted' : ''}`}>
       <span className="outline-indent" />
       <OutlineThumbnail item={item} />
       <button className="outline-name" title={`${item.name} · 双击定位`} onClick={() => selectOutlineImage(item)} onDoubleClick={() => focusOutlineImage(item)}>{item.name}</button>
-      {item.comment && <span className="outline-comment-dot" title={item.comment}>●</span>}
       <span className="outline-actions">
-        <button className={`outline-visibility${item.hidden ? ' off' : ''}`} title={item.hidden ? '显示图片' : '隐藏图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.hidden = !value.hidden; })}><i /></button>
-        <button className={`outline-lock${item.locked ? ' locked' : ''}`} title={item.locked ? '解锁图片' : '锁定图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.locked = !value.locked; })}><i /></button>
-        <button className="outline-layer down" title="下移一层" onClick={() => moveOutlineImageLayer(item.id, -1)}><i /></button>
-        <button className="outline-layer up" title="上移一层" onClick={() => moveOutlineImageLayer(item.id, 1)}><i /></button>
-      </span>
-    </div>
-  </li> : null;
-  const renderOutlineAnnotation = (annotation: AnnotationItem) => annotationMatchesOutline(annotation) ? <li key={`annotation-${annotation.id}`}>
-    <div className={`outline-row annotation${selectedAnnotationIds.includes(annotation.id) ? ' selected' : ''}${annotation.hidden ? ' muted' : ''}`}>
-      <span className="outline-indent" /><span className="outline-type-icon"><i /></span>
-      <button className="outline-name" title="双击定位" onClick={() => selectOutlineAnnotation(annotation)} onDoubleClick={() => focusOutlineAnnotation(annotation)}>{annotationLabel(annotation)}</button>
-      <span className="outline-actions">
-        <button className={`outline-visibility${annotation.hidden ? ' off' : ''}`} title={annotation.hidden ? '显示标注' : '隐藏标注'} onClick={() => history.commit((scene) => { const value = scene.annotations.find((entry) => entry.id === annotation.id); if (value) value.hidden = !value.hidden; })}><i /></button>
-        <button className={`outline-lock${annotation.locked ? ' locked' : ''}`} title={annotation.locked ? '解锁标注' : '锁定标注'} onClick={() => history.commit((scene) => { const value = scene.annotations.find((entry) => entry.id === annotation.id); if (value) value.locked = !value.locked; })}><i /></button>
+        <button className={`outline-visibility${item.hidden ? ' off' : ''}`} title={item.hidden ? '显示图片' : '隐藏图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.hidden = !value.hidden; })}><UiIcon name={item.hidden ? 'eye-off' : 'eye'} /></button>
+        <button className={`outline-lock${item.locked ? ' locked' : ''}`} title={item.locked ? '解锁图片' : '锁定图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.locked = !value.locked; })}><UiIcon name={item.locked ? 'lock' : 'unlock'} /></button>
+        <button className="outline-layer down" title="下移一层" onClick={() => moveOutlineImageLayer(item.id, -1)}><UiIcon name="arrow-down" /></button>
+        <button className="outline-layer up" title="上移一层" onClick={() => moveOutlineImageLayer(item.id, 1)}><UiIcon name="arrow-up" /></button>
       </span>
     </div>
   </li> : null;
@@ -1404,8 +1386,8 @@ export default function App() {
     return <li key={group.id} className="outline-group-node">
       <div className={`outline-row group${selectedGroupId === group.id ? ' selected' : ''}`}>
         <button className={`outline-disclosure${collapsed ? ' collapsed' : ''}`} title={collapsed ? '展开层级' : '折叠层级'}
-          onClick={() => toggleOutlineGroup(group.id)}><i /></button>
-        <span className="outline-group-mark"><i style={{ backgroundColor: group.color }} /></span>
+          onClick={() => toggleOutlineGroup(group.id)}><UiIcon name={collapsed ? 'chevron-right' : 'chevron-down'} /></button>
+        <span className="outline-group-mark" style={{ color: group.color }}><UiIcon name="group" /></span>
         <button className="outline-name" title={`${group.name} · 双击定位`} onClick={() => selectOutlineGroup(group)} onDoubleClick={() => focusOutlineGroup(group)}>{group.name}</button>
         <span className="outline-count">{group.members.length}</span>
       </div>
@@ -1418,8 +1400,7 @@ export default function App() {
           const item = history.scene.items.find((value) => value.id === member.id);
           return item ? renderOutlineImage(item) : null;
         }
-        const annotation = history.scene.annotations.find((value) => value.id === member.id);
-        return annotation ? renderOutlineAnnotation(annotation) : null;
+        return null;
       })}</ul>}
     </li>;
   };
@@ -1432,14 +1413,11 @@ export default function App() {
         scene={history.scene}
         viewport={history.scene.viewport}
         selectedIds={selectedIds}
-        selectedAnnotationIds={selectedAnnotationIds}
         selectedGroupId={selectedGroupId}
         projectEpoch={history.projectEpoch}
-        onSelectionChange={(ids) => { setSelectedIds(ids); setSelectedAnnotationIds([]); setSelectedGroupId(undefined); }}
-        onAnnotationSelectionChange={(ids) => { setSelectedAnnotationIds(ids); setSelectedIds([]); setSelectedGroupId(undefined); }}
-        onGroupSelectionChange={(id) => { setSelectedGroupId(id); if (id) { setSelectedIds([]); setSelectedAnnotationIds([]); } }}
+        onSelectionChange={(ids) => { setSelectedIds(ids); setSelectedGroupId(undefined); }}
+        onGroupSelectionChange={(id) => { setSelectedGroupId(id); if (id) setSelectedIds([]); }}
         onItemsChanged={commitItemChanges}
-        onAnnotationsChanged={commitAnnotationChanges}
         onGroupMoved={moveGroup}
         onGroupResized={resizeGroup}
         onRenameGroup={renameGroupById}
@@ -1447,32 +1425,30 @@ export default function App() {
         onExpandGroup={(id) => changeGroup(id, { collapsed: false })}
         groupMenuOpen={Boolean(groupActionMenu)}
         onGroupPreviewAnchor={moveGroupColorEditor}
-        annotationMode={annotationMode}
-        annotationTool={annotationTool}
-        annotationColor={annotationColor}
-        annotationOpacity={annotationOpacity}
-        annotationWidth={annotationWidth}
         colorPickerHeld={colorPickerHeld}
+        colorPickerShortcut={colorPickerShortcut}
         onColorPicked={(color) => { void syncPickedColor(color); }}
-        onAddAnnotation={addAnnotation}
-        onErase={eraseAnnotations}
         onFocusItem={focusItem}
         onContextMenu={(position) => { setPropertiesOpen(false); setGroupActionMenu(undefined); setContextMenu(position); }}
         windowLocked={windowMode.locked}
         onWindowMoveStart={() => api?.beginWindowMove()}
         onWindowMove={() => api?.updateWindowMove()}
         onWindowMoveEnd={() => api?.endWindowMove()}
+        visualNotesState={visualNotesToolState}
+        visualNotesTemporaryHidden={visualNotesTemporaryHidden}
+        onVisualNotesChanged={commitVisualNotes}
+        onVisualNoteSelectionChange={setSelectedVisualMarkId}
         onViewportCommit={(viewport) => { liveViewportRef.current = viewport; history.updateViewport(viewport); }}
       />
 
       {propertiesOpen && <aside className="property-panel no-drag">
-        <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title="关闭设置面板 (Tab)" onClick={() => setPropertiesOpen(false)}>×</button></div>
+        <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title="关闭设置面板 (Tab)" onClick={() => setPropertiesOpen(false)}><UiIcon name="close" /></button></div>
         <section>
           <h3>交互设置</h3>
-          <div className="selection-summary">按住所选按键并用左键在图片上拖动取色</div>
+          <div className="selection-summary">Alt 模式适合 Photoshop + 数位板：锁定后 Alt + 笔尖点击取色，并自动返回 Photoshop</div>
           <div className="button-grid">
-            <Button active={colorPickerShortcut === 's'} onClick={() => { setColorPickerShortcut('s'); setStatus('取色快捷键已设为 S'); }}>S（默认）</Button>
-            <Button active={colorPickerShortcut === 'alt'} onClick={() => { setColorPickerShortcut('alt'); setStatus('取色快捷键已设为 Alt'); }}>Alt</Button>
+            <Button active={colorPickerShortcut === 's'} onClick={() => { setColorPickerShortcut('s'); setStatus('取色快捷键已设为 S'); }}>S</Button>
+            <Button active={colorPickerShortcut === 'alt'} onClick={() => { setColorPickerShortcut('alt'); setStatus('取色快捷键已设为 Alt'); }}>Alt（PS / 数位板）</Button>
           </div>
         </section>
 
@@ -1512,73 +1488,46 @@ export default function App() {
 
     {outlineOpen && <aside className="outline-panel no-drag">
       <header>
-        <div><strong>大纲</strong><span>{history.scene.items.length + history.scene.annotations.length + history.scene.groups.length}</span></div>
+        <div><strong>大纲</strong><span>{history.scene.items.length + history.scene.groups.length}</span></div>
         <span className="outline-header-actions">
           <button className="outline-expand-all" title="全部展开" aria-label="全部展开"
             onClick={() => setOutlineCollapsedIds(new Set())}>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 3.5 4 4 4-4M4 8.5l4 4 4-4" /></svg>
+            <UiIcon name="chevrons-down" />
           </button>
           <button className="outline-collapse-all" title="全部折叠" aria-label="全部折叠"
             onClick={() => setOutlineCollapsedIds(new Set(history.scene.groups.map((group) => group.id)))}>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 7.5 4-4 4 4M4 12.5l4-4 4 4" /></svg>
+            <UiIcon name="chevrons-up" />
           </button>
           <button className="outline-close" title="关闭大纲" aria-label="关闭大纲" onClick={() => setOutlineOpen(false)}>
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg>
+            <UiIcon name="close" />
           </button>
         </span>
       </header>
       <div className="outline-search">
-        <span>⌕</span><input value={outlineQuery} onChange={(event) => setOutlineQuery(event.target.value)} placeholder="搜索名称、评论或标签" />
-        {outlineQuery && <button title="清除搜索" onClick={() => setOutlineQuery('')}>×</button>}
+        <span><UiIcon name="search" /></span><input value={outlineQuery} onChange={(event) => setOutlineQuery(event.target.value)} placeholder="搜索名称或标签" />
+        {outlineQuery && <button title="清除搜索" onClick={() => setOutlineQuery('')}><UiIcon name="close" size={14} /></button>}
       </div>
       <div className="outline-tree"><ul>
         {history.scene.groups.filter((group) => !group.parentId).map((group) => renderOutlineGroup(group))}
         {history.scene.items.filter((item) => !groupedImageIds.has(item.id)).map(renderOutlineImage)}
-        {history.scene.annotations.filter((item) => !groupedAnnotationIds.has(item.id)).map(renderOutlineAnnotation)}
       </ul>
       {hasOutlineFilter && !history.scene.groups.some((group) => groupMatchesOutline(group))
-        && !history.scene.items.some(imageMatchesOutline) && !history.scene.annotations.some(annotationMatchesOutline)
+        && !history.scene.items.some(imageMatchesOutline)
         && <div className="outline-empty">没有匹配的对象</div>}
       </div>
     </aside>}
-
-    {commentEditingId && (() => {
-      const item = history.scene.items.find((value) => value.id === commentEditingId);
-      if (!item) return null;
-      const anchor = commentScreenAnchor(item, history.scene.viewport);
-      return <div className="comment-editor-backdrop no-drag" onMouseDown={() => finishImageComment(true)}>
-        <div className="comment-editor-bubble" style={{
-          left: Math.max(14, Math.min(window.innerWidth - 334, anchor.x)),
-          top: Math.max(14, Math.min(window.innerHeight - 196, anchor.y)),
-        }} onMouseDown={(event) => event.stopPropagation()}>
-          <div className="comment-editor-heading"><span>评论 · {item.name}</span><button title="取消" onClick={() => finishImageComment(false)}>×</button></div>
-          <textarea autoFocus value={commentDraft} maxLength={1200} placeholder="写下这张参考图需要注意的内容…"
-            onChange={(event) => setCommentDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') { event.preventDefault(); finishImageComment(false); }
-              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); finishImageComment(true); }
-            }} />
-          <div className="comment-editor-footer">
-            <small>{commentDraft.length}/1200 · 点击外部或 Ctrl+Enter 发布</small>
-            {item.comment && <button className="delete" onClick={() => {
-              history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.comment = undefined; });
-              setCommentEditingId(undefined); setCommentDraft(''); setStatus('已删除图片评论');
-            }}>删除</button>}
-            <button className="submit" onClick={() => finishImageComment(true)}>发布</button>
-          </div>
-        </div>
-      </div>;
-    })()}
 
     <div className={`scene-name-badge no-drag${sceneNameVisible ? ' visible' : ''}`} title={displaySceneName}>{displaySceneName}{history.dirty ? '  •' : ''}</div>
 
     <div className="window-control-zone no-drag">
       <div className="window-floating-controls">
         <button className={windowMode.alwaysOnTop ? 'active' : ''} title={windowMode.alwaysOnTop ? '取消始终置顶' : '始终置顶'}
-          onClick={() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); }}>⌃</button>
-        <button title="最小化" onClick={() => api?.minimize()}>—</button>
-        <button title="最大化 / 还原" onClick={() => api?.toggleMaximize()}>□</button>
-        <button className="close" title="关闭" onClick={() => api?.close()}>×</button>
+          onClick={() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); }}><UiIcon name="pin" /></button>
+        <button className={windowMode.locked ? 'active' : ''} title={windowMode.locked ? '解锁画板 (Ctrl+W)' : '锁定画板和窗口 (Ctrl+W)'}
+          onClick={() => { void setMode({ locked: !windowMode.locked }); }}><UiIcon name={windowMode.locked ? 'lock' : 'unlock'} /></button>
+        <button title="最小化" onClick={() => api?.minimize()}><UiIcon name="minimize" /></button>
+        <button title="最大化 / 还原" onClick={() => api?.toggleMaximize()}><UiIcon name="maximize" /></button>
+        <button className="close" title="关闭" onClick={() => api?.close()}><UiIcon name="close" /></button>
       </div>
     </div>
 
@@ -1618,28 +1567,101 @@ export default function App() {
       </div>
     </div>}
 
-    {annotationMode && <div className="annotation-toolbar no-drag">
-      <span className="annotation-badge">Q 标注</span>
-      <Button active={annotationTool === 'pen'} title="画笔 (1)" onClick={() => setAnnotationTool('pen')}>画笔</Button>
-      <Button active={annotationTool === 'arrow'} title="箭头 (2)" onClick={() => setAnnotationTool('arrow')}>箭头</Button>
-      <Button active={annotationTool === 'rectangle'} title="矩形 (3)" onClick={() => setAnnotationTool('rectangle')}>矩形</Button>
-      <Button active={annotationTool === 'ellipse'} title="椭圆 (4)" onClick={() => setAnnotationTool('ellipse')}>椭圆</Button>
-      <Button active={annotationTool === 'eraser'} title="橡皮擦 (E)" onClick={() => setAnnotationTool('eraser')}>橡皮</Button>
-      <span className="annotation-separator" />
-      <ColorControl compact label="标注颜色" value={annotationColor} alpha={annotationOpacity}
-        onChange={setAnnotationColor} onAlphaChange={setAnnotationOpacity} />
-      <label className="annotation-width" title="笔画粗细"><input type="range" min="1" max="24" value={annotationWidth} onChange={(event) => setAnnotationWidth(Number(event.target.value))} /><output>{annotationWidth}</output></label>
-      <Button title="撤销最后一次标注 (Ctrl+Z)" onClick={history.undo} disabled={!history.canUndo}>撤销</Button>
-      <Button title="清除全部标注" onClick={clearAnnotations} disabled={!history.scene.annotations.length}>清除</Button>
-      <button className="annotation-close" title="退出标注 (Q / Esc)" onClick={toggleAnnotationMode}>×</button>
+    {visualNotesEnabled && <div className="visual-notes-toolbar no-drag" role="toolbar" aria-label="视觉标注工具">
+      <div className="visual-note-tools">
+        {VISUAL_NOTE_TOOL_OPTIONS.map((option) => <button key={option.tool}
+          className={`visual-note-tool${visualNoteTool === option.tool ? ' active' : ''}`}
+          data-tooltip={`${option.label}　${option.shortcut}`} aria-label={`${option.label}，快捷键 ${option.shortcut}`}
+          onClick={() => setVisualNoteTool(option.tool)}><UiIcon name={option.icon} size={17} /></button>)}
+      </div>
+      <span className="visual-note-divider" />
+      <details className="visual-note-fold visual-note-width-fold">
+        <summary data-tooltip={visualNoteTool === 'eraser' ? '橡皮尺寸' : `${visualNoteWidth === 'thin' ? '细线' : visualNoteWidth === 'medium' ? '中线' : '粗线'}`}
+          aria-label={visualNoteTool === 'eraser' ? '选择橡皮尺寸' : '选择线宽'}>
+          <i style={{ width: '16px', height: visualNoteTool === 'eraser'
+            ? `${({ small: 2, medium: 4, large: 6 } as const)[eraserSize]}px`
+            : `${({ thin: 1, medium: 2.5, thick: 5 } as const)[visualNoteWidth]}px` }} />
+          <UiIcon className="visual-note-fold-caret" name="caret-down" size={11} />
+        </summary>
+        <div className="visual-note-fold-panel visual-note-width-list">
+          {visualNoteTool === 'eraser' ? (['small', 'medium', 'large'] as const).map((size, index) => <button key={size}
+            className={eraserSize === size ? 'active' : ''} onClick={(event) => {
+              setEraserSize(size); event.currentTarget.closest('details')?.removeAttribute('open');
+            }}><i style={{ width: `${[10, 16, 22][index]}px`, height: `${[2, 4, 6][index]}px` }} /><span>{['小', '中', '大'][index]}</span></button>)
+            : (['thin', 'medium', 'thick'] as const).map((width, index) => <button key={width}
+              className={visualNoteWidth === width ? 'active' : ''} onClick={(event) => {
+                setVisualNoteWidth(width); updateSelectedVisualMarkStyle({ width }); event.currentTarget.closest('details')?.removeAttribute('open');
+              }}><i style={{ height: `${[1, 2.5, 5][index]}px` }} /><span>{['细线', '中线', '粗线'][index]}</span></button>)}
+        </div>
+      </details>
+      {visualNoteTool !== 'eraser' && <>
+        <span className="visual-note-divider" />
+        <details className="visual-note-fold visual-note-color-fold">
+          <summary data-tooltip="标注颜色" aria-label="选择标注颜色">
+            <i className="visual-note-current-color" style={{ '--note-color': visualNoteColor } as React.CSSProperties} />
+            <UiIcon className="visual-note-fold-caret" name="caret-down" size={11} />
+          </summary>
+          <div className="visual-note-fold-panel visual-note-color-list">
+            {VISUAL_NOTE_COLOR_OPTIONS.map(([color, name]) => <button key={color} className={visualNoteColor === color ? 'active' : ''}
+              onClick={(event) => {
+                setVisualNoteColor(color); updateSelectedVisualMarkStyle({ color }); event.currentTarget.closest('details')?.removeAttribute('open');
+              }}><i style={{ '--note-color': color } as React.CSSProperties} /><span>{name}</span><UiIcon name="check" size={13} /></button>)}
+            <label className="visual-note-color-custom"><UiIcon name="palette" size={16} /><span>更多颜色</span>
+              <input type="color" value={visualNoteColor} onChange={(event) => {
+                setVisualNoteColor(event.target.value); updateSelectedVisualMarkStyle({ color: event.target.value });
+                event.currentTarget.closest('details')?.removeAttribute('open');
+              }} />
+            </label>
+          </div>
+        </details>
+        <span className="visual-note-divider" />
+        <details className="visual-note-fold visual-note-opacity-fold">
+          <summary data-tooltip={`不透明度　${Math.round(visualNoteOpacity * 100)}%`} aria-label={`不透明度 ${Math.round(visualNoteOpacity * 100)}%`}>
+            <UiIcon name="opacity" size={16} />
+          </summary>
+          <div className="visual-note-fold-panel visual-note-opacity-panel">
+            <div className="visual-note-opacity-heading"><span>不透明度</span><output>{Math.round(visualNoteOpacity * 100)}%</output></div>
+            <input aria-label="不透明度" type="range" min="20" max="100" step="5" value={Math.round(visualNoteOpacity * 100)}
+              style={{ '--opacity-progress': `${(visualNoteOpacity - 0.2) / 0.8 * 100}%` } as React.CSSProperties}
+              onPointerDown={() => { if (selectedVisualMarkId) history.beginTransaction(); }}
+              onChange={(event) => {
+                const opacity = Number(event.target.value) / 100; setVisualNoteOpacity(opacity);
+                if (selectedVisualMarkId) history.preview((scene) => {
+                  const mark = scene.visualNotes.marks.find((value) => value.id === selectedVisualMarkId);
+                  if (mark) mark.style.opacity = opacity;
+                });
+              }}
+              onPointerUp={() => { if (selectedVisualMarkId) history.commitTransaction(); }}
+              onPointerCancel={() => { if (selectedVisualMarkId) history.commitTransaction(); }} />
+            <div className="visual-note-opacity-scale"><span>20</span><span>100</span></div>
+          </div>
+        </details>
+      </>}
+      <span className="visual-note-divider" />
+      <div className="visual-note-auxiliary">
+        {visualNoteTool !== 'eraser' && <button className={visualNotePressure ? 'active compact' : 'compact'} data-tooltip="笔迹平滑" aria-label="笔迹平滑"
+          onClick={() => setVisualNotePressure((value) => !value)}><UiIcon name="smooth" /></button>}
+        {selectedVisualMarkId && <button className="compact" data-tooltip="删除选中标注　Delete" aria-label="删除选中标注"
+          onClick={deleteSelectedVisualMark}><UiIcon name="trash" /></button>}
+      </div>
+      <span className="visual-note-divider" />
+      <button className={history.scene.visualNotes.visible ? 'compact' : 'compact active'}
+        data-tooltip={`${history.scene.visualNotes.visible ? '隐藏' : '显示'}标注　H（按住临时隐藏）`}
+        aria-label={history.scene.visualNotes.visible ? '隐藏标注' : '显示标注'}
+        onClick={() => history.commit((scene) => { scene.visualNotes.visible = !scene.visualNotes.visible; })}>
+        <UiIcon name={history.scene.visualNotes.visible ? 'eye' : 'eye-off'} />
+      </button>
+      <button className="compact visual-note-exit" data-tooltip="退出标注模式　Esc" aria-label="退出标注模式"
+        onClick={() => setVisualNotesEnabled(false)}><UiIcon name="close" /></button>
     </div>}
 
     {!hasContent && <div className="empty-state no-drag">
-      <div className="empty-icon">＋</div>
+      <img className="empty-brand-icon" src="./yoiniwa-icon.png" alt="宵庭 Logo" draggable={false} />
+      <div className="empty-brand-name"><strong>Yoiniwa</strong><span>宵庭</span></div>
       <h1>建立你的参考画板</h1>
       <p>拖入图片、粘贴截图，或从电脑中选择图片。</p>
       <Button onClick={importImages}>选择图片</Button>
-      <small>右键菜单/拖动窗口 · {colorPickerShortcut === 's' ? 'S+左键取色 · Alt+左键或中键平移' : 'Alt+左键取色 · 中键平移'} · 空格聚焦</small>
+      <small>右键菜单/拖动窗口 · {activeColorPickerShortcut === 's' ? 'S+左键取色 · Alt+左键或中键平移' : 'Alt+笔尖取色 · 中键平移'} · 空格聚焦</small>
     </div>}
 
     {prewarmProgress && <div className="import-progress no-drag" role="status">
