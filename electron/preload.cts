@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('refCanvas', {
   syncPhotoshopForeground: (color, returnFocus) => invoke('photoshop:set-foreground', color, returnFocus),
   setWindowMode: (mode) => invoke('window:set-mode', mode),
   getWindowMode: () => invoke('window:get-mode'),
+  isKeyDown: (key) => invoke('window:is-key-down', key),
+  setTitle: (title) => invoke('window:set-title', title),
   minimize: () => ipcRenderer.send('window:minimize'),
   toggleMaximize: () => ipcRenderer.send('window:maximize'),
   beginWindowMove: () => ipcRenderer.send('window:move-start'),

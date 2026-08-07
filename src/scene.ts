@@ -8,7 +8,7 @@ export const createScene = (): Scene => ({
   name: '未命名画板',
   savedAt: new Date().toISOString(),
   viewport: { x: 0, y: 0, scale: 1 },
-  canvas: { background: '#121315', backgroundOpacity: 1, padding: 20, snap: true, includeBackgroundOnExport: true },
+  canvas: { background: '#1D1D1D', backgroundOpacity: 1, padding: 20, snap: true, includeBackgroundOnExport: true },
   assets: {},
   items: [],
   groups: [],

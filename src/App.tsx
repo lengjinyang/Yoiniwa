@@ -30,7 +30,7 @@ import './styles/quiet-surfaces.css';
 import type { VisualNotesToolState } from './canvas/interaction/VisualNotesController';
 import { shouldAutoPhotoshopRoundTrip } from './shared/photoshopIntegration';
 
-const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, opacity: 1 };
+const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
 const VISUAL_NOTE_TOOL_OPTIONS: ReadonlyArray<{ tool: VisualNoteTool; label: string; shortcut: string; icon: UiIconName }> = [
   { tool: 'brush', label: '画笔', shortcut: '1 / B', icon: 'pen' },
@@ -50,6 +50,7 @@ export default function App() {
   const [renamingGroupId, setRenamingGroupId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState('');
   const [windowMode, setWindowMode] = useState(initialWindowState);
+  const [drawingCollaborationMode, setDrawingCollaborationMode] = useState(false);
   const [recent, setRecent] = useState<RecentScene[]>([]);
   const [cacheInfo, setCacheInfo] = useState<CacheInfo>();
   const [cacheChanging, setCacheChanging] = useState(false);
@@ -90,6 +91,7 @@ export default function App() {
   const renameComposingRef = useRef(false);
   const colorSyncRequestRef = useRef(0);
   const sceneClipboardRef = useRef<SceneClipboardPayload | undefined>(undefined);
+  const drawingModeSnapshotRef = useRef<{ locked: boolean; alwaysOnTop: boolean } | undefined>(undefined);
   const lastPointerRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const api = window.refCanvas;
   const autoPhotoshopRoundTrip = shouldAutoPhotoshopRoundTrip(windowMode);
@@ -203,10 +205,11 @@ export default function App() {
       setStatus(`${result.message ?? 'Photoshop 同步失败'} · ${color.hex}`);
       return;
     }
+    if (drawingCollaborationMode) return;
     setStatus(result.focusStatus === 'automation-error' || result.focusStatus === 'not-found'
       ? `已同步 Photoshop 前景色，但未能自动返回窗口 · ${color.hex}`
       : `已同步 Photoshop 前景色 ${color.hex}`);
-  }, [api, autoPhotoshopRoundTrip]);
+  }, [api, autoPhotoshopRoundTrip, drawingCollaborationMode]);
 
   const selectedItems = useMemo(() => selectedIds.flatMap((id) => {
     const item = history.scene.items.find((value) => value.id === id);
@@ -295,9 +298,12 @@ export default function App() {
   const layoutTargetCount = targetIds.length;
   const hasContent = history.scene.items.length > 0 || history.scene.groups.length > 0;
 
-  const setMode = useCallback(async (patch: Partial<WindowState>) => {
+  const setMode = useCallback(async (patch: Partial<WindowState>, force = false) => {
     if (!api) return;
-    const next = await api.setWindowMode(patch);
+    const protectedPatch = !force && drawingCollaborationMode && ('locked' in patch || 'alwaysOnTop' in patch || 'collaborationMode' in patch)
+      ? { ...patch, locked: true, alwaysOnTop: true, collaborationMode: true }
+      : patch;
+    const next = await api.setWindowMode(protectedPatch);
     setWindowMode(next);
     if (next.locked) {
       setSelectedIds([]);
@@ -311,7 +317,37 @@ export default function App() {
     } else if (patch.locked === false) {
       setStatus('画板已解锁');
     }
-  }, [api]);
+    return next;
+  }, [api, drawingCollaborationMode]);
+
+  const toggleDrawingCollaborationMode = useCallback(async () => {
+    if (!api) return;
+    if (drawingCollaborationMode) {
+      const snapshot = drawingModeSnapshotRef.current;
+      drawingModeSnapshotRef.current = undefined;
+      try {
+        const next = await setMode({ ...(snapshot ?? { locked: false, alwaysOnTop: false }), collaborationMode: false }, true);
+        if (next?.collaborationMode) throw new Error('窗口层级仍在恢复中');
+        setDrawingCollaborationMode(false);
+        setStatus('已退出绘画协作模式，窗口状态已恢复');
+      } catch (error) {
+        drawingModeSnapshotRef.current = snapshot;
+        setStatus(`退出绘画协作模式失败：${String(error)}`);
+      }
+      return;
+    }
+    const snapshot = { locked: windowMode.locked, alwaysOnTop: windowMode.alwaysOnTop };
+    try {
+      const next = await setMode({ locked: true, alwaysOnTop: true, collaborationMode: true }, true);
+      if (!next?.collaborationMode) throw new Error('未能确认任务栏后方的协作窗口层级');
+      drawingModeSnapshotRef.current = snapshot;
+      setDrawingCollaborationMode(true);
+      setStatus('绘画协作模式已启用 · Space + 主按钮拖动可平移画布');
+    } catch (error) {
+      drawingModeSnapshotRef.current = undefined;
+      setStatus(`启用绘画协作模式失败：${String(error)}`);
+    }
+  }, [api, drawingCollaborationMode, setMode, windowMode.alwaysOnTop, windowMode.locked]);
 
   useEffect(() => {
     if (!api) return;
@@ -1003,6 +1039,11 @@ export default function App() {
       const shift = event.shiftKey;
       const run = (action: () => void) => { event.preventDefault(); action(); };
 
+      if (drawingCollaborationMode && !ctrl && !alt && !shift && event.code === 'Space') {
+        event.preventDefault();
+        return;
+      }
+
       if (!ctrl && !alt && !shift && key === 'q') return run(() => setVisualNotesEnabled((value) => !value));
       if (visualNotesEnabled && !ctrl && !alt && !shift) {
         if (key === 'h') return run(() => { if (!event.repeat) setVisualNotesTemporaryHidden(true); });
@@ -1106,7 +1147,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
+  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
 
   useEffect(() => {
     const over = (event: DragEvent) => event.preventDefault();
@@ -1281,8 +1322,10 @@ export default function App() {
     },
     {
       type: 'item', label: '窗口', children: [
-        { type: 'item', label: '始终置顶', shortcut: 'Ctrl+Shift+A', checked: windowMode.alwaysOnTop, action: () => setMode({ alwaysOnTop: !windowMode.alwaysOnTop }) },
-        { type: 'item', label: '锁定窗口位置', shortcut: 'Ctrl+W', checked: windowMode.locked, action: () => setMode({ locked: !windowMode.locked }) },
+        { type: 'item', label: '始终置顶', shortcut: 'Ctrl+Shift+A', checked: windowMode.alwaysOnTop, disabled: drawingCollaborationMode,
+          action: () => setMode({ alwaysOnTop: !windowMode.alwaysOnTop }) },
+        { type: 'item', label: '锁定窗口位置', shortcut: 'Ctrl+W', checked: windowMode.locked, disabled: drawingCollaborationMode,
+          action: () => setMode({ locked: !windowMode.locked }) },
         { type: 'item', label: '鼠标穿透', shortcut: 'Ctrl+T', checked: windowMode.clickThrough, action: () => setMode({ clickThrough: !windowMode.clickThrough }) },
         { type: 'range', label: '窗口透明度', min: 25, max: 100, value: windowMode.opacity * 100, onChange: (opacity) => { void setMode({ opacity: opacity / 100 }); } },
         { type: 'separator' },
@@ -1328,8 +1371,10 @@ export default function App() {
   const groupedImageIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'image').map((member) => member.id)));
   const displaySceneName = history.scene.name === '未命名画板' ? history.scene.name : `${history.scene.name}.refcanvas`;
   useEffect(() => {
-    document.title = `Yoiniwa · 宵庭 — ${displaySceneName}${history.dirty ? ' •' : ''}`;
-  }, [displaySceneName, history.dirty]);
+    const title = `${displaySceneName}${history.dirty ? ' •' : ''} · Yoiniwa`;
+    document.title = title;
+    void api?.setTitle(title).catch(() => undefined);
+  }, [api, displaySceneName, history.dirty]);
   const normalizedOutlineQuery = outlineQuery.trim().toLocaleLowerCase();
   const hasOutlineFilter = Boolean(normalizedOutlineQuery);
   const outlineFilter = useMemo<OutlineFilter>(() => ({
@@ -1427,6 +1472,7 @@ export default function App() {
         onGroupPreviewAnchor={moveGroupColorEditor}
         colorPickerHeld={colorPickerHeld}
         colorPickerShortcut={colorPickerShortcut}
+        drawingCollaborationMode={drawingCollaborationMode}
         onColorPicked={(color) => { void syncPickedColor(color); }}
         onFocusItem={focusItem}
         onContextMenu={(position) => { setPropertiesOpen(false); setGroupActionMenu(undefined); setContextMenu(position); }}
@@ -1521,10 +1567,13 @@ export default function App() {
 
     <div className="window-control-zone no-drag">
       <div className="window-floating-controls">
-        <button className={windowMode.alwaysOnTop ? 'active' : ''} title={windowMode.alwaysOnTop ? '取消始终置顶' : '始终置顶'}
+        <button className={windowMode.alwaysOnTop ? 'active' : ''} disabled={drawingCollaborationMode}
+          title={drawingCollaborationMode ? '绘画协作模式管理置顶' : (windowMode.alwaysOnTop ? '取消始终置顶' : '始终置顶')}
           onClick={() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); }}><UiIcon name="pin" /></button>
-        <button className={windowMode.locked ? 'active' : ''} title={windowMode.locked ? '解锁画板 (Ctrl+W)' : '锁定画板和窗口 (Ctrl+W)'}
-          onClick={() => { void setMode({ locked: !windowMode.locked }); }}><UiIcon name={windowMode.locked ? 'lock' : 'unlock'} /></button>
+        <button className={drawingCollaborationMode ? 'active' : ''}
+          title={drawingCollaborationMode ? '退出绘画协作模式' : '绘画协作模式'}
+          aria-pressed={drawingCollaborationMode}
+          onClick={() => { void toggleDrawingCollaborationMode(); }}><UiIcon name="pen" /></button>
         <button title="最小化" onClick={() => api?.minimize()}><UiIcon name="minimize" /></button>
         <button title="最大化 / 还原" onClick={() => api?.toggleMaximize()}><UiIcon name="maximize" /></button>
         <button className="close" title="关闭" onClick={() => api?.close()}><UiIcon name="close" /></button>

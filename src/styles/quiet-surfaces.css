@@ -6,6 +6,13 @@
   box-shadow: var(--shadow-panel);
   backdrop-filter: none;
 }
+
+/* The application window itself is intentionally flush-edged. Shadows and
+   rounded corners remain available to internal panels and menus. */
+.app-shell, .app-shell > .workspace, .app-shell .canvas-runtime-root {
+  border-radius: 0;
+  box-shadow: none;
+}
 .property-panel {
   top: 50%;
   right: 10px;

@@ -22,7 +22,7 @@ describe('Photoshop bridge protocol', () => {
     expect(parsePhotoshopBridgeResponse('1|SYNCED')).toBeUndefined();
   });
 
-  it('finishes COM color sync before returning focus and releasing Alt', async () => {
+  it('finishes COM color sync before returning focus without injecting keyboard input', async () => {
     const order: string[] = [];
     let finishSync: (() => void) | undefined;
     const commit = runPhotoshopCommitSequence(true, {
@@ -36,16 +36,12 @@ describe('Photoshop bridge protocol', () => {
         order.push('focus');
         return { syncStatus: 'synced', focusStatus: 'activated' };
       },
-      releaseAlt: async () => {
-        order.push('alt:up');
-        return { syncStatus: 'synced', focusStatus: 'skipped' };
-      },
     });
     await Promise.resolve();
     expect(order).toEqual(['sync:start']);
     finishSync?.();
     await expect(commit).resolves.toEqual({ syncStatus: 'synced', focusStatus: 'activated' });
-    expect(order).toEqual(['sync:start', 'sync:done', 'focus', 'alt:up']);
+    expect(order).toEqual(['sync:start', 'sync:done', 'focus']);
   });
 
   it('retries automation before focus and skips focus when round-trip is disabled', async () => {
@@ -60,15 +56,11 @@ describe('Photoshop bridge protocol', () => {
         order.push('focus');
         return { syncStatus: 'synced' as const, focusStatus: 'activated' as const };
       },
-      releaseAlt: async () => {
-        order.push('alt:up');
-        return { syncStatus: 'synced' as const, focusStatus: 'skipped' as const };
-      },
     };
     await expect(runPhotoshopCommitSequence(true, operations)).resolves.toEqual({
       syncStatus: 'synced', focusStatus: 'activated',
     });
-    expect(order).toEqual(['sync:1', 'sync:2', 'focus', 'alt:up']);
+    expect(order).toEqual(['sync:1', 'sync:2', 'focus']);
 
     order.length = 0;
     attempts = 1;

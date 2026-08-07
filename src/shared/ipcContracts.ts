@@ -34,6 +34,8 @@ export interface IpcContractMap {
   ], PhotoshopColorSyncResult>;
   'window:set-mode': IpcContract<[mode: Partial<WindowState>], WindowState>;
   'window:get-mode': IpcContract<[], WindowState>;
+  'window:is-key-down': IpcContract<[key: 'Space'], boolean>;
+  'window:set-title': IpcContract<[title: string], void>;
   'logs:write': IpcContract<[entries: Array<{ level: string; event: string; data?: unknown }>], void>;
   'logs:open-folder': IpcContract<[], { path: string }>;
   'logs:copy-diagnostics': IpcContract<[], { sessionId: string; path?: string }>;

@@ -27,6 +27,7 @@ interface CanvasViewProps {
   projectEpoch: number;
   colorPickerHeld: boolean;
   colorPickerShortcut: ColorPickerShortcut;
+  drawingCollaborationMode: boolean;
   onColorPicked(color: PickedColor): void;
   onFocusItem(item: ImageItem): void;
   onContextMenu(position: { x: number; y: number }): void;
@@ -48,13 +49,14 @@ export function CanvasView({
   onOpenGroupMenu, onExpandGroup, groupMenuOpen, onGroupPreviewAnchor,
   colorPickerHeld, colorPickerShortcut, onColorPicked, onFocusItem, onContextMenu,
   windowLocked, onWindowMoveStart, onWindowMove, onWindowMoveEnd,
+  drawingCollaborationMode,
   visualNotesState, visualNotesTemporaryHidden, onVisualNotesChanged, onVisualNoteSelectionChange,
 }: CanvasViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<CanvasRuntime | undefined>(undefined);
   const initialOptionsRef = useRef({
     background, backgroundOpacity, viewport, selectedIds, selectedGroupId, colorPickerHeld, colorPickerShortcut,
-    windowLocked, visualNotesState,
+    windowLocked, drawingCollaborationMode, visualNotesState,
   });
   const viewportCommitRef = useRef(onViewportCommit);
   const selectionChangeRef = useRef(onSelectionChange);
@@ -128,6 +130,7 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setColorPickerHeld(colorPickerHeld); }, [colorPickerHeld]);
   useEffect(() => { runtimeRef.current?.setColorPickerShortcut(colorPickerShortcut); }, [colorPickerShortcut]);
   useEffect(() => { runtimeRef.current?.setWindowLocked(windowLocked); }, [windowLocked]);
+  useEffect(() => { runtimeRef.current?.setDrawingCollaborationMode(drawingCollaborationMode); }, [drawingCollaborationMode]);
   useEffect(() => { runtimeRef.current?.setVisualNotesState(visualNotesState); }, [visualNotesState]);
   useEffect(() => { runtimeRef.current?.setVisualNotesTemporaryHidden(visualNotesTemporaryHidden); }, [visualNotesTemporaryHidden]);
   useEffect(() => { runtimeRef.current?.setBackground(background, backgroundOpacity); }, [background, backgroundOpacity]);

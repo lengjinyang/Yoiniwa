@@ -93,7 +93,6 @@ public static class YoiniwaWindowActivation {
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int virtualKey);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
   [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
@@ -102,15 +101,9 @@ public static class YoiniwaWindowActivation {
   [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SendMessageTimeout(
-    IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
 
   public static bool IsForeground(IntPtr hWnd) {
     return hWnd != IntPtr.Zero && GetForegroundWindow() == hWnd;
-  }
-
-  public static bool IsAltDown() {
-    return (GetAsyncKeyState(0x12) & 0x8000) != 0;
   }
 
   public static IntPtr GetFocusedWindow(IntPtr hWnd) {
@@ -167,19 +160,6 @@ public static class YoiniwaWindowActivation {
     }
   }
 
-  public static bool ReleaseAlt(IntPtr hWnd) {
-    const uint WM_KEYUP = 0x0101;
-    const uint WM_SYSKEYUP = 0x0105;
-    const uint SMTO_ABORTIFHUNG = 0x0002;
-    var altKey = new IntPtr(0x12);
-    var keyUp = new IntPtr(unchecked((long)0xC0380001));
-    IntPtr ignored;
-    var systemReleased = SendMessageTimeout(
-      hWnd, WM_SYSKEYUP, altKey, keyUp, SMTO_ABORTIFHUNG, 60, out ignored) != IntPtr.Zero;
-    var keyReleased = SendMessageTimeout(
-      hWnd, WM_KEYUP, altKey, keyUp, SMTO_ABORTIFHUNG, 60, out ignored) != IntPtr.Zero;
-    return systemReleased || keyReleased;
-  }
 }
 '@
 function Reset-PhotoshopWindow {
@@ -227,27 +207,6 @@ function Activate-Photoshop {
     return 'FOCUS_ERROR'
   } catch { Reset-PhotoshopWindow; return 'FOCUS_ERROR' }
 }
-function Release-PhotoshopAlt {
-  if (-not (Ensure-PhotoshopWindow)) { return 'NOT_FOUND' }
-  try {
-    # The artist normally releases Alt just after focus returns. Wait briefly
-    # for that physical release, then complete both key-up message paths. This
-    # closes the rare gap where Windows routes the real key-up during the focus
-    # transition and Photoshop treats the following pen-down as still modified.
-    for ($wait = 0; $wait -lt 36 -and [YoiniwaWindowActivation]::IsAltDown(); $wait += 1) {
-      Start-Sleep -Milliseconds 5
-    }
-    if ([YoiniwaWindowActivation]::IsAltDown()) { return 'SKIPPED' }
-    # Complete both Alt key-up message paths before Photoshop is declared
-    # input-ready. This never moves the pointer or synthesizes mouse input.
-    $released = [YoiniwaWindowActivation]::ReleaseAlt($photoshopWindow)
-    if ($photoshopFocus -ne [IntPtr]::Zero -and $photoshopFocus -ne $photoshopWindow) {
-      $released = [YoiniwaWindowActivation]::ReleaseAlt($photoshopFocus) -or $released
-    }
-    if ($released) { return 'SKIPPED' }
-    return 'FOCUS_ERROR'
-  } catch { Reset-PhotoshopWindow; return 'FOCUS_ERROR' }
-}
 $null = Ensure-PhotoshopWindow
 while (($line = [Console]::In.ReadLine()) -ne $null) {
   $parts = $line.Split('|')
@@ -258,7 +217,6 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       $status = if (Ensure-PhotoshopWindow) { 'SKIPPED' } else { 'NOT_FOUND' }
     } elseif ($kind -eq 'P') { $status = Capture-PhotoshopFocus
     } elseif ($kind -eq 'F') { $status = Activate-Photoshop
-    } elseif ($kind -eq 'K') { $status = Release-PhotoshopAlt
     } else { continue }
     [Console]::Out.WriteLine($id + '|SYNCED|' + $status); [Console]::Out.Flush()
   } catch {
@@ -280,23 +238,17 @@ const FOCUS_ERROR_RESULT: PhotoshopBridgeResult = { syncStatus: 'synced', focusS
 interface PhotoshopCommitOperations {
   sync(): Promise<PhotoshopBridgeResult>;
   focus(): Promise<PhotoshopBridgeResult>;
-  releaseAlt(): Promise<PhotoshopBridgeResult>;
 }
 
 export async function runPhotoshopCommitSequence(
   activatePhotoshop: boolean,
   operations: PhotoshopCommitOperations,
-  settleAlt = false,
 ): Promise<PhotoshopBridgeResult> {
   let sync = await operations.sync();
   if (sync.syncStatus === 'automation-error') sync = await operations.sync();
   const focus = activatePhotoshop
     ? await operations.focus()
     : { syncStatus: 'synced', focusStatus: 'skipped' } as PhotoshopBridgeResult;
-  // In non-activating reference mode Photoshop intentionally stays in the
-  // foreground. It still needs its Alt key state reconciled after Yoiniwa
-  // consumed the pen gesture, otherwise the next pen-down can be discarded.
-  if (focus.focusStatus === 'activated' || settleAlt) await operations.releaseAlt();
   return { syncStatus: sync.syncStatus, focusStatus: focus.focusStatus };
 }
 
@@ -344,7 +296,7 @@ class PhotoshopHelperProcess {
     this.pending.clear(); this.output = '';
   }
 
-  send(kind: 'W' | 'S' | 'P' | 'F' | 'K', values: number[], timeoutMs: number, fallback: PhotoshopBridgeResult) {
+  send(kind: 'W' | 'S' | 'P' | 'F', values: number[], timeoutMs: number, fallback: PhotoshopBridgeResult) {
     this.start();
     const child = this.process;
     if (!child?.stdin.writable) return Promise.resolve(fallback);
@@ -405,7 +357,6 @@ export class PhotoshopColorBridge {
   async commit(
     color: { r: number; g: number; b: number },
     activatePhotoshop: boolean,
-    settleAlt = false,
     timeoutMs = 1800,
   ) {
     // Photoshop's COM automation runs on its UI thread. Returning focus while
@@ -415,12 +366,7 @@ export class PhotoshopColorBridge {
     return runPhotoshopCommitSequence(activatePhotoshop, {
       sync: () => this.colorHelper.send('S', [color.r, color.g, color.b], timeoutMs, SYNC_ERROR_RESULT),
       focus: () => this.focusHelper.send('F', [], timeoutMs, FOCUS_ERROR_RESULT),
-      releaseAlt: () => this.releaseAlt(),
-    }, settleAlt);
-  }
-
-  releaseAlt() {
-    return this.focusHelper.send('K', [], 500, FOCUS_ERROR_RESULT);
+    });
   }
 
   stop() { this.colorHelper.stop(); this.focusHelper.stop(); }
