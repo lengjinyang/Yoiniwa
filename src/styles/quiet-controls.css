@@ -38,6 +38,11 @@ button:disabled { opacity: .34; cursor: default; }
 .button-grid button { border-color: var(--border); color: var(--text-secondary); background: var(--surface-2); }
 .button-grid button:hover { border-color: var(--border-strong); color: var(--text-primary); background: var(--surface-hover); }
 .button-grid.compact button { min-height: 28px; padding: 4px 7px; }
+.shortcut-list { display: grid; gap: 5px; margin: 10px 0; }
+.shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; color: var(--text-secondary); font-size: 11px; }
+.shortcut-capture { min-width: 104px; min-height: 28px !important; padding: 4px 7px !important; border-color: var(--border) !important; color: var(--text-secondary); background: var(--surface-2) !important; font-family: inherit; font-size: 11px !important; }
+.shortcut-capture:hover { border-color: var(--border-strong) !important; color: var(--text-primary); background: var(--surface-hover) !important; }
+.shortcut-capture.active { border-color: var(--accent-border) !important; color: var(--accent-text) !important; background: var(--accent-soft) !important; }
 
 input[type="text"], input[type="number"], textarea,
 .tag-input-row input, .color-control-hex input, .group-rename-card input {

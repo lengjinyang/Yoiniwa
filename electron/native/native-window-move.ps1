@@ -80,6 +80,7 @@ public static class RefCanvasNativeWindowMove
     private static int inputEnabled;
     private static int inputMode;
     private static int inputStartedAt;
+    private static int inputEndedAt;
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
@@ -269,6 +270,14 @@ public static class RefCanvasNativeWindowMove
     {
         var window = new IntPtr(rawHandle);
         if (window == IntPtr.Zero || !SetNoActivate(rawHandle, enabled)) return false;
+        // Do not reorder the collaboration window while a pick/pan gesture is
+        // active or while the release is still being committed to Photoshop.
+        // The existing topmost state remains in force; a later repair can move
+        // it above the taskbar when input is idle.
+        var endedAt = Volatile.Read(ref inputEndedAt);
+        var recentlyEnded = endedAt != 0
+            && unchecked(Environment.TickCount - endedAt) < 500;
+        if (enabled && (Volatile.Read(ref inputMode) != INPUT_NONE || recentlyEnded)) return true;
         return !enabled || (aboveTaskbar ? PlaceAboveTaskbar(rawHandle) : PlaceBelowTaskbar(rawHandle));
     }
 
@@ -304,8 +313,10 @@ public static class RefCanvasNativeWindowMove
 
     private static void SetInputMode(int mode)
     {
-        Interlocked.Exchange(ref inputMode, mode);
+        var previous = Interlocked.Exchange(ref inputMode, mode);
         Interlocked.Exchange(ref inputStartedAt, mode == INPUT_NONE ? 0 : Environment.TickCount);
+        if (mode == INPUT_NONE && previous != INPUT_NONE)
+            Interlocked.Exchange(ref inputEndedAt, Environment.TickCount);
     }
 
     private static IntPtr InputHook(int code, IntPtr wParam, IntPtr lParam)
@@ -322,7 +333,11 @@ public static class RefCanvasNativeWindowMove
         var mode = Volatile.Read(ref inputMode);
         var expired = mode != INPUT_NONE
             && unchecked(Environment.TickCount - Volatile.Read(ref inputStartedAt)) > 15000;
-        var physicalReleaseMissed = mode != INPUT_NONE && message != WM_LBUTTONUP && !IsKeyDown(VK_LBUTTON);
+        // Windows Ink often reports VK_LBUTTON as released while a pen tip is
+        // still moving. Keep ownership through WM_MOUSEMOVE and finish only on
+        // the real up/cancel/superseding contact paths below.
+        var physicalReleaseMissed = mode != INPUT_NONE && message != WM_LBUTTONUP
+            && message != WM_MOUSEMOVE && !IsKeyDown(VK_LBUTTON);
         var superseded = mode != INPUT_NONE && message == WM_LBUTTONDOWN;
         if (expired || physicalReleaseMissed || superseded)
         {
@@ -424,6 +439,9 @@ public static class RefCanvasNativeWindowMove
             }
             if (!HookStarted.Wait(1500) || hookHandle == IntPtr.Zero) return false;
         }
+        var alreadyConfigured = enabled && Volatile.Read(ref inputEnabled) != 0
+            && Interlocked.Read(ref inputWindowHandle) == rawHandle;
+        if (alreadyConfigured) return true;
         SetInputMode(INPUT_NONE);
         Interlocked.Exchange(ref inputWindowHandle, rawHandle);
         Volatile.Write(ref inputEnabled, enabled ? 1 : 0);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { CanvasView } from './canvas/CanvasView';
 import { AutosaveCoordinator } from './canvas/persistence/AutosaveCoordinator';
 import { loadProjectScene } from './canvas/persistence/ProjectLoader';
@@ -29,6 +29,7 @@ import './styles/quiet-controls.css';
 import './styles/quiet-surfaces.css';
 import type { VisualNotesToolState } from './canvas/interaction/VisualNotesController';
 import { shouldAutoPhotoshopRoundTrip } from './shared/photoshopIntegration';
+import { DEFAULT_SHORTCUTS, loadShortcutPreferences, SHORTCUT_LABELS, shortcutConflict, shortcutFromKeyboardEvent, shortcutMatchesEvent, SHORTCUT_PREFERENCES_STORAGE_KEY, type ShortcutId, type ShortcutPreferences } from './keyboardShortcuts';
 
 const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
@@ -87,6 +88,11 @@ export default function App() {
     try { return localStorage.getItem(COLOR_PICKER_SHORTCUT_STORAGE_KEY) === 'alt' ? 'alt' : 's'; }
     catch { return 's'; }
   });
+  const [shortcuts, setShortcuts] = useState<ShortcutPreferences>(() => {
+    try { return loadShortcutPreferences(localStorage.getItem(SHORTCUT_PREFERENCES_STORAGE_KEY)); }
+    catch { return { ...DEFAULT_SHORTCUTS }; }
+  });
+  const [shortcutCaptureId, setShortcutCaptureId] = useState<ShortcutId>();
   const [focusReturn, setFocusReturn] = useState<typeof history.scene.viewport>();
   const renameComposingRef = useRef(false);
   const colorSyncRequestRef = useRef(0);
@@ -192,6 +198,10 @@ export default function App() {
     try { localStorage.setItem(COLOR_PICKER_SHORTCUT_STORAGE_KEY, colorPickerShortcut); } catch { /* Persistence is optional. */ }
     setColorPickerHeld(false);
   }, [colorPickerShortcut]);
+
+  useEffect(() => {
+    try { localStorage.setItem(SHORTCUT_PREFERENCES_STORAGE_KEY, JSON.stringify(shortcuts)); } catch { /* Persistence is optional. */ }
+  }, [shortcuts]);
 
   const syncPickedColor = useCallback(async (color: PickedColor) => {
     const request = ++colorSyncRequestRef.current;
@@ -342,16 +352,18 @@ export default function App() {
       if (!next?.collaborationMode) throw new Error('未能确认任务栏后方的稳定协作窗口层级');
       drawingModeSnapshotRef.current = snapshot;
       setDrawingCollaborationMode(true);
-      setStatus('协作模式已启用 · Space + 主按钮拖动可平移画布 · Ctrl+Alt+Y 退出');
+      setStatus(`协作模式已启用 · Space + 主按钮拖动可平移画布 · ${shortcuts.collaboration} 退出`);
     } catch (error) {
       drawingModeSnapshotRef.current = undefined;
       setStatus(`启用协作模式失败：${String(error)}`);
     }
-  }, [api, drawingCollaborationMode, setMode, windowMode.alwaysOnTop, windowMode.locked]);
+  }, [api, drawingCollaborationMode, setMode, shortcuts.collaboration, windowMode.alwaysOnTop, windowMode.locked]);
 
   useEffect(() => {
     if (!api) return;
     void api.getWindowMode().then(setWindowMode).catch((error) => setStatus(`读取窗口状态失败：${String(error)}`));
+    void api.getCollaborationShortcut().then(({ shortcut }) => setShortcuts((current) => ({ ...current, collaboration: shortcut })))
+      .catch((error) => setStatus(`读取协作快捷键失败：${String(error)}`));
     void api.recentScenes().then(setRecent).catch((error) => setStatus(`读取最近画板失败：${String(error)}`));
     void api.getCacheInfo().then(setCacheInfo).catch((error) => setStatus(`读取缓存状态失败：${String(error)}`));
     const unsubscribePrewarm = api.onPrewarmProgress((progress) => {
@@ -1034,6 +1046,77 @@ export default function App() {
     { id: 'group.create', enabled: selectedIds.length >= 2, execute: createGroup },
   ]), [copySelection, createGroup, cutSelection, deleteGroup, deleteSelected, duplicate, history.canRedo, history.canUndo, history.redo, history.undo, pasteClipboard, selectedGroup, selectedIds.length]);
 
+  const captureShortcut = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === 'Escape') {
+      setShortcutCaptureId(undefined);
+      setStatus('已取消快捷键设置');
+      return;
+    }
+    const next = shortcutFromKeyboardEvent(event.nativeEvent);
+    if (!next) {
+      setStatus('请按下一个有效的快捷键组合');
+      return;
+    }
+    if (id !== 'collaboration' && next.split('+').includes('Alt')) {
+      setStatus('Alt 组合键保留给取色与画布交互');
+      return;
+    }
+    const conflict = shortcutConflict(shortcuts, id, next);
+    if (conflict) {
+      setStatus(`快捷键 ${next} ${conflict}`);
+      return;
+    }
+    if (id === 'collaboration') {
+      if (drawingCollaborationMode) {
+        setStatus('请先退出协作模式，再更改协作快捷键');
+        setShortcutCaptureId(undefined);
+        return;
+      }
+      if (!api) {
+        setStatus('桌面快捷键服务不可用');
+        setShortcutCaptureId(undefined);
+        return;
+      }
+      void api.setCollaborationShortcut(next).then((result) => {
+        if (!result.ok) {
+          setStatus(result.message ?? '协作快捷键注册失败');
+          return;
+        }
+        setShortcuts((current) => ({ ...current, collaboration: result.shortcut }));
+        setShortcutCaptureId(undefined);
+        setStatus(`协作快捷键已设为 ${result.shortcut}`);
+      }).catch((error) => setStatus(`设置协作快捷键失败：${String(error)}`));
+      return;
+    }
+    setShortcuts((current) => ({ ...current, [id]: next }));
+    setShortcutCaptureId(undefined);
+    setStatus(`${SHORTCUT_LABELS.find((item) => item.id === id)?.label ?? '操作'}快捷键已设为 ${next}`);
+  }, [api, drawingCollaborationMode, shortcuts]);
+
+  const resetShortcuts = useCallback(() => {
+    if (drawingCollaborationMode) {
+      setStatus('请先退出协作模式，再恢复快捷键');
+      return;
+    }
+    if (!api) {
+      setShortcuts({ ...DEFAULT_SHORTCUTS });
+      setShortcutCaptureId(undefined);
+      setStatus('快捷键已恢复默认');
+      return;
+    }
+    void api.setCollaborationShortcut(DEFAULT_SHORTCUTS.collaboration).then((result) => {
+      if (!result.ok) {
+        setStatus(result.message ?? '恢复协作快捷键失败');
+        return;
+      }
+      setShortcuts({ ...DEFAULT_SHORTCUTS, collaboration: result.shortcut });
+      setShortcutCaptureId(undefined);
+      setStatus('快捷键已恢复默认');
+    }).catch((error) => setStatus(`恢复快捷键失败：${String(error)}`));
+  }, [api, drawingCollaborationMode]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const input = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
@@ -1061,6 +1144,19 @@ export default function App() {
         if (!event.repeat) setColorPickerHeld(true);
       });
 
+      if (shortcutMatchesEvent(shortcuts.settings, event)) return run(() => { setContextMenu(undefined); setPropertiesOpen((value) => !value); });
+      if (shortcutMatchesEvent(shortcuts.saveAs, event)) return run(() => { void save(true); });
+      if (shortcutMatchesEvent(shortcuts.save, event)) return run(() => { void save(false); });
+      if (shortcutMatchesEvent(shortcuts.undo, event)) return run(appCommand(commands, 'edit.undo').execute);
+      if (shortcutMatchesEvent(shortcuts.redo, event)) return run(appCommand(commands, 'edit.redo').execute);
+      if (shortcutMatchesEvent(shortcuts.open, event)) return run(() => { void open(); });
+      if (shortcutMatchesEvent(shortcuts.newScene, event)) return run(newScene);
+      if (shortcutMatchesEvent(shortcuts.fitCanvas, event)) return run(fitCanvas);
+      if (shortcutMatchesEvent(shortcuts.resetZoom, event)) return run(resetZoom);
+      if (shortcutMatchesEvent(shortcuts.alwaysOnTop, event)) return run(() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); });
+      if (shortcutMatchesEvent(shortcuts.lockWindow, event)) return run(() => { void setMode({ locked: !windowMode.locked }); });
+      if (shortcutMatchesEvent(shortcuts.clickThrough, event)) return run(() => { void setMode({ clickThrough: !windowMode.clickThrough }); });
+
       if (ctrl && alt && shift && event.key === 'ArrowUp') return run(() => layout('distribute-horizontal'));
       if (ctrl && alt && shift && event.key === 'ArrowDown') return run(() => layout('distribute-vertical'));
       if (ctrl && alt && !shift && event.key === 'ArrowLeft') return run(() => layout('normalize-height'));
@@ -1073,8 +1169,6 @@ export default function App() {
       if (ctrl && !alt && !shift && event.key === 'ArrowDown') return run(() => layout('align-bottom'));
 
       if (ctrl && !alt && shift && key === 'p') return run(() => setContextMenu({ x: window.innerWidth / 2, y: window.innerHeight / 2 }));
-      if (ctrl && !alt && shift && key === 'a') return run(() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); });
-      if (ctrl && !alt && shift && key === 'z') return run(appCommand(commands, 'edit.redo').execute);
       if (ctrl && !alt && shift && key === 'c') return run(restoreFullImages);
       if (ctrl && !alt && shift && key === 't') return run(() => mutateSelected(resetImageTransform));
       if (ctrl && !alt && shift && key === 'g') return run(selectedIds.length ? detachSelectedImages : ungroupSelected);
@@ -1086,11 +1180,7 @@ export default function App() {
       if (ctrl && !alt && !shift && key === 'x') return run(appCommand(commands, 'edit.cut').execute);
       if (ctrl && !alt && !shift && key === 'v') return run(appCommand(commands, 'edit.paste').execute);
       if (ctrl && !alt && !shift && key === 'i') return run(importImages);
-      if (ctrl && !alt && key === 's') return run(() => { void save(shift); });
       if (ctrl && !alt && shift && key === 'l') return run(() => { if (recent[0]) void open(recent[0].path); else setStatus('没有最近打开的画板'); });
-      if (ctrl && !alt && !shift && key === 'l') return run(() => { void open(); });
-      if (ctrl && !alt && !shift && key === 'k') return run(newScene);
-      if (ctrl && !alt && !shift && key === 'z') return run(appCommand(commands, 'edit.undo').execute);
       if (ctrl && !alt && !shift && key === 'y') return run(appCommand(commands, 'edit.redo').execute);
       if (ctrl && !alt && !shift && key === 'd') return run(appCommand(commands, 'edit.duplicate').execute);
       if (ctrl && !alt && !shift && key === 'g') return run(appCommand(commands, 'group.create').execute);
@@ -1105,10 +1195,6 @@ export default function App() {
       if (ctrl && !alt && !shift && key === 'f') return run(() => api?.toggleMaximize());
       if (ctrl && !alt && !shift && key === 'm') return run(() => api?.minimize());
       if (ctrl && !alt && !shift && key === 'q') return run(() => api?.close());
-      if (ctrl && !alt && !shift && key === 'w') return run(() => { void setMode({ locked: !windowMode.locked }); });
-      if (ctrl && !alt && !shift && key === 't') return run(() => { void setMode({ clickThrough: !windowMode.clickThrough }); });
-      if (ctrl && !alt && !shift && event.code === 'Space') return run(fitCanvas);
-      if (ctrl && !alt && !shift && event.key === '0') return run(resetZoom);
       if (ctrl && !alt && !shift && (key === '+' || key === '=')) return run(() => zoomBy(1.15));
       if (ctrl && !alt && !shift && key === '-') return run(() => zoomBy(1 / 1.15));
 
@@ -1121,7 +1207,6 @@ export default function App() {
       if (!ctrl && !alt && !shift && event.key === 'ArrowLeft') return run(() => focusStep(-1));
       if (!ctrl && !alt && !shift && event.key === 'ArrowUp') return run(() => moveLayer(true));
       if (!ctrl && !alt && !shift && event.key === 'ArrowDown') return run(() => moveLayer(false));
-      if (!ctrl && !alt && event.key === 'Tab') { event.preventDefault(); setContextMenu(undefined); setPropertiesOpen((value) => !value); }
       if (!ctrl && !alt && event.key === 'Delete') {
         if (!deleteSelectedVisualMark()) appCommand(commands, 'edit.delete').execute();
       }
@@ -1152,7 +1237,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
+  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
 
   useEffect(() => {
     const over = (event: DragEvent) => event.preventDefault();
@@ -1245,21 +1330,21 @@ export default function App() {
     { type: 'separator' },
     {
       type: 'item', label: '文件', children: [
-        { type: 'item', label: '打开…', shortcut: 'Ctrl+L', action: () => open() },
+        { type: 'item', label: '打开…', shortcut: shortcuts.open, action: () => open() },
         { type: 'item', label: '合并其他画板…', action: () => { void importScene(); } },
         {
           type: 'item', label: '最近打开', disabled: recent.length === 0,
           children: recent.length ? recent.slice(0, 8).map((item) => ({ type: 'item' as const, label: item.name, action: () => open(item.path) })) : undefined,
         },
         { type: 'separator' },
-        { type: 'item', label: '保存', shortcut: 'Ctrl+S', action: () => save(false) },
-        { type: 'item', label: '另存为…', shortcut: 'Ctrl+Shift+S', action: () => save(true) },
+        { type: 'item', label: '保存', shortcut: shortcuts.save, action: () => save(false) },
+        { type: 'item', label: '另存为…', shortcut: shortcuts.saveAs, action: () => save(true) },
       ],
     },
     {
       type: 'item', label: '编辑', children: [
-        { type: 'item', label: '撤销', shortcut: 'Ctrl+Z', disabled: !undoCommand.enabled, action: undoCommand.execute },
-        { type: 'item', label: '重做', shortcut: 'Ctrl+Shift+Z', disabled: !redoCommand.enabled, action: redoCommand.execute },
+        { type: 'item', label: '撤销', shortcut: shortcuts.undo, disabled: !undoCommand.enabled, action: undoCommand.execute },
+        { type: 'item', label: '重做', shortcut: shortcuts.redo, disabled: !redoCommand.enabled, action: redoCommand.execute },
         { type: 'separator' },
         { type: 'item', label: '全选', shortcut: 'Ctrl+A', disabled: history.scene.items.length === 0, action: () => setSelectedIds(history.scene.items.filter((item) => !item.locked).map((item) => item.id)) },
         { type: 'item', label: '复制', shortcut: 'Ctrl+C', disabled: !copyCommand.enabled, action: copyCommand.execute },
@@ -1320,21 +1405,21 @@ export default function App() {
     {
       type: 'item', label: '视图', children: [
         { type: 'item', label: '聚焦选中', shortcut: 'Space', disabled: !hasSelection, action: () => toggleFocus(selectedItems) },
-        { type: 'item', label: '显示整个画板', shortcut: 'Ctrl+Space', disabled: !hasContent, action: fitCanvas },
-        { type: 'item', label: '重置缩放为 1:1', shortcut: 'Ctrl+0', action: resetZoom },
-        { type: 'item', label: '系统设置', shortcut: 'Tab', checked: propertiesOpen, action: () => setPropertiesOpen((value) => !value) },
+        { type: 'item', label: '显示整个画板', shortcut: shortcuts.fitCanvas, disabled: !hasContent, action: fitCanvas },
+        { type: 'item', label: '重置缩放为 1:1', shortcut: shortcuts.resetZoom, action: resetZoom },
+        { type: 'item', label: '系统设置', shortcut: shortcuts.settings, checked: propertiesOpen, action: () => setPropertiesOpen((value) => !value) },
       ],
     },
     {
       type: 'item', label: '窗口', children: [
-        { type: 'item', label: '协作模式', shortcut: 'Ctrl+Alt+Y', checked: drawingCollaborationMode,
+        { type: 'item', label: '协作模式', shortcut: shortcuts.collaboration, checked: drawingCollaborationMode,
           action: () => { void toggleDrawingCollaborationMode(); } },
         { type: 'separator' },
-        { type: 'item', label: '始终置顶', shortcut: 'Ctrl+Shift+A', checked: windowMode.alwaysOnTop, disabled: drawingCollaborationMode,
+        { type: 'item', label: '始终置顶', shortcut: shortcuts.alwaysOnTop, checked: windowMode.alwaysOnTop, disabled: drawingCollaborationMode,
           action: () => setMode({ alwaysOnTop: !windowMode.alwaysOnTop }) },
-        { type: 'item', label: '锁定窗口位置', shortcut: 'Ctrl+W', checked: windowMode.locked, disabled: drawingCollaborationMode,
+        { type: 'item', label: '锁定窗口位置', shortcut: shortcuts.lockWindow, checked: windowMode.locked, disabled: drawingCollaborationMode,
           action: () => setMode({ locked: !windowMode.locked }) },
-        { type: 'item', label: '鼠标穿透', shortcut: 'Ctrl+T', checked: windowMode.clickThrough, action: () => setMode({ clickThrough: !windowMode.clickThrough }) },
+        { type: 'item', label: '鼠标穿透', shortcut: shortcuts.clickThrough, checked: windowMode.clickThrough, action: () => setMode({ clickThrough: !windowMode.clickThrough }) },
         { type: 'range', label: '窗口透明度', min: 25, max: 100, value: windowMode.opacity * 100, onChange: (opacity) => { void setMode({ opacity: opacity / 100 }); } },
         { type: 'separator' },
         { type: 'item', label: '最小化', shortcut: 'Ctrl+M', action: () => api?.minimize() },
@@ -1350,7 +1435,7 @@ export default function App() {
       ],
     },
     { type: 'separator' },
-    { type: 'item', label: '新建画板', shortcut: 'Ctrl+K', action: newScene },
+    { type: 'item', label: '新建画板', shortcut: shortcuts.newScene, action: newScene },
     { type: 'item', label: '退出画布', shortcut: 'Ctrl+Q', danger: true, action: () => api?.close() },
   ];
   const groupActionTarget = groupActionMenu
@@ -1496,7 +1581,7 @@ export default function App() {
       />
 
       {propertiesOpen && <aside className="property-panel no-drag">
-        <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title="关闭设置面板 (Tab)" onClick={() => setPropertiesOpen(false)}><UiIcon name="close" /></button></div>
+        <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title={`关闭设置面板 (${shortcuts.settings})`} onClick={() => setPropertiesOpen(false)}><UiIcon name="close" /></button></div>
         <section>
           <h3>交互设置</h3>
           <div className="selection-summary">Alt 模式适合 Photoshop + 数位板：锁定后 Alt + 笔尖点击取色，并自动返回 Photoshop</div>
@@ -1504,6 +1589,28 @@ export default function App() {
             <Button active={colorPickerShortcut === 's'} onClick={() => { setColorPickerShortcut('s'); setStatus('取色快捷键已设为 S'); }}>S</Button>
             <Button active={colorPickerShortcut === 'alt'} onClick={() => { setColorPickerShortcut('alt'); setStatus('取色快捷键已设为 Alt'); }}>Alt（PS / 数位板）</Button>
           </div>
+        </section>
+
+        <section>
+          <h3>快捷键</h3>
+          <div className="shortcut-list">
+            {SHORTCUT_LABELS.map(({ id, label }) => {
+              const capturing = shortcutCaptureId === id;
+              const disabled = id === 'collaboration' && drawingCollaborationMode;
+              return <div className="shortcut-row" key={id}>
+                <span>{label}</span>
+                <button
+                  className={capturing ? 'active shortcut-capture' : 'shortcut-capture'}
+                  title={disabled ? '请先退出协作模式' : '点击后按下快捷键'}
+                  disabled={disabled}
+                  onClick={() => { setShortcutCaptureId(id); setStatus(`请按下“${label}”的新快捷键`); }}
+                  onKeyDown={(event) => captureShortcut(id, event)}
+                  onBlur={() => { if (capturing) setShortcutCaptureId(undefined); }}
+                >{capturing ? '请按键…' : shortcuts[id]}</button>
+              </div>;
+            })}
+          </div>
+          <Button onClick={resetShortcuts}>恢复默认快捷键</Button>
         </section>
 
         <section>
@@ -1578,7 +1685,7 @@ export default function App() {
         <button className={windowMode.alwaysOnTop ? 'active' : ''}
           title={windowMode.alwaysOnTop ? '取消始终置顶' : '始终置顶'}
           onClick={() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); }}><UiIcon name="pin" /></button>
-        <button title="协作模式 · Ctrl+Alt+Y"
+        <button title={`协作模式 · ${shortcuts.collaboration}`}
           aria-pressed={false}
           onClick={() => { void toggleDrawingCollaborationMode(); }}><UiIcon name="pen" /></button>
         <button title="最小化" onClick={() => api?.minimize()}><UiIcon name="minimize" /></button>
