@@ -71,7 +71,7 @@ let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.
 // Temporary manual-verification hook. Keep explicit CLI/file-association paths
 // authoritative, otherwise open the desktop fixture on every normal launch.
 const TEMPORARY_DESKTOP_SCENE_NAME = '未命名画板.refcanvas';
-let windowState = { alwaysOnTop: false, clickThrough: false, locked: false, opacity: 1 };
+let windowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 let windowMoveSession;
 let windowMoveTimer;
 const WINDOW_MOVE_FRAME_MS = 1000 / 60;
@@ -79,7 +79,16 @@ let nativeWindowMoveHelper;
 let nativeWindowMoveReady = false;
 let nativeWindowMoveOutput = '';
 let nonActivatingWindowReady = false;
-let taskbarPlacementPending = false;
+let nativeKeyRequestId = 0;
+const pendingNativeKeyQueries = new Map<string, { resolve(value: boolean): void; timer: NodeJS.Timeout }>();
+let nativeLayerRequestId = 0;
+let nativeLayerTransition = Promise.resolve();
+let nativeLayerRepairTimer;
+const pendingNativeLayerRequests = new Map<string, {
+  enabled: boolean;
+  resolve(value: boolean): void;
+  timer: NodeJS.Timeout;
+}>();
 const photoshopColorBridge = new PhotoshopColorBridge();
 let imageWorker;
 let imageWorkerPaused = false;
@@ -872,7 +881,7 @@ function normalizedColor(value) {
   return { r: value.r, g: value.g, b: value.b, hex };
 }
 
-async function applyPhotoshopForeground(color, returnFocus: boolean, settleAlt = false): Promise<PhotoshopColorSyncResult> {
+async function applyPhotoshopForeground(color, returnFocus: boolean): Promise<PhotoshopColorSyncResult> {
   const startedAt = performance.now();
   const result = (
     syncStatus: PhotoshopColorSyncResult['syncStatus'],
@@ -897,7 +906,7 @@ async function applyPhotoshopForeground(color, returnFocus: boolean, settleAlt =
     clipboard.writeText(color.hex);
     return result('unsupported', 'skipped', true, '当前平台不支持 Photoshop COM，颜色已复制');
   }
-  const bridgeResult = await photoshopColorBridge.commit(color, returnFocus, settleAlt);
+  const bridgeResult = await photoshopColorBridge.commit(color, returnFocus);
   if (bridgeResult.syncStatus === 'synced') {
     return result('synced', bridgeResult.focusStatus, false,
       returnFocus && bridgeResult.focusStatus !== 'activated' ? '颜色已同步，但未能自动返回 Photoshop' : undefined);
@@ -909,8 +918,8 @@ async function applyPhotoshopForeground(color, returnFocus: boolean, settleAlt =
   return result('automation-error', bridgeResult.focusStatus, true, 'Photoshop 自动化失败，颜色已复制');
 }
 
-const photoshopSyncQueue = createPhotoshopSyncQueue(async ({ color, returnFocus, settleAlt }) => {
-  try { return await applyPhotoshopForeground(color, returnFocus, settleAlt); }
+const photoshopSyncQueue = createPhotoshopSyncQueue(async ({ color, returnFocus }) => {
+  try { return await applyPhotoshopForeground(color, returnFocus); }
   catch {
     clipboard.writeText(color.hex);
     return {
@@ -1142,35 +1151,36 @@ function handleNativeWindowMoveOutput(chunk) {
   const lines = nativeWindowMoveOutput.split(/\r?\n/);
   nativeWindowMoveOutput = lines.pop() ?? '';
   for (const line of lines) {
-    if (line === 'READY' || line.startsWith('FOCUSLESS')) {
+    if (line.startsWith('KEY|')) {
+      const [, requestId, value] = line.split('|');
+      const pending = requestId ? pendingNativeKeyQueries.get(requestId) : undefined;
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingNativeKeyQueries.delete(requestId);
+        pending.resolve(value === '1');
+      }
+      continue;
+    }
+    if (line.startsWith('LAYER|')) {
+      const [, requestId, status] = line.split('|');
+      const pending = requestId ? pendingNativeLayerRequests.get(requestId) : undefined;
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingNativeLayerRequests.delete(requestId);
+        nonActivatingWindowReady = pending.enabled && status === 'READY';
+        pending.resolve(status === 'READY');
+      }
+      continue;
+    }
+    if (line === 'READY') {
       logInfo('window.native-helper-output', { line });
     }
     if (line === 'READY') {
       nativeWindowMoveReady = true;
-      if (mainWindow && shouldUseFocuslessPhotoshopPicker(windowState)) {
-        setImmediate(() => { setMainWindowNoActivate(true); });
-      }
+      setImmediate(() => setMainWindowFlatAppearance());
     }
-    else if (line === 'TASKBAR_DONE') {
-      // Taskbar ordering is best-effort and must not gate input or focus.
-    }
-    else if (line === 'FOCUSLESS_DONE') {
-      nonActivatingWindowReady = true;
-      if (taskbarPlacementPending && shouldUseFocuslessPhotoshopPicker(windowState)) {
-        taskbarPlacementPending = false;
-        // WS_EX_NOACTIVATE redraws the non-client frame asynchronously. Put
-        // the window under the taskbar only after that redraw is acknowledged.
-        setImmediate(placeMainWindowBelowTaskbar);
-      }
-    }
-    else if (line === 'FOCUSLESS_SKIPPED') {
-      nonActivatingWindowReady = false;
-      const placeBelowTaskbar = taskbarPlacementPending && shouldUseFocuslessPhotoshopPicker(windowState);
-      taskbarPlacementPending = false;
-      if (placeBelowTaskbar) setImmediate(placeMainWindowBelowTaskbar);
-      logWarn('window.no-activate-unavailable');
-    }
-    else if (line === 'TASKBAR_SKIPPED') logWarn('window.taskbar-order-unavailable');
+    else if (line === 'APPEARANCE_DONE') logInfo('window.flat-appearance-applied');
+    else if (line === 'APPEARANCE_SKIPPED') logWarn('window.flat-appearance-unavailable');
     else if (line.startsWith('ERROR ')) {
       logWarn('window.native-helper-command-failed', { message: line });
       notifyNativeWindowMoveFinished();
@@ -1184,7 +1194,6 @@ function startNativeWindowMoveHelper() {
   if (process.platform !== 'win32' || nativeWindowMoveHelper) return;
   nativeWindowMoveReady = false;
   nonActivatingWindowReady = false;
-  taskbarPlacementPending = false;
   nativeWindowMoveHelper = spawn('powershell.exe', [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(rootDir, 'electron', 'native', 'native-window-move.ps1'),
@@ -1204,8 +1213,12 @@ function startNativeWindowMoveHelper() {
     nativeWindowMoveHelper = undefined;
     nativeWindowMoveReady = false;
     nonActivatingWindowReady = false;
-    taskbarPlacementPending = false;
     nativeWindowMoveOutput = '';
+    pendingNativeLayerRequests.forEach((pending) => {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    });
+    pendingNativeLayerRequests.clear();
   });
   nativeWindowMoveHelper.on('error', () => {
     nativeWindowMoveHelper = undefined;
@@ -1233,31 +1246,98 @@ function nativeWindowHandleValue() {
   return handleBuffer.length >= 8 ? handleBuffer.readBigUInt64LE(0) : BigInt(handleBuffer.readUInt32LE(0));
 }
 
-function setMainWindowNoActivate(enabled: boolean) {
-  taskbarPlacementPending = enabled;
-  if (!nativeWindowMoveReady || !nativeWindowMoveHelper?.stdin.writable) {
-    logWarn('window.no-activate-request-skipped', {
-      enabled, helperReady: nativeWindowMoveReady, stdinWritable: Boolean(nativeWindowMoveHelper?.stdin.writable),
-    });
-    return;
-  }
-  const handle = nativeWindowHandleValue();
-  if (handle === undefined) return;
-  nonActivatingWindowReady = false;
-  logInfo('window.no-activate-requested', { enabled });
-  nativeWindowMoveHelper.stdin.write(`FOCUSLESS|${handle}|${enabled ? '1' : '0'}\n`, (error) => {
-    if (!error) return;
-    logWarn('window.no-activate-write-failed', { code: error.code, message: error.message });
+function waitForNativeWindowMoveHelper(timeoutMs = 1500) {
+  if (process.platform !== 'win32' || nativeWindowMoveReady) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const poll = () => {
+      if (nativeWindowMoveReady) { resolve(true); return; }
+      if (Date.now() >= deadline) { resolve(false); return; }
+      setTimeout(poll, 15).unref?.();
+    };
+    poll();
   });
 }
 
-function placeMainWindowBelowTaskbar() {
+function requestNativeWindowLayer(enabled: boolean, timeoutMs = 1500) {
+  if (process.platform !== 'win32') return Promise.resolve(true);
+  return waitForNativeWindowMoveHelper(timeoutMs).then((ready) => {
+    if (!ready) {
+      nonActivatingWindowReady = false;
+      return !enabled;
+    }
+    const helper = nativeWindowMoveHelper;
+    const handle = nativeWindowHandleValue();
+    if (!helper?.stdin.writable || handle === undefined) return !enabled;
+    const requestId = String(++nativeLayerRequestId);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingNativeLayerRequests.delete(requestId);
+        nonActivatingWindowReady = false;
+        resolve(false);
+      }, timeoutMs);
+      timer.unref?.();
+      pendingNativeLayerRequests.set(requestId, { enabled, resolve, timer });
+      helper.stdin.write(`LAYER|${requestId}|${handle}|${enabled ? '1' : '0'}\n`, (error) => {
+        if (!error) return;
+        const pending = pendingNativeLayerRequests.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        pendingNativeLayerRequests.delete(requestId);
+        nonActivatingWindowReady = false;
+        pending.resolve(false);
+      });
+    });
+  });
+}
+
+function transitionNativeWindowLayer(enabled: boolean) {
+  const transition = nativeLayerTransition.then(() => requestNativeWindowLayer(enabled));
+  nativeLayerTransition = transition.then(() => undefined, () => undefined);
+  return transition;
+}
+
+function scheduleNativeWindowLayerRepair() {
+  if (!mainWindow || mainWindow.isDestroyed() || !shouldUseFocuslessPhotoshopPicker(windowState)) return;
+  if (nativeLayerRepairTimer) return;
+  nativeLayerRepairTimer = setTimeout(() => {
+    nativeLayerRepairTimer = undefined;
+    if (!mainWindow || mainWindow.isDestroyed() || !shouldUseFocuslessPhotoshopPicker(windowState)) return;
+    void transitionNativeWindowLayer(true).then((ready) => {
+      if (!ready) logWarn('window.collaboration-layer-repair-failed');
+    });
+  }, 80);
+  nativeLayerRepairTimer.unref?.();
+}
+
+function setMainWindowFlatAppearance() {
   if (!nativeWindowMoveReady || !nativeWindowMoveHelper?.stdin.writable) return;
   const handle = nativeWindowHandleValue();
   if (handle === undefined) return;
-  nativeWindowMoveHelper.stdin.write(`TASKBAR|${handle}\n`, (error) => {
+  nativeWindowMoveHelper.stdin.write(`APPEARANCE|${handle}\n`, (error) => {
     if (!error) return;
-    logWarn('window.taskbar-order-write-failed', { code: error.code, message: error.message });
+    logWarn('window.flat-appearance-write-failed', { code: error.code, message: error.message });
+  });
+}
+
+function queryNativeKeyDown(virtualKey: number) {
+  if (!nativeWindowMoveReady || !nativeWindowMoveHelper?.stdin.writable) return Promise.resolve(false);
+  const requestId = String(++nativeKeyRequestId);
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      pendingNativeKeyQueries.delete(requestId);
+      resolve(false);
+    }, 120);
+    timer.unref?.();
+    pendingNativeKeyQueries.set(requestId, { resolve, timer });
+    nativeWindowMoveHelper?.stdin.write(`KEY|${requestId}|${virtualKey}\n`, (error) => {
+      if (!error) return;
+      const pending = pendingNativeKeyQueries.get(requestId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      pendingNativeKeyQueries.delete(requestId);
+      pending.resolve(false);
+    });
   });
 }
 
@@ -1270,15 +1350,18 @@ function finishWindowMove() {
 function createWindow() {
   logInfo('window.create', { width: 1280, height: 820, smokeTest, projectZoomBenchmark });
   mainWindow = new BrowserWindow({
-    title: 'Yoiniwa · 宵庭',
+    title: '未命名画板 · Yoiniwa',
     icon: path.join(rootDir, app.isPackaged ? 'dist' : 'public', 'yoiniwa-icon.png'),
     width: 1280,
     height: 820,
     minWidth: 1,
     minHeight: 1,
     frame: false,
+    hasShadow: false,
+    roundedCorners: false,
+    transparent: true,
     show: false,
-    backgroundColor: '#17191d',
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(electronRuntimeDir, 'preload.cjs'),
       contextIsolation: true,
@@ -1287,6 +1370,9 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
+  // Explicitly repeat this after construction because the native focus/taskbar
+  // helper may later trigger a non-client frame refresh on Windows.
+  mainWindow.setHasShadow(false);
 
   mainWindow.once('ready-to-show', () => {
     // requestAnimationFrame is visibility-throttled in a hidden BrowserWindow.
@@ -1787,6 +1873,9 @@ function createWindow() {
   });
   mainWindow.on('closed', () => { mainWindow = undefined; });
   mainWindow.on('blur', finishWindowMove);
+  mainWindow.on('show', scheduleNativeWindowLayerRepair);
+  mainWindow.on('restore', scheduleNativeWindowLayerRepair);
+  mainWindow.on('always-on-top-changed', scheduleNativeWindowLayerRepair);
 }
 
 app.setName('Yoiniwa');
@@ -1804,6 +1893,9 @@ else app.whenReady().then(async () => {
   startNativeWindowMoveHelper();
   photoshopColorBridge.start();
   createWindow();
+  screen.on('display-added', scheduleNativeWindowLayerRepair);
+  screen.on('display-removed', scheduleNativeWindowLayerRepair);
+  screen.on('display-metrics-changed', scheduleNativeWindowLayerRepair);
   const recentIndexTimer = setTimeout(() => {
     void hydrateLegacyRecentAssetIndexes().catch((error) => logWarn('recent-assets.hydrate-failed', { error: String(error) }));
   }, 1500);
@@ -2111,17 +2203,21 @@ handleIpc('photoshop:set-foreground', async (_event, rawColor, requestedReturnFo
   const requestedRoundTrip = shouldAutoPhotoshopRoundTrip(windowState, Boolean(requestedReturnFocus));
   const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
   const returnFocus = requestedRoundTrip && !focuslessPicker;
-  const settleAlt = requestedRoundTrip && focuslessPicker;
   return new Promise<PhotoshopColorSyncResult>((resolve) => {
-    setImmediate(() => { void photoshopSyncQueue.enqueue({ color, returnFocus, settleAlt }).then(resolve); });
+    setImmediate(() => { void photoshopSyncQueue.enqueue({ color, returnFocus }).then(resolve); });
   });
 });
 
-handleIpc('window:set-mode', (_event, patch) => {
+handleIpc('window:set-mode', async (_event, patch) => {
+  const previousState = windowState;
   const wasFocusless = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
+  const wasCollaborationMode = windowState.collaborationMode;
   windowState = { ...windowState, ...patch };
   const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
-  mainWindow.setAlwaysOnTop(windowState.alwaysOnTop);
+  const enteringCollaborationMode = !wasCollaborationMode && windowState.collaborationMode;
+  const leavingFocuslessPicker = wasFocusless && !focuslessPicker;
+  const needsNativeLayerTransition = focuslessPicker !== wasFocusless || enteringCollaborationMode;
+  if (previousState.alwaysOnTop !== windowState.alwaysOnTop) mainWindow.setAlwaysOnTop(windowState.alwaysOnTop);
   mainWindow.setOpacity(Math.max(0.25, Math.min(1, windowState.opacity)));
   mainWindow.setMovable(!windowState.locked);
   mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
@@ -2131,18 +2227,24 @@ handleIpc('window:set-mode', (_event, patch) => {
   // from stealing Photoshop's foreground ownership.
   mainWindow.setFocusable(true);
   mainWindow.setSkipTaskbar(false);
-  if (focuslessPicker) {
-    setImmediate(() => {
-      if (mainWindow && !mainWindow.isDestroyed() && shouldUseFocuslessPhotoshopPicker(windowState)) {
-        setMainWindowNoActivate(true);
-      }
-    });
+  if (needsNativeLayerTransition) {
+    const layerReady = await transitionNativeWindowLayer(focuslessPicker);
+    if (focuslessPicker && !layerReady) {
+      logWarn('window.collaboration-layer-unavailable');
+      windowState = previousState;
+      mainWindow.setAlwaysOnTop(previousState.alwaysOnTop);
+      mainWindow.setOpacity(Math.max(0.25, Math.min(1, previousState.opacity)));
+      mainWindow.setMovable(!previousState.locked);
+      mainWindow.setIgnoreMouseEvents(previousState.clickThrough, { forward: true });
+      void transitionNativeWindowLayer(wasFocusless);
+      return windowState;
+    }
+  }
+  if (focuslessPicker && (enteringCollaborationMode || !wasFocusless)) {
     void photoshopColorBridge.warm().then(() => photoshopColorBridge.captureFocus(300))
       .then(() => photoshopColorBridge.activate()).catch(() => undefined);
-  } else if (wasFocusless) {
-    setMainWindowNoActivate(false);
   }
-  if (!focuslessPicker && wasFocusless && !mainWindow.isDestroyed()) {
+  if (leavingFocuslessPicker && !mainWindow.isDestroyed()) {
     setImmediate(() => {
       if (mainWindow && !mainWindow.isDestroyed() && !shouldUseFocuslessPhotoshopPicker(windowState)) mainWindow.focus();
     });
@@ -2150,6 +2252,12 @@ handleIpc('window:set-mode', (_event, patch) => {
   return windowState;
 });
 handleIpc('window:get-mode', () => windowState);
+handleIpc('window:is-key-down', (_event, key) => key === 'Space' ? queryNativeKeyDown(0x20) : false);
+handleIpc('window:set-title', (_event, title) => {
+  if (!mainWindow || mainWindow.isDestroyed() || typeof title !== 'string') return;
+  const normalized = title.trim().slice(0, 260);
+  if (normalized) mainWindow.setTitle(normalized);
+});
 ipcMain.on('window:minimize', () => mainWindow.minimize());
 ipcMain.on('window:maximize', () => mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize());
 ipcMain.on('window:move-start', () => {

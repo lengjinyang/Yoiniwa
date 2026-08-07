@@ -39,6 +39,7 @@ export interface CanvasRuntimeOptions {
   onContextMenu?(position: { x: number; y: number }): void;
   colorPickerHeld?: boolean;
   colorPickerShortcut?: ColorPickerShortcut;
+  drawingCollaborationMode?: boolean;
   onColorPicked?(color: PickedColor): void;
   windowLocked?: boolean;
   onWindowMoveStart?(): void;
@@ -63,6 +64,7 @@ export class CanvasRuntime {
   private colorPickerShortcut: ColorPickerShortcut = 'alt';
   private altPointerArmed = false;
   private windowLocked = false;
+  private drawingCollaborationMode = false;
   private visualNotesController?: VisualNotesController;
   private visualNotesState: VisualNotesToolState;
   private colorPickerHud?: HTMLDivElement;
@@ -79,6 +81,7 @@ export class CanvasRuntime {
     this.colorPickerHeld = Boolean(options.colorPickerHeld);
     this.colorPickerShortcut = options.colorPickerShortcut ?? 'alt';
     this.windowLocked = Boolean(options.windowLocked);
+    this.drawingCollaborationMode = Boolean(options.drawingCollaborationMode);
     this.visualNotesState = options.visualNotesState ?? { enabled: false, tool: 'brush', color: '#c6a15b', opacity: 0.82, width: 'medium', pressureEnabled: true, eraserSize: 'medium', selectedMarkId: undefined };
   }
 
@@ -127,7 +130,11 @@ export class CanvasRuntime {
       this.scheduleRender();
       this.selectionController?.refresh();
       if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
-    }, (event) => this.isColorPickerPointer(event));
+    }, (event) => this.isColorPickerPointer(event), (event) => {
+      if (!this.drawingCollaborationMode || event.altKey
+        || (event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.isPrimary === false) return undefined;
+      return window.refCanvas?.isKeyDown('Space').catch(() => false) ?? false;
+    });
     cameraController.start();
     this.selectionController = new SelectionController({
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
@@ -171,7 +178,8 @@ export class CanvasRuntime {
       drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
-      interactionBlocked: () => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked,
+      interactionBlocked: (event) => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked
+        || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0)),
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
         if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
@@ -205,6 +213,7 @@ export class CanvasRuntime {
         this.options.onVisualNotesChanged?.(notes);
       },
       selectionChanged: (id) => { this.renderer.setSelectedVisualNote(id); this.options.onVisualNoteSelectionChange?.(id); },
+      interactionBlocked: (event) => this.drawingCollaborationMode && event.button === 0,
     });
     this.visualNotesController.start();
     const picker = new ColorPickerController({
@@ -335,6 +344,10 @@ export class CanvasRuntime {
     this.options.onSelectionChange?.([]);
     this.options.onGroupSelectionChange?.(undefined);
   }
+
+  setDrawingCollaborationMode(enabled: boolean) {
+    this.drawingCollaborationMode = enabled;
+  }
   setProjectEpoch(epoch: number) {
     if (epoch === this.projectEpoch) return;
     this.projectEpoch = epoch;
@@ -345,6 +358,9 @@ export class CanvasRuntime {
   getViewport() { return this.camera.snapshot(); }
 
   private isColorPickerPointer(event: PointerEvent) {
+    const primaryButton = event.button === 0
+      || (event.pointerType === 'pen' && event.button === -1 && (event.buttons & 1) !== 0);
+    if (this.drawingCollaborationMode && event.ctrlKey && primaryButton) return false;
     // Locked reference mode always mirrors Photoshop's Alt+pen gesture, even
     // when the editable-board shortcut preference is still set to S.
     const shortcut = this.windowLocked ? 'alt' : this.colorPickerShortcut;

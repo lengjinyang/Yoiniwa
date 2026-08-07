@@ -3,7 +3,6 @@ import type { PhotoshopColorSyncResult } from '../../src/types.js';
 export interface PhotoshopSyncRequest {
   color: { r: number; g: number; b: number; hex: string };
   returnFocus: boolean;
-  settleAlt?: boolean;
 }
 
 interface QueueEntry extends PhotoshopSyncRequest {
@@ -33,7 +32,6 @@ export function createPhotoshopSyncQueue(
           if (pending) {
             pending.color = request.color;
             pending.returnFocus = request.returnFocus;
-            pending.settleAlt = request.settleAlt;
             pending.waiters.push(resolve);
           } else pending = { ...request, waiters: [resolve] };
           return;

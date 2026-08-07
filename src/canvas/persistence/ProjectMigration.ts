@@ -12,7 +12,17 @@ export function migrateProjectScene(input: unknown): Scene | undefined {
   migrated.name = typeof migrated.name === 'string' ? migrated.name : '未命名画板';
   migrated.savedAt = typeof migrated.savedAt === 'string' ? migrated.savedAt : new Date(0).toISOString();
   migrated.viewport = record(migrated.viewport) ?? { x: 0, y: 0, scale: 1 };
-  migrated.canvas = { background: '#121315', padding: 20, snap: true, includeBackgroundOnExport: true, ...record(migrated.canvas) };
+  const migratedCanvas = record(migrated.canvas);
+  const previousBackground = typeof migratedCanvas?.background === 'string' ? migratedCanvas.background.toUpperCase() : undefined;
+  const normalizedCanvas: Record<string, unknown> = {
+    background: '#1D1D1D', padding: 20, snap: true, includeBackgroundOnExport: true, ...migratedCanvas,
+  };
+  // Keep deliberate custom board colors, but move historical Yoiniwa defaults
+  // to the current neutral gray requested for the canvas.
+  if (previousBackground && ['#121315', '#1A1D21', '#202124'].includes(previousBackground)) {
+    normalizedCanvas.background = '#1D1D1D';
+  }
+  migrated.canvas = normalizedCanvas;
   migrated.assets = record(migrated.assets) ?? {};
   migrated.items = Array.isArray(migrated.items) ? migrated.items.map((value) => {
     const item = record(value) ?? {};

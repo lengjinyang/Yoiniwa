@@ -31,6 +31,7 @@ interface VisualNotesControllerOptions {
   eraserCursor(point?: { x: number; y: number }, radiusScreen?: number): void;
   commit(next: VisualNotesState): void;
   selectionChanged(id?: string): void;
+  interactionBlocked?(event: PointerEvent): boolean;
 }
 
 type Gesture =
@@ -84,7 +85,7 @@ export class VisualNotesController {
 
   private down(event: PointerEvent) {
     const state = this.options.state();
-    if (!state.enabled || event.button !== 0 || event.altKey) return;
+    if (!state.enabled || event.button !== 0 || event.altKey || event.ctrlKey || this.options.interactionBlocked?.(event)) return;
     const scene = this.options.scene(); if (!scene) return;
     const local = this.local(event); const world = this.options.camera.screenToWorld(local);
     if (event.shiftKey) {

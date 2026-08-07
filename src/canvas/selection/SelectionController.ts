@@ -40,7 +40,7 @@ interface SelectionControllerOptions {
   drawOverlay(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }): void;
   hitHandle(point: { x: number; y: number }): TransformHandle | undefined;
   hitGroupHandle(point: { x: number; y: number }): GroupResizeHandle | undefined;
-  interactionBlocked(): boolean;
+  interactionBlocked(event?: PointerEvent): boolean;
   cameraChanged(committed: boolean): void;
 }
 
@@ -87,7 +87,7 @@ export class SelectionController {
   }
 
   private pointerDown(event: PointerEvent) {
-    if (event.button !== 0 || event.altKey || this.options.interactionBlocked()) return;
+    if (event.button !== 0 || event.altKey || this.options.interactionBlocked(event)) return;
     const scene = this.options.scene();
     if (!scene) return;
     const world = this.options.camera.screenToWorld(this.local(event));

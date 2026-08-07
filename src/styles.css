@@ -1,7 +1,7 @@
 :root {
   font-family: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
   color: #e9eef2;
-  background: #17191d;
+  background: transparent;
   font-synthesis: none;
   --panel: rgba(28, 31, 37, 0.96);
   --panel-2: #252931;
@@ -12,19 +12,19 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; border-radius: 0; box-shadow: none; }
 button, input { font: inherit; }
 button { color: inherit; }
 
-.app-shell { position: relative; width: 100%; height: 100%; overflow: hidden; background: #17191d; user-select: none; }
+.app-shell { position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: 0; box-shadow: none; background: transparent; user-select: none; }
 .no-drag, button, input { -webkit-app-region: no-drag; }
 .property-panel button, .empty-state button { border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 6px 9px; font-size: 12px; white-space: nowrap; cursor: pointer; }
 .property-panel button:hover { background: rgba(255,255,255,.08); border-color: var(--line); }
 button.active { color: #051b22; background: var(--accent) !important; border-color: var(--accent) !important; font-weight: 650; }
 button:disabled { opacity: .35; cursor: default; }
 
-.workspace { position: absolute; inset: 0; overflow: hidden; }
-.canvas-runtime-root { position: absolute; inset: 0; overflow: hidden; cursor: default; touch-action: none; }
+.workspace { position: absolute; inset: 0; overflow: hidden; border-radius: 0; box-shadow: none; }
+.canvas-runtime-root { position: absolute; inset: 0; overflow: hidden; border-radius: 0; box-shadow: none; cursor: default; touch-action: none; }
 .canvas-runtime-root > .pixi-canvas { display: block; width: 100%; height: 100%; outline: none; }
 .color-picker-hud { position: absolute; z-index: 40; display: flex; align-items: center; gap: 10px; width: 178px; min-height: 54px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: 12px; color: #f5f7fa; background: rgba(24,26,31,.86); box-shadow: 0 10px 32px rgba(0,0,0,.32), inset 0 1px rgba(255,255,255,.08); backdrop-filter: blur(18px) saturate(145%); pointer-events: none; }
 .color-picker-hud[hidden] { display: none; }
@@ -153,6 +153,7 @@ button:disabled { opacity: .35; cursor: default; }
 .window-floating-controls { position: absolute; top: 6px; right: 6px; display: flex; overflow: hidden; opacity: 0; transform: translateY(-8px); border-radius: 7px; background: rgba(20,22,27,.82); box-shadow: 0 6px 22px rgba(0,0,0,.3); backdrop-filter: blur(14px); transition: opacity .12s ease, transform .12s ease; }
 .window-control-zone:hover .window-floating-controls { opacity: 1; transform: translateY(0); }
 .window-floating-controls button { width: 42px; height: 29px; border: 0; background: transparent; color: #cad1d8; font-size: 15px; cursor: pointer; }
+.window-floating-controls button:disabled { opacity: .55; cursor: default; }
 .window-floating-controls button:hover { color: white; background: rgba(255,255,255,.1); }
 .window-floating-controls button.active { color: #fff; background: #0a84ff !important; }
 .window-floating-controls .close:hover { background: #d33a45; }

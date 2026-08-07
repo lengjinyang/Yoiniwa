@@ -212,6 +212,7 @@ export interface WindowState {
   alwaysOnTop: boolean;
   clickThrough: boolean;
   locked: boolean;
+  collaborationMode: boolean;
   opacity: number;
 }
 
@@ -252,6 +253,8 @@ interface RefCanvasAPI {
   ): Promise<PhotoshopColorSyncResult>;
   setWindowMode(mode: Partial<WindowState>): Promise<WindowState>;
   getWindowMode(): Promise<WindowState>;
+  isKeyDown(key: 'Space'): Promise<boolean>;
+  setTitle(title: string): Promise<void>;
   minimize(): void;
   toggleMaximize(): void;
   beginWindowMove(): void;
