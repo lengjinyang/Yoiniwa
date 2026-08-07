@@ -76,6 +76,7 @@ export class CanvasRuntime {
   private colorPickerHoverSuppressed = false;
   private colorPickerPoint?: { x: number; y: number };
   private colorPickerColor?: PickedColor;
+  private colorPickerVisibleBounds?: { left: number; top: number; right: number; bottom: number };
 
   constructor(private readonly container: HTMLElement, private readonly options: CanvasRuntimeOptions) {
     this.camera = new Camera(options.viewport);
@@ -96,6 +97,7 @@ export class CanvasRuntime {
     }
     this.createColorPickerHud();
     const armAltFromPointer = (event: PointerEvent) => {
+      this.updateColorPickerVisibleBounds(event);
       if (event.type === 'pointerenter') this.altPointerArmed = event.altKey;
       else if (event.altKey) this.altPointerArmed = true;
       if (event.pointerType === 'pen' && event.buttons === 0 && !this.colorPickerSampling && !this.colorPickerHoverSuppressed) {
@@ -137,6 +139,7 @@ export class CanvasRuntime {
     }, (event) => this.isColorPickerPointer(event), (event) => {
       if (!this.drawingCollaborationMode || event.altKey
         || (event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.isPrimary === false) return undefined;
+      if ((event as PointerEvent & { spaceKey?: boolean }).spaceKey) return true;
       return window.refCanvas?.isKeyDown('Space').catch(() => false) ?? false;
     });
     cameraController.start();
@@ -183,7 +186,8 @@ export class CanvasRuntime {
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
       interactionBlocked: (event) => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked
-        || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0)),
+        || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0))
+        || (this.drawingCollaborationMode && Boolean((event as (PointerEvent & { spaceKey?: boolean }) | undefined)?.spaceKey && event?.button === 0)),
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
         if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
@@ -227,6 +231,7 @@ export class CanvasRuntime {
       position: (point) => this.positionColorPickerPreview(point),
       preview: (color) => this.updateColorPickerPreview(color),
       picked: (color) => {
+        this.altPointerArmed = false;
         this.colorPickerHoverSuppressed = true;
         this.hideColorPickerOverlay();
         this.container.classList.remove('color-picker-sampling');
@@ -368,8 +373,10 @@ export class CanvasRuntime {
   getViewport() { return this.camera.snapshot(); }
 
   private isColorPickerPointer(event: PointerEvent) {
+    this.updateColorPickerVisibleBounds(event);
     const primaryButton = event.button === 0
       || (event.pointerType === 'pen' && event.button === -1 && (event.buttons & 1) !== 0);
+    if (this.drawingCollaborationMode && (event as PointerEvent & { spaceKey?: boolean }).spaceKey && primaryButton) return false;
     if (this.drawingCollaborationMode && event.ctrlKey && primaryButton) return false;
     // Locked reference mode always mirrors Photoshop's Alt+pen gesture, even
     // when the editable-board shortcut preference is still set to S.
@@ -450,11 +457,27 @@ export class CanvasRuntime {
   private positionColorPickerHud(point: { x: number; y: number }) {
     const hud = this.colorPickerHud;
     if (!hud) return;
-    const width = 178; const height = 54; const gap = 32;
-    const preferredX = point.x + gap + width <= this.container.clientWidth ? point.x + gap : point.x - gap - width;
-    const preferredY = point.y + gap + height <= this.container.clientHeight ? point.y + gap : point.y - gap - height;
-    hud.style.left = `${Math.max(8, Math.min(this.container.clientWidth - width - 8, preferredX))}px`;
-    hud.style.top = `${Math.max(8, Math.min(this.container.clientHeight - height - 8, preferredY))}px`;
+    const width = hud.offsetWidth || 178; const height = hud.offsetHeight || 54; const gap = 32;
+    const containerBounds = this.container.getBoundingClientRect();
+    const visible = this.colorPickerVisibleBounds;
+    const left = Math.max(8, (visible?.left ?? containerBounds.left) - containerBounds.left + 8);
+    const top = Math.max(8, (visible?.top ?? containerBounds.top) - containerBounds.top + 8);
+    const right = Math.min(this.container.clientWidth - 8,
+      (visible?.right ?? containerBounds.right) - containerBounds.left - 8);
+    const bottom = Math.min(this.container.clientHeight - 8,
+      (visible?.bottom ?? containerBounds.bottom) - containerBounds.top - 8);
+    const preferredX = point.x + gap + width <= right ? point.x + gap : point.x - gap - width;
+    const preferredY = point.y + gap + height <= bottom ? point.y + gap : point.y - gap - height;
+    hud.style.left = `${Math.max(left, Math.min(right - width, preferredX))}px`;
+    hud.style.top = `${Math.max(top, Math.min(bottom - height, preferredY))}px`;
+  }
+
+  private updateColorPickerVisibleBounds(event: PointerEvent) {
+    const bounds = (event as PointerEvent & {
+      visibleBounds?: { left: number; top: number; right: number; bottom: number };
+    }).visibleBounds;
+    this.colorPickerVisibleBounds = bounds && [bounds.left, bounds.top, bounds.right, bounds.bottom].every(Number.isFinite)
+      ? bounds : undefined;
   }
 
   private showColorPickerHover(point?: { x: number; y: number }) {

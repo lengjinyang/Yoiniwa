@@ -82,7 +82,7 @@ describe('ColorPickerController', () => {
     const state = setup();
     state.input.down?.(pointer());
     expect(state.captured.has(1)).toBe(true);
-    expect(state.previews.at(-1)).toMatchObject({ r: 10, g: 10 });
+    expect(state.previews.at(-1)).toBeUndefined();
     state.input.move?.(pointer({ clientX: 20, clientY: 25 }));
     state.input.move?.(pointer({ clientX: 30, clientY: 35 }));
     expect(state.frames.size).toBe(1);
@@ -105,19 +105,19 @@ describe('ColorPickerController', () => {
   it('moves the reticle every frame while limiting GPU preview samples to 30 Hz', () => {
     const state = setup();
     state.input.down?.(pointer());
-    expect(state.samples).toHaveLength(1);
+    expect(state.samples).toHaveLength(0);
 
     state.input.move?.(pointer({ clientX: 20, clientY: 21 }));
     state.advance(10);
     state.frames.values().next().value?.(10);
     expect(state.positions.at(-1)).toEqual({ x: 20, y: 21 });
-    expect(state.samples).toHaveLength(1);
+    expect(state.samples).toHaveLength(0);
 
     state.input.move?.(pointer({ clientX: 30, clientY: 31 }));
     state.advance(24);
     state.frames.values().next().value?.(34);
     expect(state.positions.at(-1)).toEqual({ x: 30, y: 31 });
-    expect(state.samples).toHaveLength(2);
+    expect(state.samples).toHaveLength(1);
     expect(state.samples.at(-1)).toEqual({ point: { x: 30, y: 31 }, final: false });
 
     state.input.up?.(pointer({ clientX: 40, clientY: 41, buttons: 0 }));

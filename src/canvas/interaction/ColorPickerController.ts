@@ -1,7 +1,6 @@
 import type { ImageItem, PickedColor } from '../../types';
 import type { Camera } from '../camera/Camera';
 import type { SceneStore } from '../scene/SceneStore';
-import { topmostImageAtPoint } from '../selection/HitTestService';
 import type { InputRouter } from './InputRouter';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
 
@@ -59,7 +58,6 @@ export class ColorPickerController {
   private pendingPreview?: Point;
   private lastClientPoint?: Point;
   private lastPreviewSampleAt = Number.NEGATIVE_INFINITY;
-
   constructor(private readonly options: {
     element: HTMLElement;
     input: InputRouter | PointerInput;
@@ -85,7 +83,8 @@ export class ColorPickerController {
       if (!supportsPickerGesture(event) || !this.options.enabled(event)) return;
       const target = this.sampleTarget(event.clientX, event.clientY, false, false);
       if (!target.item?.assetId) return;
-      this.cancel();
+      if (this.state === 'sampling' || this.pointerId !== undefined || this.previewFrame !== undefined) this.cancel();
+      else this.request += 1;
       event.preventDefault();
       this.state = 'sampling';
       this.pointerId = event.pointerId;
@@ -174,7 +173,8 @@ export class ColorPickerController {
     const bounds = this.options.element.getBoundingClientRect();
     const point = { x: clientX - bounds.left, y: clientY - bounds.top };
     const world = this.options.camera.screenToWorld(point);
-    const item = topmostImageAtPoint(this.options.scene()?.images() ?? [], world);
+    const scene = this.options.scene();
+    const item = scene?.imageAtPoint(world);
     return { point, world, item, color: sample && item?.assetId ? this.options.sample(point, final) : undefined };
   }
 

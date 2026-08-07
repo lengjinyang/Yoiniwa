@@ -3,6 +3,7 @@ import type { SceneNode } from './SceneNode';
 import { SpatialIndex } from './SpatialIndex';
 import { fitAutoGroupsToContents } from '../../scene';
 import { moveSceneMark } from '../../visualNotes/VisualNoteGeometry';
+import { pointInImage } from '../selection/HitTestService';
 
 export class SceneStore {
   private scene: Scene;
@@ -25,6 +26,17 @@ export class SceneStore {
   snapshot() { return this.scene; }
   node(id: string) { return this.nodes.get(id); }
   images() { return this.scene.items.map((item) => this.hiddenImages.has(item.id) ? { ...item, hidden: true } : item).sort((a, b) => a.zIndex - b.zIndex); }
+  imageAtPoint(point: { x: number; y: number }) {
+    const candidates = this.spatial.query({ x: point.x, y: point.y, width: 0, height: 0 });
+    let topmost: ImageItem | undefined;
+    candidates.forEach((id) => {
+      if (this.hiddenImages.has(id)) return;
+      const node = this.nodes.get(id);
+      if (!node || node.kind !== 'image' || !pointInImage(node.value, point)) return;
+      if (!topmost || node.value.zIndex > topmost.zIndex) topmost = node.value;
+    });
+    return topmost;
+  }
   groups() { return this.scene.groups.map((group) => this.hiddenGroups.has(group.id) ? { ...group, hidden: true } : group); }
   renderScene(): Scene {
     return { ...this.scene,

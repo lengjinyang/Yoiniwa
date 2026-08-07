@@ -156,12 +156,17 @@ export function CanvasView({
           : input.kind === 'cancel' ? 'pointercancel' : 'pointermove';
       if (input.kind === 'down') pointerActive = true;
       const pressed = pointerActive && input.kind !== 'up' && input.kind !== 'cancel';
-      container.dispatchEvent(new PointerEvent(eventName, {
+      const pointerEvent = new PointerEvent(eventName, {
         bubbles: true, cancelable: true, pointerId, pointerType: input.pointerType,
         isPrimary: true, button: input.kind === 'down' || input.kind === 'up' ? 0 : -1,
         buttons: pressed ? 1 : 0, pressure: pressed ? 0.5 : 0,
         clientX: input.clientX, clientY: input.clientY, altKey: input.altKey,
-      }));
+      });
+      Object.defineProperty(pointerEvent, 'spaceKey', { value: input.spaceKey, enumerable: false });
+      if (input.visibleBounds) {
+        Object.defineProperty(pointerEvent, 'visibleBounds', { value: input.visibleBounds, enumerable: false });
+      }
+      container.dispatchEvent(pointerEvent);
       if (input.kind === 'up' || input.kind === 'cancel') pointerActive = false;
     });
   }, []);
