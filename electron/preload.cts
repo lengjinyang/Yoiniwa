@@ -68,4 +68,14 @@ contextBridge.exposeInMainWorld('refCanvas', {
     ipcRenderer.on('window:click-through-disabled', handler);
     return () => ipcRenderer.removeListener('window:click-through-disabled', handler);
   },
+  onToggleCollaborationRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('window:toggle-collaboration-requested', handler);
+    return () => ipcRenderer.removeListener('window:toggle-collaboration-requested', handler);
+  },
+  onNativePointer: (callback) => {
+    const handler = (_event, input) => callback(input);
+    ipcRenderer.on('window:native-pointer', handler);
+    return () => ipcRenderer.removeListener('window:native-pointer', handler);
+  },
 });

@@ -1,6 +1,6 @@
 import type {
   CacheInfo, ImageItem, ImagePipelinePerformanceStats, ImagePrewarmProgress, ImageThumbnailReady, ImportedImage,
-  PhotoshopColorSyncResult, PickedColor, RecentScene, Scene, WindowState,
+  NativePointerInput, PhotoshopColorSyncResult, PickedColor, RecentScene, Scene, WindowState,
 } from '../types.js';
 
 export interface IpcContract<Args extends unknown[], Result> {
@@ -48,6 +48,8 @@ export interface IpcEventMap {
   'scene:external-open': string;
   'window:move-finished': void;
   'window:click-through-disabled': void;
+  'window:toggle-collaboration-requested': void;
+  'window:native-pointer': NativePointerInput;
 }
 
 export type IpcChannel = keyof IpcContractMap;
