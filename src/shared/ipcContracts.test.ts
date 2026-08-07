@@ -13,6 +13,7 @@ const invokeChannels = [
   'images:performance-stats', 'images:sample-pixel', 'scene:save', 'scene:autosave', 'scene:open', 'scene:import', 'scene:recent',
   'scene:startup-path', 'cache:info', 'cache:choose-location', 'cache:reset-location', 'image:export',
   'image:copy', 'image:show-source', 'photoshop:set-foreground', 'window:set-mode', 'window:get-mode',
+  'window:set-collaboration-shortcut', 'window:get-collaboration-shortcut',
   'logs:write', 'logs:open-folder', 'logs:copy-diagnostics', 'performance:record-manual-wheel',
 ] as const satisfies readonly IpcChannel[];
 

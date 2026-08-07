@@ -263,6 +263,8 @@ interface RefCanvasAPI {
   ): Promise<PhotoshopColorSyncResult>;
   setWindowMode(mode: Partial<WindowState>): Promise<WindowState>;
   getWindowMode(): Promise<WindowState>;
+  setCollaborationShortcut(shortcut: string): Promise<{ ok: boolean; shortcut: string; message?: string }>;
+  getCollaborationShortcut(): Promise<{ shortcut: string }>;
   isKeyDown(key: 'Space'): Promise<boolean>;
   setTitle(title: string): Promise<void>;
   minimize(): void;

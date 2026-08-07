@@ -72,6 +72,10 @@ let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.
 // authoritative, otherwise open the desktop fixture on every normal launch.
 const TEMPORARY_DESKTOP_SCENE_NAME = '未命名画板.refcanvas';
 let windowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
+const DEFAULT_COLLABORATION_SHORTCUT = 'Ctrl+Alt+Y';
+const COLLABORATION_FALLBACK_SHORTCUT = 'Ctrl+Alt+Shift+Y';
+let collaborationShortcut = DEFAULT_COLLABORATION_SHORTCUT;
+let collaborationShortcutRegistered = false;
 let windowMoveSession;
 let windowMoveTimer;
 const WINDOW_MOVE_FRAME_MS = 1000 / 60;
@@ -938,6 +942,55 @@ const photoshopSyncQueue = createPhotoshopSyncQueue(async ({ color, returnFocus 
 
 const statePath = () => path.join(app.getPath('userData'), 'state.json');
 
+function isValidCollaborationShortcut(shortcut) {
+  if (typeof shortcut !== 'string' || shortcut.length > 80 || shortcut === COLLABORATION_FALLBACK_SHORTCUT) return false;
+  const parts = shortcut.split('+');
+  const key = parts.at(-1);
+  const modifiers = parts.slice(0, -1);
+  if (!key || !['Ctrl', 'Alt', 'Shift'].every((modifier) => modifiers.filter((value) => value === modifier).length <= 1)) return false;
+  if (!modifiers.includes('Ctrl') && !modifiers.includes('Alt')) return false;
+  if (modifiers.some((modifier) => !['Ctrl', 'Alt', 'Shift'].includes(modifier))) return false;
+  return /^[A-Z0-9]$|^F(?:[1-9]|1[0-9]|2[0-4])$|^(?:Tab|Space|Delete|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight)$/.test(key);
+}
+
+function toElectronAccelerator(shortcut) {
+  return shortcut.replace(/\bCtrl\b/g, 'Control');
+}
+
+function toggleCollaborationFromShortcut() {
+  if (!mainWindow || mainWindow.isDestroyed() || collaborationShortcutTransitioning) return;
+  if (!windowState.collaborationMode) {
+    mainWindow.webContents.send('window:toggle-collaboration-requested');
+    return;
+  }
+  // Release native collaboration input before React restores the previous
+  // window state. This path must not activate a window or inject input.
+  collaborationShortcutTransitioning = true;
+  mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
+  void requestNativeCollaborationInput(false, 500).then((released) => {
+    if (!released) {
+      nativeWindowMoveHelper?.kill();
+      nativeWindowMoveHelper = undefined;
+      nativeWindowMoveReady = false;
+      setTimeout(startNativeWindowMoveHelper, 50).unref?.();
+    }
+  }).finally(() => {
+    collaborationShortcutTransitioning = false;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:toggle-collaboration-requested');
+  });
+}
+
+function registerCollaborationShortcut(shortcut) {
+  if (!isValidCollaborationShortcut(shortcut)) return false;
+  if (shortcut === collaborationShortcut && collaborationShortcutRegistered) return true;
+  const registered = globalShortcut.register(toElectronAccelerator(shortcut), toggleCollaborationFromShortcut);
+  if (!registered) return false;
+  if (collaborationShortcutRegistered) globalShortcut.unregister(toElectronAccelerator(collaborationShortcut));
+  collaborationShortcut = shortcut;
+  collaborationShortcutRegistered = true;
+  return true;
+}
+
 function enqueueSceneSave(filePath, scene, revision) {
   dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
   const savedScene = { ...scene, name: path.basename(filePath, '.refcanvas'), savedAt: new Date().toISOString() };
@@ -1128,6 +1181,18 @@ function disableClickThrough() {
 function setMainWindowAlwaysOnTop(enabled: boolean) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.setAlwaysOnTop(enabled, enabled ? 'screen-saver' : 'normal');
+}
+
+function repairNormalAlwaysOnTopAfterBlur() {
+  if (!windowState.alwaysOnTop || windowState.collaborationMode || shouldUseFocuslessPhotoshopPicker(windowState)) return;
+  setImmediate(() => {
+    if (!mainWindow || mainWindow.isDestroyed() || !windowState.alwaysOnTop
+      || windowState.collaborationMode || shouldUseFocuslessPhotoshopPicker(windowState)) return;
+    // Windows may raise the taskbar above a topmost frameless window when it
+    // becomes active. Reassert the existing level without focusing or changing
+    // the native input bridge.
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+  });
 }
 
 function updateWindowMove() {
@@ -1953,7 +2018,11 @@ function createWindow() {
     if (choice === 0) event.preventDefault();
   });
   mainWindow.on('closed', () => { mainWindow = undefined; });
-  mainWindow.on('blur', finishWindowMove);
+  mainWindow.on('blur', () => {
+    finishWindowMove();
+    if (windowState.collaborationMode) scheduleNativeWindowLayerRepair();
+    else repairNormalAlwaysOnTopAfterBlur();
+  });
   mainWindow.on('show', scheduleNativeWindowLayerRepair);
   mainWindow.on('restore', scheduleNativeWindowLayerRepair);
   mainWindow.on('always-on-top-changed', scheduleNativeWindowLayerRepair);
@@ -1982,34 +2051,16 @@ else app.whenReady().then(async () => {
   }, 1500);
   recentIndexTimer.unref?.();
   globalShortcut.register('Control+Alt+Shift+T', disableClickThrough);
-  const toggleCollaborationFromShortcut = () => {
-    if (!mainWindow || mainWindow.isDestroyed() || collaborationShortcutTransitioning) return;
-    if (!windowState.collaborationMode) {
-      mainWindow.webContents.send('window:toggle-collaboration-requested');
-      return;
+  const persistedState = await readState();
+  const persistedCollaborationShortcut = persistedState?.shortcuts?.collaboration;
+  if (isValidCollaborationShortcut(persistedCollaborationShortcut)) collaborationShortcut = persistedCollaborationShortcut;
+  if (!registerCollaborationShortcut(collaborationShortcut)) {
+    collaborationShortcut = DEFAULT_COLLABORATION_SHORTCUT;
+    if (!registerCollaborationShortcut(collaborationShortcut)) {
+      logWarn('window.collaboration-shortcut-unavailable', { accelerator: toElectronAccelerator(collaborationShortcut) });
     }
-    // Fail open before React handles the normal state restoration. Even if the
-    // renderer is busy, the global hook and click-through state must release
-    // the desktop immediately.
-    collaborationShortcutTransitioning = true;
-    mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
-    void requestNativeCollaborationInput(false, 500).then((released) => {
-      if (!released) {
-        nativeWindowMoveHelper?.kill();
-        nativeWindowMoveHelper = undefined;
-        nativeWindowMoveReady = false;
-        setTimeout(startNativeWindowMoveHelper, 50).unref?.();
-      }
-    }).finally(() => {
-      collaborationShortcutTransitioning = false;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('window:toggle-collaboration-requested');
-      }
-    });
-  };
-  const collaborationShortcutRegistered = globalShortcut.register('Control+Alt+Y', toggleCollaborationFromShortcut);
-  globalShortcut.register('Control+Alt+Shift+Y', toggleCollaborationFromShortcut);
-  if (!collaborationShortcutRegistered) logWarn('window.collaboration-shortcut-unavailable', { accelerator: 'Control+Alt+Y' });
+  }
+  globalShortcut.register(toElectronAccelerator(COLLABORATION_FALLBACK_SHORTCUT), toggleCollaborationFromShortcut);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }).catch((error) => {
   logError('app.startup-failed', error);
@@ -2380,6 +2431,26 @@ handleIpc('window:set-mode', async (_event, patch) => {
   return windowState;
 });
 handleIpc('window:get-mode', () => windowState);
+handleIpc('window:get-collaboration-shortcut', () => ({ shortcut: collaborationShortcut }));
+handleIpc('window:set-collaboration-shortcut', async (_event, shortcut) => {
+  if (windowState.collaborationMode) return { ok: false, shortcut: collaborationShortcut, message: '请先退出协作模式，再更改协作快捷键' };
+  if (!isValidCollaborationShortcut(shortcut)) {
+    return { ok: false, shortcut: collaborationShortcut, message: '全局快捷键需要包含 Ctrl 或 Alt，且不能使用固定退出兜底键' };
+  }
+  const previousShortcut = collaborationShortcut;
+  if (!registerCollaborationShortcut(shortcut)) {
+    return { ok: false, shortcut: collaborationShortcut, message: '快捷键已被其他应用占用' };
+  }
+  try {
+    const state = await readState();
+    state.shortcuts = { ...(state.shortcuts ?? {}), collaboration: collaborationShortcut };
+    await writeState(state);
+  } catch (error) {
+    registerCollaborationShortcut(previousShortcut);
+    return { ok: false, shortcut: collaborationShortcut, message: `保存快捷键失败：${String(error)}` };
+  }
+  return { ok: true, shortcut: collaborationShortcut };
+});
 handleIpc('window:is-key-down', (_event, key) => key === 'Space' ? queryNativeKeyDown(0x20) : false);
 handleIpc('window:set-title', (_event, title) => {
   if (!mainWindow || mainWindow.isDestroyed() || typeof title !== 'string') return;

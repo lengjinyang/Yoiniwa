@@ -73,6 +73,7 @@ export class CanvasRuntime {
   private colorPickerHex?: HTMLElement;
   private colorPickerRgb?: HTMLElement;
   private colorPickerSampling = false;
+  private colorPickerHoverSuppressed = false;
   private colorPickerPoint?: { x: number; y: number };
   private colorPickerColor?: PickedColor;
 
@@ -97,14 +98,17 @@ export class CanvasRuntime {
     const armAltFromPointer = (event: PointerEvent) => {
       if (event.type === 'pointerenter') this.altPointerArmed = event.altKey;
       else if (event.altKey) this.altPointerArmed = true;
-      if (event.pointerType === 'pen' && event.buttons === 0 && !this.colorPickerSampling) {
+      if (event.pointerType === 'pen' && event.buttons === 0 && !this.colorPickerSampling && !this.colorPickerHoverSuppressed) {
         if (this.colorPickerHeld || event.altKey || this.altPointerArmed) {
           const bounds = this.container.getBoundingClientRect();
           this.showColorPickerHover({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
         } else this.showColorPickerHover();
       }
     };
-    const hideAltHover = () => { if (!this.colorPickerSampling) this.showColorPickerHover(); };
+    const hideAltHover = () => {
+      this.colorPickerHoverSuppressed = false;
+      if (!this.colorPickerSampling) this.showColorPickerHover();
+    };
     const updateAltFromKeyboard = (event: KeyboardEvent) => {
       if (event.key !== 'Alt' && event.code !== 'AltLeft' && event.code !== 'AltRight') return;
       this.altPointerArmed = event.type === 'keydown';
@@ -222,7 +226,12 @@ export class CanvasRuntime {
       sample: (point, final) => this.renderer.sampleColor(point, final),
       position: (point) => this.positionColorPickerPreview(point),
       preview: (color) => this.updateColorPickerPreview(color),
-      picked: (color) => this.options.onColorPicked?.(color),
+      picked: (color) => {
+        this.colorPickerHoverSuppressed = true;
+        this.hideColorPickerOverlay();
+        this.container.classList.remove('color-picker-sampling');
+        this.options.onColorPicked?.(color);
+      },
     });
     picker.start();
     new WindowMoveController({
@@ -322,6 +331,7 @@ export class CanvasRuntime {
   setGroupMenuOpen(open: boolean) { this.renderer.setGroupControlsMuted(open); }
   setColorPickerHeld(held: boolean) {
     this.colorPickerHeld = held;
+    if (!held) this.colorPickerHoverSuppressed = false;
     this.container.classList.toggle('color-picker-active', held);
     if (!held && !this.colorPickerSampling) this.showColorPickerHover();
   }
@@ -369,6 +379,7 @@ export class CanvasRuntime {
       button: event.button, buttons: event.buttons, pointerType: event.pointerType,
       ctrlKey: event.ctrlKey, altKey, shiftKey: event.shiftKey,
     });
+    if (enabled && event.button === 0) this.colorPickerHoverSuppressed = false;
     // The pointer-enter latch only bridges the focus transition. Consume it on
     // the first pen contact so a missed key-up cannot arm later normal taps.
     if (enabled && event.pointerType === 'pen' && (event.button === 0 || event.button === -1)) {

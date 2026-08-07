@@ -95,7 +95,9 @@ export class ColorPickerController {
       try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic input may not support capture. */ }
       this.lastPreviewSampleAt = this.now();
       this.options.position(target.point);
-      this.options.preview(this.options.sample(target.point, false));
+      // Defer the first GPU color readback until a move frame so pen-down
+      // remains responsive and does not stall the start of a drag gesture.
+      this.options.preview(undefined);
     };
     const move = (event: PointerEvent) => {
       if (this.state !== 'sampling' || event.pointerId !== this.pointerId) return;
@@ -206,6 +208,11 @@ export class ColorPickerController {
     const target = this.sampleTarget(clientPoint.x, clientPoint.y, true);
     const token = this.request;
     this.release(pointerId);
+    // The gesture has ended even when the final source-pixel read is async.
+    // Clear the reticle immediately instead of leaving a stale marker visible
+    // while Photoshop synchronization or the fallback read completes.
+    this.options.position();
+    this.options.preview(undefined);
     if (!target.item?.assetId) {
       this.state = 'canceled';
       this.options.position();
