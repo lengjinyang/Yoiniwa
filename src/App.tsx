@@ -339,7 +339,7 @@ export default function App() {
     const snapshot = { locked: windowMode.locked, alwaysOnTop: windowMode.alwaysOnTop };
     try {
       const next = await setMode({ locked: true, alwaysOnTop: true, collaborationMode: true }, true);
-      if (!next?.collaborationMode) throw new Error('未能确认任务栏后方的协作窗口层级');
+      if (!next?.collaborationMode) throw new Error('未能确认任务栏前方的无激活协作窗口层级');
       drawingModeSnapshotRef.current = snapshot;
       setDrawingCollaborationMode(true);
       setStatus('绘画协作模式已启用 · Space + 主按钮拖动可平移画布');

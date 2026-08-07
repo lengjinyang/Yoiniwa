@@ -13,6 +13,7 @@ public static class RefCanvasNativeWindowMove
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
     private const uint SWP_FRAMECHANGED = 0x0020;
+    private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     private const uint GW_HWNDNEXT = 2;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int GWL_EXSTYLE = -20;
@@ -169,14 +170,17 @@ public static class RefCanvasNativeWindowMove
         return false;
     }
 
-    public static bool PlaceBelowTaskbar(long rawHandle)
+    // Keep the collaboration surface above the shell without activating it.
+    // The foreground window (Photoshop) therefore keeps the tablet focus while
+    // Yoiniwa remains visible over the taskbar. This must be a one-shot native
+    // transition; repeatedly calling BrowserWindow.setAlwaysOnTop causes the
+    // shell/DWM z-order race that drops the first Photoshop stroke.
+    public static bool PlaceAboveTaskbar(long rawHandle)
     {
         var window = new IntPtr(rawHandle);
         if (window == IntPtr.Zero) return false;
-        var taskbar = TaskbarForWindow(window);
-        if (taskbar == IntPtr.Zero) return false;
-        if (IsBehindTaskbar(window, taskbar)) return true;
-        var placed = SetWindowPos(window, taskbar, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        var placed = SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         if (placed) DwmFlush();
         return placed;
     }
@@ -185,7 +189,7 @@ public static class RefCanvasNativeWindowMove
     {
         var window = new IntPtr(rawHandle);
         if (window == IntPtr.Zero || !SetNoActivate(rawHandle, enabled)) return false;
-        return !enabled || PlaceBelowTaskbar(rawHandle);
+        return !enabled || PlaceAboveTaskbar(rawHandle);
     }
 
 }
