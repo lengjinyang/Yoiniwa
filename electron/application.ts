@@ -95,7 +95,9 @@ const pendingNativeLayerRequests = new Map<string, {
 }>();
 let nativeInputRequestId = 0;
 let collaborationShortcutTransitioning = false;
+let taskbarPenWindows: BrowserWindow[] = [];
 const pendingNativeInputRequests = new Map<string, {
+  enabled: boolean;
   resolve(value: boolean): void;
   timer: NodeJS.Timeout;
 }>();
@@ -1174,7 +1176,8 @@ async function hydrateLegacyRecentAssetIndexes() {
 function disableClickThrough() {
   if (!mainWindow || !windowState.clickThrough) return;
   windowState.clickThrough = false;
-  mainWindow.setIgnoreMouseEvents(process.platform === 'win32' && windowState.collaborationMode, { forward: true });
+  const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
+  mainWindow.setIgnoreMouseEvents(focuslessPicker, { forward: true });
   mainWindow.webContents.send('window:click-through-disabled');
 }
 
@@ -1222,6 +1225,54 @@ function notifyNativeWindowMoveFinished() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:move-finished');
 }
 
+function destroyTaskbarPenWindows() {
+  const windows = taskbarPenWindows;
+  taskbarPenWindows = [];
+  windows.forEach((window) => { if (!window.isDestroyed()) window.destroy(); });
+}
+
+async function configureTaskbarPenWindows(enabled: boolean) {
+  destroyTaskbarPenWindows();
+  if (!enabled || process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return true;
+  const inputBounds = [mainWindow.getBounds()];
+  try {
+    const preload = path.join(electronRuntimeDir, 'taskbar-input-preload.cjs');
+    const html = `<!doctype html><meta charset="utf-8"><style>html,body,#surface{width:100%;height:100%;margin:0;background:transparent;overflow:hidden;touch-action:none;user-select:none}</style><body><div id="surface"></div><script>
+      const surface=document.getElementById('surface');let active;let mode;let lastX;let lastY;let pendingMove;let pendingEnd;
+      const payload=(kind,event)=>({kind,pointerId:event.pointerId,pointerType:event.pointerType,button:event.button,buttons:event.buttons,clientX:event.clientX,clientY:event.clientY,altKey:event.altKey,mode});
+      const send=(kind,event)=>window.taskbarPenInput.send(payload(kind,event));
+      const finishPending=()=>{if(!mode)return;if(pendingMove){window.taskbarPenInput.send({...pendingMove,mode});pendingMove=undefined}if(pendingEnd){window.taskbarPenInput.send({...pendingEnd,mode});pendingEnd=undefined;active=undefined;mode=undefined}};
+      const move=event=>{if(event.pointerId!==active)return;event.preventDefault();if(event.clientX===lastX&&event.clientY===lastY)return;lastX=event.clientX;lastY=event.clientY;const next=payload('move',event);if(mode)window.taskbarPenInput.send(next);else pendingMove=next};
+      surface.addEventListener('pointerdown',event=>{const primary=event.button===0||(event.button===-1&&(event.buttons&1)!==0);if(event.pointerType!=='pen'||event.isPrimary===false||!primary)return;active=event.pointerId;mode=undefined;pendingMove=undefined;pendingEnd=undefined;lastX=event.clientX;lastY=event.clientY;event.preventDefault();try{surface.setPointerCapture(active)}catch{}const start=payload('down',event);window.taskbarPenInput.start(start).then(nextMode=>{if(event.pointerId!==active)return;mode=nextMode;if(mode!=='block')window.taskbarPenInput.send({...start,mode});finishPending()})},{passive:false});
+      surface.addEventListener('pointermove',move,{passive:false});
+      surface.addEventListener('pointerrawupdate',move,{passive:false});
+      surface.addEventListener('pointerup',event=>{if(event.pointerId!==active)return;event.preventDefault();move(event);const end=payload('up',event);const released=active;try{surface.releasePointerCapture(released)}catch{}if(mode){if(mode!=='block')window.taskbarPenInput.send(end);active=undefined;mode=undefined}else pendingEnd=end},{passive:false});
+      surface.addEventListener('pointercancel',event=>{if(event.pointerId!==active)return;event.preventDefault();const end=payload('cancel',event);if(mode){if(mode!=='block')window.taskbarPenInput.send(end);active=undefined;mode=undefined}else pendingEnd=end},{passive:false});
+      surface.addEventListener('lostpointercapture',event=>{if(event.pointerId!==active)return;const end=payload('cancel',event);if(mode){if(mode!=='block')window.taskbarPenInput.send(end);active=undefined;mode=undefined}else pendingEnd=end});
+      addEventListener('contextmenu',event=>event.preventDefault());
+    <\/script></body>`;
+    taskbarPenWindows = inputBounds.map((bounds) => {
+      const window = new BrowserWindow({
+        parent: mainWindow, ...bounds, show: false, frame: false, transparent: true,
+        backgroundColor: '#00000000', focusable: false, skipTaskbar: true,
+        resizable: false, movable: false, minimizable: false, maximizable: false,
+        webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
+      });
+      window.setAlwaysOnTop(true, 'screen-saver');
+      window.setFocusable(false);
+      return window;
+    });
+    await Promise.all(taskbarPenWindows.map((window) => window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)));
+    taskbarPenWindows.forEach((window) => { if (!window.isDestroyed()) window.showInactive(); });
+    logInfo('window.collaboration-pen-layer-ready', { windows: taskbarPenWindows.length });
+    return true;
+  } catch (error) {
+    destroyTaskbarPenWindows();
+    logWarn('window.taskbar-pen-layer-failed', { error: String(error) });
+    return false;
+  }
+}
+
 function handleNativeWindowMoveOutput(chunk) {
   nativeWindowMoveOutput += chunk.toString();
   const lines = nativeWindowMoveOutput.split(/\r?\n/);
@@ -1254,22 +1305,60 @@ function handleNativeWindowMoveOutput(chunk) {
       if (pending) {
         clearTimeout(pending.timer);
         pendingNativeInputRequests.delete(requestId);
+        logInfo('window.native-input-transition', {
+          enabled: pending.enabled,
+          status: status === 'READY' ? 'ready' : 'failed',
+        });
         pending.resolve(status === 'READY');
       }
       continue;
     }
+    if (line.startsWith('INPUT_PROBE|')) {
+      const [, rawKind, rawX, rawY, rawInside, rawPointerType] = line.split('|');
+      logInfo('window.native-input-probe', {
+        kind: rawKind?.toLowerCase(),
+        x: Number(rawX), y: Number(rawY), inside: rawInside === '1',
+        pointerType: rawPointerType === 'pen' ? 'pen' : 'mouse',
+      });
+      continue;
+    }
     if (line.startsWith('POINTER|')) {
       const [, rawKind, rawX, rawY, rawAlt, rawSpace, rawPointerType, rawDelta] = line.split('|');
-      if (!mainWindow || mainWindow.isDestroyed() || !windowState.collaborationMode) continue;
+      // A locked, always-on-top reference window can extend behind the taskbar.
+      // Keep its Alt/pen gesture on the native bridge so the taskbar never
+      // receives the activating click.
+      const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
+      if (!mainWindow || mainWindow.isDestroyed() || !focuslessPicker) continue;
       const screenPoint = { x: Number(rawX), y: Number(rawY) };
       if (!Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
       const point = screen.screenToDipPoint(screenPoint);
       const bounds = mainWindow.getBounds();
+      const display = screen.getDisplayNearestPoint(point);
+      const workArea = display.workArea;
+      const overTaskbar = point.x < workArea.x || point.x >= workArea.x + workArea.width
+        || point.y < workArea.y || point.y >= workArea.y + workArea.height;
+      const clientX = point.x - bounds.x;
+      const clientY = point.y - bounds.y;
+      const pointerType = rawPointerType === 'pen' ? 'pen' : 'mouse';
+      const visibleBounds = {
+        left: display.bounds.x - bounds.x, top: display.bounds.y - bounds.y,
+        right: display.bounds.x + display.bounds.width - bounds.x,
+        bottom: display.bounds.y + display.bounds.height - bounds.y,
+      };
+      // The dedicated no-activate taskbar pen window owns Windows Ink contacts
+      // in this strip. Ignore their promoted legacy mouse copy to avoid sending
+      // the renderer two pointer streams for the same physical pen contact.
+      if (pointerType === 'pen' && taskbarPenWindows.length > 0 && rawKind !== 'HOVER') continue;
+      if (rawKind === 'DOWN') {
+        if (overTaskbar) logInfo('window.native-taskbar-pick-start', {
+          pointerType,
+        });
+      }
       mainWindow.webContents.send('window:native-pointer', {
-        kind: rawKind?.toLowerCase(), clientX: point.x - bounds.x, clientY: point.y - bounds.y,
+        kind: rawKind?.toLowerCase(), clientX, clientY,
         altKey: rawAlt === '1', spaceKey: rawSpace === '1',
-        pointerType: rawPointerType === 'pen' ? 'pen' : 'mouse',
-        delta: Number(rawDelta) || 0,
+        pointerType,
+        delta: Number(rawDelta) || 0, visibleBounds,
       });
       continue;
     }
@@ -1414,16 +1503,20 @@ function requestNativeCollaborationInput(enabled: boolean, timeoutMs = 2000) {
     return new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         pendingNativeInputRequests.delete(requestId);
+        logWarn('window.native-input-transition-timeout', { enabled });
         resolve(false);
       }, timeoutMs);
       timer.unref?.();
-      pendingNativeInputRequests.set(requestId, { resolve, timer });
+      pendingNativeInputRequests.set(requestId, { enabled, resolve, timer });
       helper.stdin.write(`INPUT|${requestId}|${handle}|${enabled ? '1' : '0'}\n`, (error) => {
         if (!error) return;
         const pending = pendingNativeInputRequests.get(requestId);
         if (!pending) return;
         clearTimeout(pending.timer);
         pendingNativeInputRequests.delete(requestId);
+        logWarn('window.native-input-transition-write-failed', {
+          enabled, code: error.code, message: error.message,
+        });
         pending.resolve(false);
       });
     });
@@ -1447,10 +1540,8 @@ function scheduleNativeWindowLayerRepair() {
         logWarn('window.collaboration-layer-repair-failed');
         return;
       }
-      if (windowState.collaborationMode) {
-        const inputReady = await transitionNativeCollaborationInput(true);
-        if (!inputReady) logWarn('window.collaboration-input-repair-failed');
-      }
+      const inputReady = await transitionNativeCollaborationInput(true);
+      if (!inputReady) logWarn('window.collaboration-input-repair-failed');
     });
   }, 80);
   nativeLayerRepairTimer.unref?.();
@@ -2020,7 +2111,7 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = undefined; });
   mainWindow.on('blur', () => {
     finishWindowMove();
-    if (windowState.collaborationMode) scheduleNativeWindowLayerRepair();
+    if (shouldUseFocuslessPhotoshopPicker(windowState)) scheduleNativeWindowLayerRepair();
     else repairNormalAlwaysOnTopAfterBlur();
   });
   mainWindow.on('show', scheduleNativeWindowLayerRepair);
@@ -2079,6 +2170,7 @@ app.on('will-quit', () => {
   logInfo('app.will-quit');
   void flushLogs();
   globalShortcut.unregisterAll();
+  destroyTaskbarPenWindows();
   nativeWindowMoveHelper?.kill();
   photoshopColorBridge.stop();
   if (sessionCachePath) void fs.rm(sessionCachePath, { recursive: true, force: true });
@@ -2378,8 +2470,13 @@ handleIpc('window:set-mode', async (_event, patch) => {
   const collaborationModeChanged = wasCollaborationMode !== windowState.collaborationMode;
   const leavingFocuslessPicker = wasFocusless && !focuslessPicker;
   const needsNativeLayerTransition = focuslessPicker !== wasFocusless || collaborationModeChanged;
-  const useNativeCollaborationInput = process.platform === 'win32' && windowState.collaborationMode;
-  const usedNativeCollaborationInput = process.platform === 'win32' && wasCollaborationMode;
+  const useNativeCollaborationInput = process.platform === 'win32' && focuslessPicker;
+  const usedNativeCollaborationInput = process.platform === 'win32' && wasFocusless;
+  logInfo('window.mode-transition-start', {
+    collaborationMode: windowState.collaborationMode,
+    focuslessPicker,
+    nativeInput: useNativeCollaborationInput,
+  });
   if (previousState.alwaysOnTop !== windowState.alwaysOnTop) setMainWindowAlwaysOnTop(windowState.alwaysOnTop);
   mainWindow.setOpacity(Math.max(0.25, Math.min(1, windowState.opacity)));
   mainWindow.setMovable(!windowState.locked);
@@ -2400,7 +2497,7 @@ handleIpc('window:set-mode', async (_event, patch) => {
       return windowState;
     }
   }
-  if (collaborationModeChanged) {
+  if (focuslessPicker !== wasFocusless || collaborationModeChanged) {
     const inputReady = await transitionNativeCollaborationInput(useNativeCollaborationInput);
     if (useNativeCollaborationInput && !inputReady) {
       logWarn('window.collaboration-input-unavailable');
@@ -2415,7 +2512,31 @@ handleIpc('window:set-mode', async (_event, patch) => {
       return windowState;
     }
   }
+  const useTaskbarPenWindow = focuslessPicker && windowState.collaborationMode;
+  const usedTaskbarPenWindow = wasFocusless && wasCollaborationMode;
+  const taskbarPenReady = useTaskbarPenWindow !== usedTaskbarPenWindow
+    || (useTaskbarPenWindow && taskbarPenWindows.length === 0)
+    ? await configureTaskbarPenWindows(useTaskbarPenWindow)
+    : true;
+  if (focuslessPicker && windowState.collaborationMode && !taskbarPenReady) {
+    logWarn('window.collaboration-taskbar-pen-unavailable');
+    windowState = previousState;
+    setMainWindowAlwaysOnTop(previousState.alwaysOnTop);
+    mainWindow.setOpacity(Math.max(0.25, Math.min(1, previousState.opacity)));
+    mainWindow.setMovable(!previousState.locked);
+    mainWindow.setResizable(!previousState.collaborationMode);
+    mainWindow.setIgnoreMouseEvents(previousState.clickThrough || usedNativeCollaborationInput, { forward: true });
+    void configureTaskbarPenWindows(wasFocusless && wasCollaborationMode);
+    void transitionNativeCollaborationInput(usedNativeCollaborationInput);
+    void transitionNativeWindowLayer(wasFocusless, wasCollaborationMode);
+    return windowState;
+  }
   mainWindow.setIgnoreMouseEvents(windowState.clickThrough || useNativeCollaborationInput, { forward: true });
+  logInfo('window.mode-transition-ready', {
+    collaborationMode: windowState.collaborationMode,
+    focuslessPicker,
+    nativeInput: useNativeCollaborationInput,
+  });
   if (focuslessPicker && (enteringCollaborationMode || !wasFocusless)) {
     // Warm the COM/helper connections without changing the user's current
     // foreground window. Photoshop is only used as the existing foreground
@@ -2478,6 +2599,44 @@ ipcMain.on('window:move-update', () => {
 });
 ipcMain.on('window:move-end', finishWindowMove);
 ipcMain.on('window:close', () => mainWindow.close());
+ipcMain.handle('window:taskbar-pen-start', async (event, input) => {
+  const source = BrowserWindow.fromWebContents(event.sender);
+  if (!source || !taskbarPenWindows.includes(source) || !mainWindow || mainWindow.isDestroyed()
+    || !windowState.collaborationMode || !shouldUseFocuslessPhotoshopPicker(windowState)) return 'block';
+  if (Boolean(input?.altKey)) return 'pick';
+  return await queryNativeKeyDown(0x20) ? 'pan' : 'block';
+});
+ipcMain.on('window:taskbar-pen-pointer', (event, input) => {
+  const source = BrowserWindow.fromWebContents(event.sender);
+  if (!source || !taskbarPenWindows.includes(source) || !mainWindow || mainWindow.isDestroyed()
+    || !windowState.collaborationMode || !shouldUseFocuslessPhotoshopPicker(windowState)) return;
+  const kind = typeof input?.kind === 'string' ? input.kind : '';
+  if (!['down', 'move', 'up', 'cancel'].includes(kind)) return;
+  const clientX = Number(input.clientX); const clientY = Number(input.clientY);
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+  const sourceBounds = source.getBounds(); const mainBounds = mainWindow.getBounds();
+  const screenPoint = { x: sourceBounds.x + clientX, y: sourceBounds.y + clientY };
+  const point = { x: screenPoint.x - mainBounds.x, y: screenPoint.y - mainBounds.y };
+  const mode = input?.mode === 'pick' || input?.mode === 'pan' ? input.mode : 'block';
+  if (mode === 'block') return;
+  if (kind === 'down') {
+    const display = screen.getDisplayNearestPoint(screenPoint); const workArea = display.workArea;
+    const overTaskbar = screenPoint.x < workArea.x || screenPoint.x >= workArea.x + workArea.width
+      || screenPoint.y < workArea.y || screenPoint.y >= workArea.y + workArea.height;
+    logInfo(overTaskbar ? 'window.native-taskbar-pen-pick-start' : 'window.native-canvas-pen-pick-start');
+  }
+  const display = screen.getDisplayNearestPoint(screenPoint);
+  const visibleBounds = {
+    left: display.bounds.x - mainBounds.x, top: display.bounds.y - mainBounds.y,
+    right: display.bounds.x + display.bounds.width - mainBounds.x,
+    bottom: display.bounds.y + display.bounds.height - mainBounds.y,
+  };
+  mainWindow.webContents.send('window:native-pointer', {
+    kind, clientX: point.x, clientY: point.y,
+    altKey: mode === 'pick', spaceKey: mode === 'pan',
+    pointerType: 'pen', delta: 0, visibleBounds,
+  });
+});
 ipcMain.on('window:dirty', (_event, value) => {
   if (typeof value === 'boolean') {
     dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, value);

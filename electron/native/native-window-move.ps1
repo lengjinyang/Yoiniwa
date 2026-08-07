@@ -34,6 +34,7 @@ public static class RefCanvasNativeWindowMove
     private const int DWMNCRP_DISABLED = 1;
     private const int DWMWCP_DONOTROUND = 1;
     private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
     private const int INPUT_NONE = 0;
     private const int INPUT_PICK = 1;
@@ -76,6 +77,7 @@ public static class RefCanvasNativeWindowMove
     private static Thread hookThread;
     private static MouseHookProc hookProcedure;
     private static IntPtr hookHandle = IntPtr.Zero;
+    private static int hookPhysicalCoordinatesReady;
     private static long inputWindowHandle;
     private static int inputEnabled;
     private static int inputMode;
@@ -84,6 +86,9 @@ public static class RefCanvasNativeWindowMove
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out Point point);
@@ -141,6 +146,10 @@ public static class RefCanvasNativeWindowMove
 
     public static bool Begin(long rawHandle)
     {
+        // Cursor and window bounds must use the same physical coordinate space.
+        // The PowerShell host is DPI-virtualized on scaled displays.
+        if (SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == IntPtr.Zero)
+            return false;
         if ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0)
             return false;
 
@@ -331,6 +340,9 @@ public static class RefCanvasNativeWindowMove
         var alt = IsKeyDown(VK_MENU);
         var space = IsKeyDown(VK_SPACE);
         var mode = Volatile.Read(ref inputMode);
+        if (message == WM_LBUTTONDOWN && alt)
+            Emit("INPUT_PROBE|DOWN|" + data.Position.X + "|" + data.Position.Y
+                + "|" + (inside ? "1" : "0") + "|" + PointerType(data));
         var expired = mode != INPUT_NONE
             && unchecked(Environment.TickCount - Volatile.Read(ref inputStartedAt)) > 15000;
         // Windows Ink often reports VK_LBUTTON as released while a pen tip is
@@ -408,8 +420,16 @@ public static class RefCanvasNativeWindowMove
 
     private static void InputHookLoop()
     {
+        // MSLLHOOKSTRUCT coordinates are per-monitor-aware physical pixels.
+        // Without matching this thread's DPI context, GetWindowRect returns
+        // virtualized bounds and the taskbar overlap is mistaken for outside.
+        var physicalCoordinates = SetThreadDpiAwarenessContext(
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != IntPtr.Zero;
+        Volatile.Write(ref hookPhysicalCoordinatesReady, physicalCoordinates ? 1 : 0);
         hookProcedure = InputHook;
-        hookHandle = SetWindowsHookEx(WH_MOUSE_LL, hookProcedure, GetModuleHandle(null), 0);
+        hookHandle = physicalCoordinates
+            ? SetWindowsHookEx(WH_MOUSE_LL, hookProcedure, GetModuleHandle(null), 0)
+            : IntPtr.Zero;
         HookStarted.Set();
         if (hookHandle == IntPtr.Zero) return;
         Message message;
@@ -437,7 +457,8 @@ public static class RefCanvasNativeWindowMove
                     hookThread.Start();
                 }
             }
-            if (!HookStarted.Wait(1500) || hookHandle == IntPtr.Zero) return false;
+            if (!HookStarted.Wait(1500) || hookHandle == IntPtr.Zero
+                || Volatile.Read(ref hookPhysicalCoordinatesReady) == 0) return false;
         }
         var alreadyConfigured = enabled && Volatile.Read(ref inputEnabled) != 0
             && Interlocked.Read(ref inputWindowHandle) == rawHandle;

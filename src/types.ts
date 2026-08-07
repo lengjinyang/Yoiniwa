@@ -224,6 +224,7 @@ export interface NativePointerInput {
   spaceKey: boolean;
   pointerType: 'mouse' | 'pen';
   delta: number;
+  visibleBounds?: { left: number; top: number; right: number; bottom: number };
 }
 
 interface RefCanvasAPI {

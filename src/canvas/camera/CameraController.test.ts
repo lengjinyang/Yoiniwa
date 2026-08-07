@@ -10,6 +10,7 @@ describe('CameraController', () => {
     let wheel: ((event: WheelEvent) => void) | undefined;
     const input = {
       onPointerDown: () => () => undefined, onPointerMove: () => () => undefined, onPointerUp: () => () => undefined,
+      onPointerCancel: () => () => undefined,
       onWheel: (handler: (event: WheelEvent) => void) => { wheel = handler; return () => { wheel = undefined; }; },
     } as unknown as InputRouter;
     const element = {
