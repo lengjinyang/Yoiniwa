@@ -1423,7 +1423,9 @@ function createWindow() {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       const expectedFocus = ['skipped', 'skipped', 'skipped', 'skipped'];
-      const focuslessWindowReady = mainWindow.isAlwaysOnTop()
+      // Collaboration topmost state is owned by the native no-activate layer,
+      // so Electron's isAlwaysOnTop() intentionally remains false here.
+      const focuslessWindowReady = windowState.alwaysOnTop
         && (process.platform !== 'win32' || nonActivatingWindowReady);
       const valid = results.outcomes.every((result, index) => result.syncStatus === 'synced'
         && result.focusStatus === expectedFocus[index] && result.copied === false)
@@ -2217,15 +2219,22 @@ handleIpc('window:set-mode', async (_event, patch) => {
   const enteringCollaborationMode = !wasCollaborationMode && windowState.collaborationMode;
   const leavingFocuslessPicker = wasFocusless && !focuslessPicker;
   const needsNativeLayerTransition = focuslessPicker !== wasFocusless || enteringCollaborationMode;
-  if (previousState.alwaysOnTop !== windowState.alwaysOnTop) mainWindow.setAlwaysOnTop(windowState.alwaysOnTop);
+  // In collaboration mode the native helper owns the single TOPMOST
+  // transition. Calling Electron's setAlwaysOnTop here would perform a second
+  // shell/DWM z-order change and can consume the first Photoshop pen stroke.
+  // Outside collaboration mode, preserve the normal user-controlled behavior.
+  if (previousState.alwaysOnTop !== windowState.alwaysOnTop
+    && !(focuslessPicker && windowState.collaborationMode)) {
+    mainWindow.setAlwaysOnTop(windowState.alwaysOnTop);
+  }
   mainWindow.setOpacity(Math.max(0.25, Math.min(1, windowState.opacity)));
   mainWindow.setMovable(!windowState.locked);
+  mainWindow.setResizable(!windowState.collaborationMode);
   mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
-  // Keep Electron focusable so it remains visible in the Windows taskbar and
-  // its buttons always receive pointer events. The native helper adds only
-  // WS_EX_NOACTIVATE during reference picking, which prevents mouse/pen input
-  // from stealing Photoshop's foreground ownership.
-  mainWindow.setFocusable(true);
+  // Do not let Electron rewrite WS_EX_NOACTIVATE after the native
+  // collaboration layer has installed it. Outside that mode the normal
+  // focusable/taskbar behavior is retained.
+  if (!focuslessPicker) mainWindow.setFocusable(true);
   mainWindow.setSkipTaskbar(false);
   if (needsNativeLayerTransition) {
     const layerReady = await transitionNativeWindowLayer(focuslessPicker);
@@ -2235,14 +2244,18 @@ handleIpc('window:set-mode', async (_event, patch) => {
       mainWindow.setAlwaysOnTop(previousState.alwaysOnTop);
       mainWindow.setOpacity(Math.max(0.25, Math.min(1, previousState.opacity)));
       mainWindow.setMovable(!previousState.locked);
+      mainWindow.setResizable(!previousState.collaborationMode);
       mainWindow.setIgnoreMouseEvents(previousState.clickThrough, { forward: true });
       void transitionNativeWindowLayer(wasFocusless);
       return windowState;
     }
   }
   if (focuslessPicker && (enteringCollaborationMode || !wasFocusless)) {
+    // Warm the COM/helper connections without changing the user's current
+    // foreground window. Photoshop is only used as the existing foreground
+    // input host; entering collaboration mode must not switch to it.
     void photoshopColorBridge.warm().then(() => photoshopColorBridge.captureFocus(300))
-      .then(() => photoshopColorBridge.activate()).catch(() => undefined);
+      .catch(() => undefined);
   }
   if (leavingFocuslessPicker && !mainWindow.isDestroyed()) {
     setImmediate(() => {
