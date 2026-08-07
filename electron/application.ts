@@ -89,6 +89,12 @@ const pendingNativeLayerRequests = new Map<string, {
   resolve(value: boolean): void;
   timer: NodeJS.Timeout;
 }>();
+let nativeInputRequestId = 0;
+let collaborationShortcutTransitioning = false;
+const pendingNativeInputRequests = new Map<string, {
+  resolve(value: boolean): void;
+  timer: NodeJS.Timeout;
+}>();
 const photoshopColorBridge = new PhotoshopColorBridge();
 let imageWorker;
 let imageWorkerPaused = false;
@@ -1115,8 +1121,13 @@ async function hydrateLegacyRecentAssetIndexes() {
 function disableClickThrough() {
   if (!mainWindow || !windowState.clickThrough) return;
   windowState.clickThrough = false;
-  mainWindow.setIgnoreMouseEvents(false);
+  mainWindow.setIgnoreMouseEvents(process.platform === 'win32' && windowState.collaborationMode, { forward: true });
   mainWindow.webContents.send('window:click-through-disabled');
+}
+
+function setMainWindowAlwaysOnTop(enabled: boolean) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setAlwaysOnTop(enabled, enabled ? 'screen-saver' : 'normal');
 }
 
 function updateWindowMove() {
@@ -1172,6 +1183,31 @@ function handleNativeWindowMoveOutput(chunk) {
       }
       continue;
     }
+    if (line.startsWith('INPUT_ACK|')) {
+      const [, requestId, status] = line.split('|');
+      const pending = requestId ? pendingNativeInputRequests.get(requestId) : undefined;
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingNativeInputRequests.delete(requestId);
+        pending.resolve(status === 'READY');
+      }
+      continue;
+    }
+    if (line.startsWith('POINTER|')) {
+      const [, rawKind, rawX, rawY, rawAlt, rawSpace, rawPointerType, rawDelta] = line.split('|');
+      if (!mainWindow || mainWindow.isDestroyed() || !windowState.collaborationMode) continue;
+      const screenPoint = { x: Number(rawX), y: Number(rawY) };
+      if (!Number.isFinite(screenPoint.x) || !Number.isFinite(screenPoint.y)) continue;
+      const point = screen.screenToDipPoint(screenPoint);
+      const bounds = mainWindow.getBounds();
+      mainWindow.webContents.send('window:native-pointer', {
+        kind: rawKind?.toLowerCase(), clientX: point.x - bounds.x, clientY: point.y - bounds.y,
+        altKey: rawAlt === '1', spaceKey: rawSpace === '1',
+        pointerType: rawPointerType === 'pen' ? 'pen' : 'mouse',
+        delta: Number(rawDelta) || 0,
+      });
+      continue;
+    }
     if (line === 'READY') {
       logInfo('window.native-helper-output', { line });
     }
@@ -1219,6 +1255,11 @@ function startNativeWindowMoveHelper() {
       pending.resolve(false);
     });
     pendingNativeLayerRequests.clear();
+    pendingNativeInputRequests.forEach((pending) => {
+      clearTimeout(pending.timer);
+      pending.resolve(false);
+    });
+    pendingNativeInputRequests.clear();
   });
   nativeWindowMoveHelper.on('error', () => {
     nativeWindowMoveHelper = undefined;
@@ -1259,7 +1300,7 @@ function waitForNativeWindowMoveHelper(timeoutMs = 1500) {
   });
 }
 
-function requestNativeWindowLayer(enabled: boolean, timeoutMs = 1500) {
+function requestNativeWindowLayer(enabled: boolean, aboveTaskbar = false, timeoutMs = 1500) {
   if (process.platform !== 'win32') return Promise.resolve(true);
   return waitForNativeWindowMoveHelper(timeoutMs).then((ready) => {
     if (!ready) {
@@ -1278,7 +1319,7 @@ function requestNativeWindowLayer(enabled: boolean, timeoutMs = 1500) {
       }, timeoutMs);
       timer.unref?.();
       pendingNativeLayerRequests.set(requestId, { enabled, resolve, timer });
-      helper.stdin.write(`LAYER|${requestId}|${handle}|${enabled ? '1' : '0'}\n`, (error) => {
+      helper.stdin.write(`LAYER|${requestId}|${handle}|${enabled ? '1' : '0'}|${aboveTaskbar ? '1' : '0'}\n`, (error) => {
         if (!error) return;
         const pending = pendingNativeLayerRequests.get(requestId);
         if (!pending) return;
@@ -1291,8 +1332,41 @@ function requestNativeWindowLayer(enabled: boolean, timeoutMs = 1500) {
   });
 }
 
-function transitionNativeWindowLayer(enabled: boolean) {
-  const transition = nativeLayerTransition.then(() => requestNativeWindowLayer(enabled));
+function transitionNativeWindowLayer(enabled: boolean, aboveTaskbar = false) {
+  const transition = nativeLayerTransition.then(() => requestNativeWindowLayer(enabled, aboveTaskbar));
+  nativeLayerTransition = transition.then(() => undefined, () => undefined);
+  return transition;
+}
+
+function requestNativeCollaborationInput(enabled: boolean, timeoutMs = 2000) {
+  if (process.platform !== 'win32') return Promise.resolve(true);
+  return waitForNativeWindowMoveHelper(timeoutMs).then((ready) => {
+    if (!ready) return !enabled;
+    const helper = nativeWindowMoveHelper;
+    const handle = nativeWindowHandleValue();
+    if (!helper?.stdin.writable || handle === undefined) return !enabled;
+    const requestId = String(++nativeInputRequestId);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingNativeInputRequests.delete(requestId);
+        resolve(false);
+      }, timeoutMs);
+      timer.unref?.();
+      pendingNativeInputRequests.set(requestId, { resolve, timer });
+      helper.stdin.write(`INPUT|${requestId}|${handle}|${enabled ? '1' : '0'}\n`, (error) => {
+        if (!error) return;
+        const pending = pendingNativeInputRequests.get(requestId);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        pendingNativeInputRequests.delete(requestId);
+        pending.resolve(false);
+      });
+    });
+  });
+}
+
+function transitionNativeCollaborationInput(enabled: boolean) {
+  const transition = nativeLayerTransition.then(() => requestNativeCollaborationInput(enabled));
   nativeLayerTransition = transition.then(() => undefined, () => undefined);
   return transition;
 }
@@ -1303,8 +1377,15 @@ function scheduleNativeWindowLayerRepair() {
   nativeLayerRepairTimer = setTimeout(() => {
     nativeLayerRepairTimer = undefined;
     if (!mainWindow || mainWindow.isDestroyed() || !shouldUseFocuslessPhotoshopPicker(windowState)) return;
-    void transitionNativeWindowLayer(true).then((ready) => {
-      if (!ready) logWarn('window.collaboration-layer-repair-failed');
+    void transitionNativeWindowLayer(true, windowState.collaborationMode).then(async (ready) => {
+      if (!ready) {
+        logWarn('window.collaboration-layer-repair-failed');
+        return;
+      }
+      if (windowState.collaborationMode) {
+        const inputReady = await transitionNativeCollaborationInput(true);
+        if (!inputReady) logWarn('window.collaboration-input-repair-failed');
+      }
     });
   }, 80);
   nativeLayerRepairTimer.unref?.();
@@ -1423,9 +1504,7 @@ function createWindow() {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       const expectedFocus = ['skipped', 'skipped', 'skipped', 'skipped'];
-      // Collaboration topmost state is owned by the native no-activate layer,
-      // so Electron's isAlwaysOnTop() intentionally remains false here.
-      const focuslessWindowReady = windowState.alwaysOnTop
+      const focuslessWindowReady = mainWindow.isAlwaysOnTop()
         && (process.platform !== 'win32' || nonActivatingWindowReady);
       const valid = results.outcomes.every((result, index) => result.syncStatus === 'synced'
         && result.focusStatus === expectedFocus[index] && result.copied === false)
@@ -1903,6 +1982,34 @@ else app.whenReady().then(async () => {
   }, 1500);
   recentIndexTimer.unref?.();
   globalShortcut.register('Control+Alt+Shift+T', disableClickThrough);
+  const toggleCollaborationFromShortcut = () => {
+    if (!mainWindow || mainWindow.isDestroyed() || collaborationShortcutTransitioning) return;
+    if (!windowState.collaborationMode) {
+      mainWindow.webContents.send('window:toggle-collaboration-requested');
+      return;
+    }
+    // Fail open before React handles the normal state restoration. Even if the
+    // renderer is busy, the global hook and click-through state must release
+    // the desktop immediately.
+    collaborationShortcutTransitioning = true;
+    mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
+    void requestNativeCollaborationInput(false, 500).then((released) => {
+      if (!released) {
+        nativeWindowMoveHelper?.kill();
+        nativeWindowMoveHelper = undefined;
+        nativeWindowMoveReady = false;
+        setTimeout(startNativeWindowMoveHelper, 50).unref?.();
+      }
+    }).finally(() => {
+      collaborationShortcutTransitioning = false;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('window:toggle-collaboration-requested');
+      }
+    });
+  };
+  const collaborationShortcutRegistered = globalShortcut.register('Control+Alt+Y', toggleCollaborationFromShortcut);
+  globalShortcut.register('Control+Alt+Shift+Y', toggleCollaborationFromShortcut);
+  if (!collaborationShortcutRegistered) logWarn('window.collaboration-shortcut-unavailable', { accelerator: 'Control+Alt+Y' });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 }).catch((error) => {
   logError('app.startup-failed', error);
@@ -2217,39 +2324,47 @@ handleIpc('window:set-mode', async (_event, patch) => {
   windowState = { ...windowState, ...patch };
   const focuslessPicker = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
   const enteringCollaborationMode = !wasCollaborationMode && windowState.collaborationMode;
+  const collaborationModeChanged = wasCollaborationMode !== windowState.collaborationMode;
   const leavingFocuslessPicker = wasFocusless && !focuslessPicker;
-  const needsNativeLayerTransition = focuslessPicker !== wasFocusless || enteringCollaborationMode;
-  // In collaboration mode the native helper owns the single TOPMOST
-  // transition. Calling Electron's setAlwaysOnTop here would perform a second
-  // shell/DWM z-order change and can consume the first Photoshop pen stroke.
-  // Outside collaboration mode, preserve the normal user-controlled behavior.
-  if (previousState.alwaysOnTop !== windowState.alwaysOnTop
-    && !(focuslessPicker && windowState.collaborationMode)) {
-    mainWindow.setAlwaysOnTop(windowState.alwaysOnTop);
-  }
+  const needsNativeLayerTransition = focuslessPicker !== wasFocusless || collaborationModeChanged;
+  const useNativeCollaborationInput = process.platform === 'win32' && windowState.collaborationMode;
+  const usedNativeCollaborationInput = process.platform === 'win32' && wasCollaborationMode;
+  if (previousState.alwaysOnTop !== windowState.alwaysOnTop) setMainWindowAlwaysOnTop(windowState.alwaysOnTop);
   mainWindow.setOpacity(Math.max(0.25, Math.min(1, windowState.opacity)));
   mainWindow.setMovable(!windowState.locked);
   mainWindow.setResizable(!windowState.collaborationMode);
-  mainWindow.setIgnoreMouseEvents(windowState.clickThrough, { forward: true });
-  // Do not let Electron rewrite WS_EX_NOACTIVATE after the native
-  // collaboration layer has installed it. Outside that mode the normal
-  // focusable/taskbar behavior is retained.
   if (!focuslessPicker) mainWindow.setFocusable(true);
   mainWindow.setSkipTaskbar(false);
   if (needsNativeLayerTransition) {
-    const layerReady = await transitionNativeWindowLayer(focuslessPicker);
+    const layerReady = await transitionNativeWindowLayer(focuslessPicker, windowState.collaborationMode);
     if (focuslessPicker && !layerReady) {
       logWarn('window.collaboration-layer-unavailable');
       windowState = previousState;
-      mainWindow.setAlwaysOnTop(previousState.alwaysOnTop);
+      setMainWindowAlwaysOnTop(previousState.alwaysOnTop);
       mainWindow.setOpacity(Math.max(0.25, Math.min(1, previousState.opacity)));
       mainWindow.setMovable(!previousState.locked);
       mainWindow.setResizable(!previousState.collaborationMode);
-      mainWindow.setIgnoreMouseEvents(previousState.clickThrough, { forward: true });
-      void transitionNativeWindowLayer(wasFocusless);
+      mainWindow.setIgnoreMouseEvents(previousState.clickThrough || usedNativeCollaborationInput, { forward: true });
+      void transitionNativeWindowLayer(wasFocusless, wasCollaborationMode);
       return windowState;
     }
   }
+  if (collaborationModeChanged) {
+    const inputReady = await transitionNativeCollaborationInput(useNativeCollaborationInput);
+    if (useNativeCollaborationInput && !inputReady) {
+      logWarn('window.collaboration-input-unavailable');
+      windowState = previousState;
+      setMainWindowAlwaysOnTop(previousState.alwaysOnTop);
+      mainWindow.setOpacity(Math.max(0.25, Math.min(1, previousState.opacity)));
+      mainWindow.setMovable(!previousState.locked);
+      mainWindow.setResizable(!previousState.collaborationMode);
+      mainWindow.setIgnoreMouseEvents(previousState.clickThrough || usedNativeCollaborationInput, { forward: true });
+      void transitionNativeCollaborationInput(usedNativeCollaborationInput);
+      void transitionNativeWindowLayer(wasFocusless, wasCollaborationMode);
+      return windowState;
+    }
+  }
+  mainWindow.setIgnoreMouseEvents(windowState.clickThrough || useNativeCollaborationInput, { forward: true });
   if (focuslessPicker && (enteringCollaborationMode || !wasFocusless)) {
     // Warm the COM/helper connections without changing the user's current
     // foreground window. Photoshop is only used as the existing foreground

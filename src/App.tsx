@@ -329,23 +329,23 @@ export default function App() {
         const next = await setMode({ ...(snapshot ?? { locked: false, alwaysOnTop: false }), collaborationMode: false }, true);
         if (next?.collaborationMode) throw new Error('窗口层级仍在恢复中');
         setDrawingCollaborationMode(false);
-        setStatus('已退出绘画协作模式，窗口状态已恢复');
+        setStatus('已退出协作模式，窗口状态已恢复');
       } catch (error) {
         drawingModeSnapshotRef.current = snapshot;
-        setStatus(`退出绘画协作模式失败：${String(error)}`);
+        setStatus(`退出协作模式失败：${String(error)}`);
       }
       return;
     }
     const snapshot = { locked: windowMode.locked, alwaysOnTop: windowMode.alwaysOnTop };
     try {
       const next = await setMode({ locked: true, alwaysOnTop: true, collaborationMode: true }, true);
-      if (!next?.collaborationMode) throw new Error('未能确认任务栏前方的无激活协作窗口层级');
+      if (!next?.collaborationMode) throw new Error('未能确认任务栏后方的稳定协作窗口层级');
       drawingModeSnapshotRef.current = snapshot;
       setDrawingCollaborationMode(true);
-      setStatus('绘画协作模式已启用 · Space + 主按钮拖动可平移画布');
+      setStatus('协作模式已启用 · Space + 主按钮拖动可平移画布 · Ctrl+Alt+Y 退出');
     } catch (error) {
       drawingModeSnapshotRef.current = undefined;
-      setStatus(`启用绘画协作模式失败：${String(error)}`);
+      setStatus(`启用协作模式失败：${String(error)}`);
     }
   }, [api, drawingCollaborationMode, setMode, windowMode.alwaysOnTop, windowMode.locked]);
 
@@ -363,6 +363,11 @@ export default function App() {
     });
     return () => { unsubscribePrewarm(); unsubscribeClickThrough(); };
   }, [api]);
+
+  useEffect(() => {
+    if (!api) return undefined;
+    return api.onToggleCollaborationRequested(() => { void toggleDrawingCollaborationMode(); });
+  }, [api, toggleDrawingCollaborationMode]);
 
   useEffect(() => { api?.setDirty(history.dirty, history.revision); }, [api, history.dirty, history.revision]);
   useEffect(() => {
@@ -1322,6 +1327,9 @@ export default function App() {
     },
     {
       type: 'item', label: '窗口', children: [
+        { type: 'item', label: '协作模式', shortcut: 'Ctrl+Alt+Y', checked: drawingCollaborationMode,
+          action: () => { void toggleDrawingCollaborationMode(); } },
+        { type: 'separator' },
         { type: 'item', label: '始终置顶', shortcut: 'Ctrl+Shift+A', checked: windowMode.alwaysOnTop, disabled: drawingCollaborationMode,
           action: () => setMode({ alwaysOnTop: !windowMode.alwaysOnTop }) },
         { type: 'item', label: '锁定窗口位置', shortcut: 'Ctrl+W', checked: windowMode.locked, disabled: drawingCollaborationMode,
@@ -1565,20 +1573,19 @@ export default function App() {
 
     <div className={`scene-name-badge no-drag${sceneNameVisible ? ' visible' : ''}`} title={displaySceneName}>{displaySceneName}{history.dirty ? '  •' : ''}</div>
 
-    <div className="window-control-zone no-drag">
+    {!drawingCollaborationMode && <div className="window-control-zone no-drag">
       <div className="window-floating-controls">
-        <button className={windowMode.alwaysOnTop ? 'active' : ''} disabled={drawingCollaborationMode}
-          title={drawingCollaborationMode ? '绘画协作模式管理置顶' : (windowMode.alwaysOnTop ? '取消始终置顶' : '始终置顶')}
+        <button className={windowMode.alwaysOnTop ? 'active' : ''}
+          title={windowMode.alwaysOnTop ? '取消始终置顶' : '始终置顶'}
           onClick={() => { void setMode({ alwaysOnTop: !windowMode.alwaysOnTop }); }}><UiIcon name="pin" /></button>
-        <button className={drawingCollaborationMode ? 'active' : ''}
-          title={drawingCollaborationMode ? '退出绘画协作模式' : '绘画协作模式'}
-          aria-pressed={drawingCollaborationMode}
+        <button title="协作模式 · Ctrl+Alt+Y"
+          aria-pressed={false}
           onClick={() => { void toggleDrawingCollaborationMode(); }}><UiIcon name="pen" /></button>
         <button title="最小化" onClick={() => api?.minimize()}><UiIcon name="minimize" /></button>
         <button title="最大化 / 还原" onClick={() => api?.toggleMaximize()}><UiIcon name="maximize" /></button>
         <button className="close" title="关闭" onClick={() => api?.close()}><UiIcon name="close" /></button>
       </div>
-    </div>
+    </div>}
 
     {contextMenu && <ContextMenu position={contextMenu} entries={menuEntries} onClose={() => setContextMenu(undefined)} />}
     {groupActionMenu && groupActionEntries.length > 0 && <ContextMenu variant="group" position={groupActionMenu.position}

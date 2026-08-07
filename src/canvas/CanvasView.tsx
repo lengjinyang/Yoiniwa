@@ -135,6 +135,37 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setVisualNotesTemporaryHidden(visualNotesTemporaryHidden); }, [visualNotesTemporaryHidden]);
   useEffect(() => { runtimeRef.current?.setBackground(background, backgroundOpacity); }, [background, backgroundOpacity]);
   useEffect(() => {
+    const api = window.refCanvas;
+    if (!api) return undefined;
+    let pointerActive = false;
+    const pointerId = 0x594f;
+    return api.onNativePointer((input) => {
+      const container = containerRef.current;
+      if (!container) return;
+      if (input.kind === 'wheel' || input.kind === 'hwheel') {
+        container.dispatchEvent(new WheelEvent('wheel', {
+          bubbles: true, cancelable: true, clientX: input.clientX, clientY: input.clientY,
+          deltaX: input.kind === 'hwheel' ? -input.delta : 0,
+          deltaY: input.kind === 'wheel' ? -input.delta : 0,
+          altKey: input.altKey,
+        }));
+        return;
+      }
+      const eventName = input.kind === 'down' ? 'pointerdown'
+        : input.kind === 'up' ? 'pointerup'
+          : input.kind === 'cancel' ? 'pointercancel' : 'pointermove';
+      if (input.kind === 'down') pointerActive = true;
+      const pressed = pointerActive && input.kind !== 'up' && input.kind !== 'cancel';
+      container.dispatchEvent(new PointerEvent(eventName, {
+        bubbles: true, cancelable: true, pointerId, pointerType: input.pointerType,
+        isPrimary: true, button: input.kind === 'down' || input.kind === 'up' ? 0 : -1,
+        buttons: pressed ? 1 : 0, pressure: pressed ? 0.5 : 0,
+        clientX: input.clientX, clientY: input.clientY, altKey: input.altKey,
+      }));
+      if (input.kind === 'up' || input.kind === 'cancel') pointerActive = false;
+    });
+  }, []);
+  useEffect(() => {
     const setBenchmarkViewport = (event: Event) => {
       const next = (event as CustomEvent<Viewport>).detail;
       if (!next || !Number.isFinite(next.x) || !Number.isFinite(next.y) || !Number.isFinite(next.scale)) return;

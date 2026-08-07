@@ -216,6 +216,16 @@ export interface WindowState {
   opacity: number;
 }
 
+export interface NativePointerInput {
+  kind: 'down' | 'move' | 'up' | 'cancel' | 'hover' | 'wheel' | 'hwheel';
+  clientX: number;
+  clientY: number;
+  altKey: boolean;
+  spaceKey: boolean;
+  pointerType: 'mouse' | 'pen';
+  delta: number;
+}
+
 interface RefCanvasAPI {
   importImages(requestId?: string): Promise<ImportedImage[]>;
   registerImagePaths(paths: string[], sourceType: ImageItem['sourceType']): Promise<ImportedImage[]>;
@@ -264,6 +274,8 @@ interface RefCanvasAPI {
   close(): void;
   setDirty(dirty: boolean, revision?: number): void;
   onClickThroughDisabled(callback: () => void): () => void;
+  onToggleCollaborationRequested(callback: () => void): () => void;
+  onNativePointer(callback: (input: NativePointerInput) => void): () => void;
 }
 
 declare global { interface Window { refCanvas?: RefCanvasAPI } }
