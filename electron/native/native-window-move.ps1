@@ -7,11 +7,19 @@ using System.Threading;
 
 public static class RefCanvasNativeWindowMove
 {
+    private const int WH_KEYBOARD_LL = 13;
     private const int WH_MOUSE_LL = 14;
     private const int VK_LBUTTON = 0x01;
     private const int VK_RBUTTON = 0x02;
+    private const int VK_CONTROL = 0x11;
     private const int VK_MENU = 0x12;
     private const int VK_SPACE = 0x20;
+    private const int VK_ADD = 0x6B;
+    private const int VK_SUBTRACT = 0x6D;
+    private const int VK_OEM_PLUS = 0xBB;
+    private const int VK_OEM_MINUS = 0xBD;
+    private const int WM_KEYDOWN = 0x0100;
+    private const int WM_SYSKEYDOWN = 0x0104;
     private const int WM_MOUSEMOVE = 0x0200;
     private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONUP = 0x0202;
@@ -58,6 +66,16 @@ public static class RefCanvasNativeWindowMove
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct KeyboardHookData
+    {
+        public uint VirtualKey;
+        public uint ScanCode;
+        public uint Flags;
+        public uint Time;
+        public IntPtr ExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct Message
     {
         public IntPtr Window;
@@ -70,16 +88,20 @@ public static class RefCanvasNativeWindowMove
     }
 
     private delegate IntPtr MouseHookProc(int code, IntPtr wParam, IntPtr lParam);
+    private delegate IntPtr KeyboardHookProc(int code, IntPtr wParam, IntPtr lParam);
 
     private static readonly object OutputLock = new object();
     private static readonly object HookLock = new object();
     private static readonly ManualResetEventSlim HookStarted = new ManualResetEventSlim(false);
     private static Thread hookThread;
     private static MouseHookProc hookProcedure;
+    private static KeyboardHookProc keyboardHookProcedure;
     private static IntPtr hookHandle = IntPtr.Zero;
+    private static IntPtr keyboardHookHandle = IntPtr.Zero;
     private static int hookPhysicalCoordinatesReady;
     private static long inputWindowHandle;
     private static int inputEnabled;
+    private static int collaborationZoomEnabled;
     private static int inputMode;
     private static int inputStartedAt;
     private static int inputEndedAt;
@@ -101,6 +123,9 @@ public static class RefCanvasNativeWindowMove
 
     [DllImport("user32.dll")]
     private static extern IntPtr SetWindowsHookEx(int hookId, MouseHookProc callback, IntPtr module, uint threadId);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetWindowsHookEx(int hookId, KeyboardHookProc callback, IntPtr module, uint threadId);
 
     [DllImport("user32.dll")]
     private static extern bool UnhookWindowsHookEx(IntPtr hook);
@@ -418,6 +443,32 @@ public static class RefCanvasNativeWindowMove
         return CallNextHookEx(hookHandle, code, wParam, lParam);
     }
 
+    private static IntPtr KeyboardInputHook(int code, IntPtr wParam, IntPtr lParam)
+    {
+        if (code < 0 || Volatile.Read(ref inputEnabled) == 0
+            || Volatile.Read(ref collaborationZoomEnabled) == 0
+            || Volatile.Read(ref inputMode) != INPUT_NONE)
+            return CallNextHookEx(keyboardHookHandle, code, wParam, lParam);
+
+        var message = wParam.ToInt32();
+        if (message != WM_KEYDOWN && message != WM_SYSKEYDOWN)
+            return CallNextHookEx(keyboardHookHandle, code, wParam, lParam);
+
+        var data = (KeyboardHookData)Marshal.PtrToStructure(lParam, typeof(KeyboardHookData));
+        var zoomIn = data.VirtualKey == VK_ADD || data.VirtualKey == VK_OEM_PLUS;
+        var zoomOut = data.VirtualKey == VK_SUBTRACT || data.VirtualKey == VK_OEM_MINUS;
+        if ((!zoomIn && !zoomOut) || !IsKeyDown(VK_CONTROL) || IsKeyDown(VK_MENU))
+            return CallNextHookEx(keyboardHookHandle, code, wParam, lParam);
+
+        Point cursor;
+        var window = new IntPtr(Interlocked.Read(ref inputWindowHandle));
+        if (!GetCursorPos(out cursor) || !PointInsideWindow(window, cursor))
+            return CallNextHookEx(keyboardHookHandle, code, wParam, lParam);
+
+        Emit("ZOOM|" + (zoomIn ? "IN" : "OUT") + "|" + cursor.X + "|" + cursor.Y);
+        return new IntPtr(1);
+    }
+
     private static void InputHookLoop()
     {
         // MSLLHOOKSTRUCT coordinates are per-monitor-aware physical pixels.
@@ -427,8 +478,12 @@ public static class RefCanvasNativeWindowMove
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != IntPtr.Zero;
         Volatile.Write(ref hookPhysicalCoordinatesReady, physicalCoordinates ? 1 : 0);
         hookProcedure = InputHook;
+        keyboardHookProcedure = KeyboardInputHook;
         hookHandle = physicalCoordinates
             ? SetWindowsHookEx(WH_MOUSE_LL, hookProcedure, GetModuleHandle(null), 0)
+            : IntPtr.Zero;
+        keyboardHookHandle = physicalCoordinates
+            ? SetWindowsHookEx(WH_KEYBOARD_LL, keyboardHookProcedure, GetModuleHandle(null), 0)
             : IntPtr.Zero;
         HookStarted.Set();
         if (hookHandle == IntPtr.Zero) return;
@@ -439,10 +494,12 @@ public static class RefCanvasNativeWindowMove
             DispatchMessage(ref message);
         }
         UnhookWindowsHookEx(hookHandle);
+        if (keyboardHookHandle != IntPtr.Zero) UnhookWindowsHookEx(keyboardHookHandle);
         hookHandle = IntPtr.Zero;
+        keyboardHookHandle = IntPtr.Zero;
     }
 
-    public static bool ConfigureInput(long rawHandle, bool enabled)
+    public static bool ConfigureInput(long rawHandle, bool enabled, bool enableCollaborationZoom)
     {
         if (enabled)
         {
@@ -461,10 +518,12 @@ public static class RefCanvasNativeWindowMove
                 || Volatile.Read(ref hookPhysicalCoordinatesReady) == 0) return false;
         }
         var alreadyConfigured = enabled && Volatile.Read(ref inputEnabled) != 0
-            && Interlocked.Read(ref inputWindowHandle) == rawHandle;
+            && Interlocked.Read(ref inputWindowHandle) == rawHandle
+            && Volatile.Read(ref collaborationZoomEnabled) == (enableCollaborationZoom ? 1 : 0);
         if (alreadyConfigured) return true;
         SetInputMode(INPUT_NONE);
         Interlocked.Exchange(ref inputWindowHandle, rawHandle);
+        Volatile.Write(ref collaborationZoomEnabled, enabled && enableCollaborationZoom ? 1 : 0);
         Volatile.Write(ref inputEnabled, enabled ? 1 : 0);
         return true;
     }
@@ -483,9 +542,10 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
             $aboveTaskbar = $parts.Length -eq 5 -and $parts[4] -eq '1'
             $applied = [RefCanvasNativeWindowMove]::SetCollaborationLayer([long]::Parse($parts[2]), $enabled, $aboveTaskbar)
             [Console]::Out.WriteLine('LAYER|' + $parts[1] + '|' + $(if ($applied) { 'READY' } else { 'FAILED' }))
-        } elseif ($parts.Length -eq 4 -and $parts[0] -eq 'INPUT') {
+        } elseif (($parts.Length -eq 4 -or $parts.Length -eq 5) -and $parts[0] -eq 'INPUT') {
             $enabled = $parts[3] -eq '1'
-            $applied = [RefCanvasNativeWindowMove]::ConfigureInput([long]::Parse($parts[2]), $enabled)
+            $enableCollaborationZoom = $parts.Length -eq 5 -and $parts[4] -eq '1'
+            $applied = [RefCanvasNativeWindowMove]::ConfigureInput([long]::Parse($parts[2]), $enabled, $enableCollaborationZoom)
             [Console]::Out.WriteLine('INPUT_ACK|' + $parts[1] + '|' + $(if ($applied) { 'READY' } else { 'FAILED' }))
         } elseif ($parts.Length -eq 3 -and $parts[0] -eq 'KEY') {
             $down = [RefCanvasNativeWindowMove]::IsKeyDown([int]::Parse($parts[2]))

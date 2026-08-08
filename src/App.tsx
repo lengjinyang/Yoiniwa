@@ -82,6 +82,7 @@ export default function App() {
   const [photoshopVersionsOpen, setPhotoshopVersionsOpen] = useState(false);
   const [photoshopMetadata, setPhotoshopMetadata] = useState<PhotoshopProjectMetadata>(EMPTY_PHOTOSHOP_PROJECT_METADATA);
   const photoshopMetadataRef = useRef(photoshopMetadata);
+  const projectSessionIdRef = useRef<string | undefined>(undefined);
   photoshopMetadataRef.current = photoshopMetadata;
   const [versionSaveDialogOpen, setVersionSaveDialogOpen] = useState(false);
   const [versionName, setVersionName] = useState('');
@@ -134,8 +135,18 @@ export default function App() {
   }
   autosaveExecuteRef.current = async (scene, revision) => {
     const preview = await renderProjectPreview(scene);
-    const result = await api?.autosaveScene(scene, revision, photoshopMetadataRef.current, preview);
-    if (result?.scene) history.markSaved(result.scene, result.revision ?? revision);
+    const result = await api?.commitProject({
+      sessionId: projectSessionIdRef.current,
+      scene: serializeProjectScene(scene),
+      photoshopProject: photoshopMetadataRef.current,
+      rendererRevision: revision,
+      preview,
+      reason: 'autosave',
+    });
+    if (result?.scene) {
+      if (result.sessionId) projectSessionIdRef.current = result.sessionId;
+      history.markSaved(result.scene, result.committedRevision ?? revision);
+    }
   };
   const performanceSceneRef = useRef(history.scene);
   const liveViewportRef = useRef(history.scene.viewport);
@@ -576,11 +587,25 @@ export default function App() {
     const requestId = beginOperation('save', '正在保存…');
     try {
       const preview = await renderProjectPreview(flushed.scene);
-      const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision, photoshopMetadataRef.current, preview);
+      const request = {
+        sessionId: projectSessionIdRef.current,
+        scene: serializeProjectScene(flushed.scene),
+        photoshopProject: photoshopMetadataRef.current,
+        rendererRevision: saveRevision,
+        preview,
+        reason: 'explicit' as const,
+      };
+      const result = saveAs || !projectSessionIdRef.current
+        ? await api.saveProjectAs(request)
+        : await api.commitProject(request);
       if (!result.canceled) {
-        const savedCurrentRevision = history.markSaved(result.scene, result.revision ?? saveRevision);
+        if (result.sessionId) projectSessionIdRef.current = result.sessionId;
+        const savedCurrentRevision = result.scene
+          ? history.markSaved(result.scene, result.committedRevision ?? saveRevision) : false;
         if (result.metadata) setPhotoshopMetadata(result.metadata);
-        settleCurrentOperation(requestId, 'success', `已保存至 ${result.path}`);
+        const upgrade = result.upgraded === 'legacy-yoi' ? '（旧 .yoi 已升级并保留 legacy 备份）'
+          : result.upgraded === 'refcanvas' ? '（已从 .refcanvas 升级，旧文件保留）' : '';
+        settleCurrentOperation(requestId, 'success', `已保存至 ${result.path}${upgrade}`);
         setStatus(savedCurrentRevision ? '' : '保存完成，但保存期间产生了新修改');
         api.recentScenes().then(setRecent).catch((error) => setStatus(`刷新最近画板失败：${String(error)}`));
       } else clearCurrentOperation(requestId);
@@ -596,14 +621,17 @@ export default function App() {
     if (history.dirty && !window.confirm('当前更改尚未保存，仍要打开其他画板吗？')) return;
     const requestId = beginOperation('open', '正在打开画板…');
     try {
-      const result = await api.openScene(path);
+      const result = await api.openProject(path);
       const loaded = loadProjectScene(result.scene);
       if (!result.canceled && validateScene(loaded)) {
         history.load(loaded);
+        projectSessionIdRef.current = result.sessionId;
         setPhotoshopMetadata(result.metadata ?? EMPTY_PHOTOSHOP_PROJECT_METADATA);
         setSelectedIds([]);
         setSelectedGroupId(undefined);
-        settleCurrentOperation(requestId, 'success', `已打开 ${result.path}`);
+        const recovery = result.recovered ? `（已从 ${result.recoverySource ?? '最后一个完整提交'} 恢复）` : '';
+        const readOnly = result.readOnly ? '（只读；保存时请使用另存为）' : '';
+        settleCurrentOperation(requestId, 'success', `已打开 ${result.path}${recovery}${readOnly}`);
         api.recentScenes().then(setRecent).catch((error) => setStatus(`刷新最近画板失败：${String(error)}`));
       } else if (!result.canceled) settleCurrentOperation(requestId, 'error', '无法打开：不是有效的 Yoiniwa 画板');
       else clearCurrentOperation(requestId);
@@ -660,7 +688,8 @@ export default function App() {
 
   const newScene = useCallback(() => {
     if (history.dirty && !window.confirm('当前更改尚未保存，仍要新建画板吗？')) return;
-    api?.resetScenePath();
+    void api?.closeProject(projectSessionIdRef.current);
+    projectSessionIdRef.current = undefined;
     history.load(createScene());
     setPhotoshopMetadata(EMPTY_PHOTOSHOP_PROJECT_METADATA);
     setSelectedIds([]);
@@ -1016,6 +1045,12 @@ export default function App() {
     history.updateViewport({ x: centerX - worldX * scale, y: centerY - worldY * scale, scale });
   }, [history]);
 
+  useEffect(() => {
+    const api = window.refCanvas;
+    if (!api) return undefined;
+    return api.onNativeZoom((direction) => zoomBy(direction === 'in' ? 1.15 : 1 / 1.15));
+  }, [zoomBy]);
+
   const packAndFit = useCallback(() => {
     if (!targetIds.length) return;
     const targets = targetIds.flatMap((id) => {
@@ -1142,10 +1177,11 @@ export default function App() {
     const requestId = beginOperation('photoshop', '正在保存 Photoshop 分层版本…');
     try {
       const preview = await renderProjectPreview(flushed.scene);
-      const result = await api.createPhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, name, versionNote, flushed.revision, preview);
+      const result = await api.createPhotoshopVersion(projectSessionIdRef.current, serializeProjectScene(flushed.scene), photoshopMetadataRef.current, name, versionNote, flushed.revision, preview);
       if (result.canceled) { clearCurrentOperation(requestId); return; }
       if (!result.version || !result.metadata) throw new Error(result.message ?? 'Photoshop 版本保存失败');
-      history.markSaved(result.scene, result.revision ?? flushed.revision);
+      if (result.sessionId) projectSessionIdRef.current = result.sessionId;
+      if (result.scene) history.markSaved(result.scene, result.committedRevision ?? flushed.revision);
       setPhotoshopMetadata(result.metadata);
       setVersionSaveDialogOpen(false); setVersionName(''); setVersionNote('');
       settleCurrentOperation(requestId, 'success', `已保存 Photoshop 版本 ${result.version.name}`);
@@ -1166,7 +1202,7 @@ export default function App() {
 
   const openPhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
     if (!api || photoshopDocumentBlocked) return;
-    const result = await api.openPhotoshopVersion(version.id);
+    const result = await api.openPhotoshopVersion(projectSessionIdRef.current, version.id);
     setStatus(result.ok ? (result.message ?? `已打开 ${version.name}`) : (result.message ?? '无法打开 Photoshop 版本'));
   }, [api, photoshopDocumentBlocked]);
 
@@ -1174,9 +1210,10 @@ export default function App() {
     if (!api || photoshopDocumentBlocked || !window.confirm(`确定删除版本“${version.name}”？此操作会从 .yoi 中移除完整分层文件。`)) return;
     const flushed = history.flushViewport(liveViewportRef.current);
     const preview = await renderProjectPreview(flushed.scene);
-    const result = await api.deletePhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, version.id, flushed.revision, preview);
+    const result = await api.deletePhotoshopVersion(projectSessionIdRef.current, serializeProjectScene(flushed.scene), photoshopMetadataRef.current, version.id, flushed.revision, preview);
     if (result.metadata) setPhotoshopMetadata(result.metadata);
-    if (result.scene) history.markSaved(result.scene, result.revision ?? flushed.revision);
+    if (result.sessionId) projectSessionIdRef.current = result.sessionId;
+    if (result.scene) history.markSaved(result.scene, result.committedRevision ?? flushed.revision);
     setStatus(result.metadata ? `已删除版本 ${version.name}` : (result.message ?? '删除 Photoshop 版本失败'));
   }, [api, history, photoshopDocumentBlocked]);
 

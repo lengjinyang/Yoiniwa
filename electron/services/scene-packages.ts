@@ -9,7 +9,7 @@ import unzipper from 'unzipper';
 import type { PhotoshopProjectMetadata, PhotoshopVersionRecord } from '../../src/types.js';
 import { EMPTY_PHOTOSHOP_PROJECT_METADATA, normalizePhotoshopProjectMetadata } from '../../src/shared/photoshopVersions.js';
 
-interface ScenePackageServices {
+export interface ScenePackageServices {
   assetRegistry: Map<string, any>;
   assetCachePath(record: any): string;
   ensureAssetFile(id: string): Promise<string>;
@@ -156,6 +156,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
         archive.file(assetPath, { name: `assets/${record.id}${extByMime[record.mimeType] ?? '.bin'}`, store: true } as any);
       }
       for (const version of manifest.photoshopProject?.versions ?? []) {
+        if (!version.archiveEntry) throw new Error(`旧版工程缺少 Photoshop ZIP 条目：${version.name}`);
         const sourcePath = versionFiles.get(version.id);
         if (sourcePath) {
           archive.file(sourcePath, { name: version.archiveEntry, store: true } as any);
@@ -273,6 +274,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
         || previewRecord.mimeType !== version.previewAsset.mimeType) {
         throw new Error(`场景包缺少 Photoshop 版本预览：${version.name}`);
       }
+      if (!version.archiveEntry) throw new Error(`场景包缺少 Photoshop 版本条目：${version.name}`);
       const entry = directory.files.find((value) => value.path === version.archiveEntry);
       if (!entry) throw new Error(`场景包缺少 Photoshop 版本：${version.name}`);
       const declared = Number((entry as any).uncompressedSize);
@@ -313,6 +315,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
   }
 
   async function extractPhotoshopVersion(filePath: string, version: PhotoshopVersionRecord, targetPath: string) {
+    if (!version.archiveEntry) throw new Error(`旧版工程缺少 Photoshop ZIP 条目：${version.name}`);
     const directory = await unzipper.Open.file(filePath);
     const entry = directory.files.find((value) => value.path === version.archiveEntry);
     if (!entry) throw new Error(`画板缺少 Photoshop 版本：${version.name}`);

@@ -12,10 +12,10 @@ const DEFAULT_GROUP_ALPHA = 0.2;
 const DEFAULT_GROUP_COLOR = '#3a4955';
 
 const GROUP_COLORS = [
-  ['石墨灰', '#42474d', DEFAULT_GROUP_ALPHA], ['蓝灰', DEFAULT_GROUP_COLOR, DEFAULT_GROUP_ALPHA],
-  ['墨绿', '#3b544b', DEFAULT_GROUP_ALPHA], ['暗红', '#553a3e', DEFAULT_GROUP_ALPHA],
-  ['褐色', '#564639', DEFAULT_GROUP_ALPHA], ['灰紫', '#46404f', DEFAULT_GROUP_ALPHA],
-  ['暖灰', '#4c4843', DEFAULT_GROUP_ALPHA],
+  ['石墨灰', '#56616d', 0.24], ['蓝灰', '#3d668f', 0.28],
+  ['墨绿', '#2f7056', 0.26], ['暗红', '#7b3d50', 0.28],
+  ['褐色', '#79542c', 0.28], ['灰紫', '#684b9a', 0.28],
+  ['暖灰', '#765446', 0.26],
 ] as const;
 
 function inputHex(value: string) {

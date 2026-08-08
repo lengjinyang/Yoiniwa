@@ -201,12 +201,59 @@ export interface PhotoshopVersionRecord {
   format: 'psd' | 'psb';
   byteLength: number;
   sha256: string;
-  archiveEntry: string;
+  /** SHA-256 content address used by YoiStorage v4. */
+  blobId?: string;
+  /** ZIP entry retained only while reading a legacy project. */
+  archiveEntry?: string;
   previewAssetId: string;
   previewAsset: AssetRecord;
 }
 
 export interface PhotoshopProjectMetadata { versions: PhotoshopVersionRecord[] }
+
+export type ProjectCommitReason = 'explicit' | 'autosave' | 'version-add' | 'version-delete';
+
+export interface ProjectCommitRequest {
+  sessionId?: string;
+  scene: Scene;
+  photoshopProject: PhotoshopProjectMetadata;
+  rendererRevision?: number;
+  preview?: ArrayBuffer;
+  reason: ProjectCommitReason;
+}
+
+export interface ProjectCommitResult {
+  canceled?: boolean;
+  skipped?: boolean;
+  path?: string;
+  sessionId?: string;
+  scene?: Scene;
+  metadata?: PhotoshopProjectMetadata;
+  generation?: number;
+  committedRevision?: number;
+  bytesAppended?: number;
+  compactionScheduled?: boolean;
+  recovered?: boolean;
+  upgraded?: 'refcanvas' | 'legacy-yoi';
+}
+
+export interface ProjectOpenResult extends ProjectCommitResult {
+  canceled: boolean;
+  recoverySource?: string;
+  readOnly?: boolean;
+}
+
+export interface ProjectStorageStats {
+  generation: number;
+  fileBytes: number;
+  liveBytes: number;
+  staleBytes: number;
+  staleRatio: number;
+  blobCount: number;
+  readOnly?: boolean;
+  recovered?: boolean;
+  recoverySource?: string;
+}
 
 export interface RecentScene { path: string; name: string; openedAt: string; assetIds?: string[] }
 
@@ -273,12 +320,15 @@ interface RefCanvasAPI {
   onPrewarmProgress(callback: (progress: ImagePrewarmProgress) => void): () => void;
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
   pathForFile(file: File): string | undefined;
-  saveScene(scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
-  autosaveScene(scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer): Promise<{ skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
-  resetScenePath(): void;
+  openProject(path?: string): Promise<ProjectOpenResult>;
+  commitProject(request: ProjectCommitRequest): Promise<ProjectCommitResult>;
+  saveProjectAs(request: ProjectCommitRequest): Promise<ProjectCommitResult>;
+  closeProject(sessionId?: string): Promise<void>;
+  compactProject(sessionId?: string): Promise<ProjectStorageStats | { skipped: true; message?: string }>;
+  projectStats(sessionId?: string): Promise<ProjectStorageStats>;
+  recoverProject(sessionId?: string): Promise<{ recovered: boolean; sessionId: string }>;
   consumeStartupPath(): Promise<string | null>;
   onExternalOpen(callback: (path: string) => void): () => void;
-  openScene(path?: string): Promise<{ canceled: boolean; path?: string; scene?: Scene; metadata?: PhotoshopProjectMetadata }>;
   importScene(): Promise<{ canceled: boolean; path?: string; scene?: Scene }>;
   recentScenes(): Promise<RecentScene[]>;
   getCacheInfo(): Promise<CacheInfo>;
@@ -302,12 +352,14 @@ interface RefCanvasAPI {
   openRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
   getPhotoshopDocumentInfo(): Promise<PhotoshopDocumentInfoResult>;
   createPhotoshopVersion(
-    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number, preview?: ArrayBuffer,
-  ): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; version?: PhotoshopVersionRecord; message?: string }>;
-  openPhotoshopVersion(versionId: string): Promise<PhotoshopDocumentResult>;
+    sessionId: string | undefined, scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string,
+    revision?: number, preview?: ArrayBuffer,
+  ): Promise<ProjectCommitResult & { version?: PhotoshopVersionRecord; message?: string }>;
+  openPhotoshopVersion(sessionId: string | undefined, versionId: string): Promise<PhotoshopDocumentResult>;
   deletePhotoshopVersion(
-    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number, preview?: ArrayBuffer,
-  ): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; message?: string }>;
+    sessionId: string | undefined, scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string,
+    revision?: number, preview?: ArrayBuffer,
+  ): Promise<ProjectCommitResult & { message?: string }>;
   setWindowMode(mode: Partial<WindowState>): Promise<WindowState>;
   getWindowMode(): Promise<WindowState>;
   getWindowWorkArea(point?: { x: number; y: number }): Promise<{ left: number; top: number; right: number; bottom: number }>;
@@ -326,6 +378,7 @@ interface RefCanvasAPI {
   onClickThroughDisabled(callback: () => void): () => void;
   onToggleCollaborationRequested(callback: () => void): () => void;
   onNativePointer(callback: (input: NativePointerInput) => void): () => void;
+  onNativeZoom(callback: (direction: 'in' | 'out') => void): () => void;
 }
 
 declare global { interface Window { refCanvas?: RefCanvasAPI } }

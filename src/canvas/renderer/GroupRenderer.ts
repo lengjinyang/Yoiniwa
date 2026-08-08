@@ -27,12 +27,6 @@ interface GroupObject {
   destroy(): void;
 }
 
-function lightenGroupColor(color: string, ratio: number) {
-  const value = /^#[0-9a-f]{6}$/i.test(color) ? color.slice(1) : '536778';
-  const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
-  return (channels.reduce((result, channel) => (result << 8) | Math.round(channel + (255 - channel) * ratio), 0)) >>> 0;
-}
-
 function darkenGroupColor(color: string, ratio: number) {
   const value = /^#[0-9a-f]{6}$/i.test(color) ? color.slice(1) : '536778';
   const channels = [0, 2, 4].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
@@ -159,8 +153,7 @@ export class GroupRenderer {
     object.body.clear();
     const bodyHeight = Math.max(1, group.height);
     const bodyRadius = Math.min(6 / this.scale, group.width / 2, bodyHeight / 2);
-    const borderColor = lightenGroupColor(group.color, 0.125);
-    const bodyColor = darkenGroupColor(group.color, 0.22);
+    const bodyColor = darkenGroupColor(group.color, 0.26);
     if (!group.collapsed) {
       object.body.moveTo(0, 0).lineTo(group.width, 0)
         .lineTo(group.width, bodyHeight - bodyRadius)
@@ -168,13 +161,6 @@ export class GroupRenderer {
         .lineTo(bodyRadius, bodyHeight)
         .quadraticCurveTo(0, bodyHeight, 0, bodyHeight - bodyRadius)
         .closePath().fill({ color: bodyColor, alpha: Math.min(1, group.opacity + (dropTarget ? 0.1 : 0)) });
-      object.body.moveTo(0, 0).lineTo(0, bodyHeight - bodyRadius)
-        .quadraticCurveTo(0, bodyHeight, bodyRadius, bodyHeight)
-        .lineTo(group.width - bodyRadius, bodyHeight)
-        .quadraticCurveTo(group.width, bodyHeight, group.width, bodyHeight - bodyRadius)
-        .lineTo(group.width, 0)
-        .stroke({ color: dropTarget ? group.color : borderColor, width: (dropTarget ? 1.4 : 1) / this.scale,
-          alpha: dropTarget ? 0.95 : hovered ? 0.68 : 0.46 });
     }
     // The inverse child scale cancels the world zoom, keeping the title readable.
     object.headerBackground.scale.set(1 / this.scale);
@@ -184,26 +170,19 @@ export class GroupRenderer {
     object.headerBackground.clear();
     // A controlled luminance/opacity lift establishes the title hierarchy
     // without introducing a detached window-style divider or shadow.
-    const headerAlpha = Math.min(1, group.opacity + (hovered ? 0.025 : 0));
-    // Body uses a 22% darkening; 16% here yields a restrained 6% lift.
-    const headerColor = darkenGroupColor(group.color, 0.16);
+    const headerAlpha = Math.min(1, group.opacity + 0.04 + (hovered ? 0.025 : 0));
+    // Keep the header visibly lighter than the body without adding an outline.
+    const headerColor = darkenGroupColor(group.color, 0.06);
     const radius = Math.min(5, headerWidth / 2, headerHeight / 2);
     if (group.collapsed) {
       object.headerBackground.roundRect(0, 0, headerWidth, headerHeight, radius)
-        .fill({ color: headerColor, alpha: headerAlpha })
-        .stroke({ color: selected ? 0x708cff : borderColor, width: selected ? 1.25 : 1,
-          alpha: selected ? 0.95 : hovered ? 0.68 : 0.46 });
+        .fill({ color: headerColor, alpha: headerAlpha });
     } else {
       object.headerBackground.moveTo(0, headerHeight)
         .lineTo(0, radius).quadraticCurveTo(0, 0, radius, 0)
         .lineTo(headerWidth - radius, 0).quadraticCurveTo(headerWidth, 0, headerWidth, radius)
         .lineTo(headerWidth, headerHeight).closePath()
         .fill({ color: headerColor, alpha: headerAlpha });
-      object.headerBackground.moveTo(0, headerHeight).lineTo(0, radius)
-        .quadraticCurveTo(0, 0, radius, 0).lineTo(headerWidth - radius, 0)
-        .quadraticCurveTo(headerWidth, 0, headerWidth, radius).lineTo(headerWidth, headerHeight)
-        .stroke({ color: selected ? 0x708cff : borderColor, width: selected ? 1.25 : 1,
-          alpha: selected ? 0.95 : hovered ? 0.68 : 0.46 });
     }
     object.title.style.color = group.titleColor;
     object.title.style.opacity = String(group.titleOpacity ?? 1);
