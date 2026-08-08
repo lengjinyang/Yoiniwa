@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cwchar>
+#include <cstring>
 #include <new>
 #include <string>
 #include <vector>
@@ -29,6 +30,13 @@ constexpr wchar_t kClsidKey[] = L"CLSID\\{2B0F173D-5E7E-4C36-A901-9A9D75E2B7BF}"
 constexpr char kPreviewEntry[] = "preview.png";
 constexpr uint32_t kLocalHeaderSignature = 0x04034b50;
 constexpr size_t kMaximumPreviewBytes = 4 * 1024 * 1024;
+constexpr size_t kYoiHeaderBytes = 8192;
+constexpr size_t kYoiSuperblockBytes = 256;
+constexpr size_t kYoiSegmentHeaderBytes = 96;
+constexpr uint64_t kYoiSuperblockOffsets[] = { 512, 768 };
+constexpr char kYoiMagic[] = "YOINIWA\0";
+constexpr char kYoiSlotMagic[] = "YOISLOT\0";
+constexpr char kYoiSegmentMagic[] = "YOISEG4\0";
 HMODULE moduleInstance = nullptr;
 LONG activeObjects = 0;
 
@@ -41,6 +49,26 @@ uint32_t ReadU32(const uint8_t* value) {
     | (static_cast<uint32_t>(value[1]) << 8)
     | (static_cast<uint32_t>(value[2]) << 16)
     | (static_cast<uint32_t>(value[3]) << 24);
+}
+
+uint64_t ReadU64(const uint8_t* value) {
+  uint64_t result = 0;
+  for (size_t index = 0; index < 8; ++index) result |= static_cast<uint64_t>(value[index]) << (index * 8);
+  return result;
+}
+
+uint32_t Crc32(const uint8_t* value, size_t length) {
+  uint32_t crc = 0xffffffff;
+  for (size_t index = 0; index < length; ++index) {
+    crc ^= value[index];
+    for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320 & -(static_cast<int32_t>(crc & 1)));
+  }
+  return crc ^ 0xffffffff;
+}
+
+bool IsPng(const std::vector<uint8_t>& value) {
+  constexpr uint8_t signature[] = { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+  return value.size() >= sizeof(signature) && std::memcmp(value.data(), signature, sizeof(signature)) == 0;
 }
 
 HRESULT ReadExact(IStream* stream, void* destination, ULONG bytes) {
@@ -88,8 +116,88 @@ HRESULT ReadEmbeddedPreview(IStream* stream, std::vector<uint8_t>* preview) {
 
   preview->resize(compressedSize);
   result = ReadExact(stream, preview->data(), compressedSize);
-  if (FAILED(result)) preview->clear();
+  if (FAILED(result) || !IsPng(*preview)) { preview->clear(); return E_FAIL; }
   return result;
+}
+
+struct YoiSuperblock {
+  uint64_t generation = 0;
+  uint64_t snapshotOffset = 0;
+  uint64_t snapshotLength = 0;
+  uint64_t previewOffset = 0;
+  uint64_t previewLength = 0;
+  uint64_t endOffset = 0;
+};
+
+bool ValidYoiSuperblock(const uint8_t* value, uint64_t fileBytes, YoiSuperblock* output) {
+  if (std::memcmp(value, kYoiSlotMagic, sizeof(kYoiSlotMagic) - 1) != 0
+    || Crc32(value, 64) != ReadU32(value + 64)) return false;
+  YoiSuperblock candidate;
+  candidate.generation = ReadU64(value + 8);
+  candidate.snapshotOffset = ReadU64(value + 16);
+  candidate.snapshotLength = ReadU64(value + 24);
+  candidate.previewOffset = ReadU64(value + 32);
+  candidate.previewLength = ReadU64(value + 40);
+  candidate.endOffset = ReadU64(value + 48);
+  if (!candidate.generation || candidate.snapshotOffset < kYoiHeaderBytes + kYoiSegmentHeaderBytes
+    || !candidate.snapshotLength || candidate.snapshotLength > 64ull * 1024 * 1024
+    || candidate.endOffset > fileBytes || candidate.snapshotOffset > candidate.endOffset
+    || candidate.snapshotLength > candidate.endOffset - candidate.snapshotOffset
+    || candidate.previewLength > kMaximumPreviewBytes) return false;
+  if (candidate.previewLength && (candidate.previewOffset < kYoiHeaderBytes + kYoiSegmentHeaderBytes
+    || candidate.previewOffset > candidate.endOffset || candidate.previewLength > candidate.endOffset - candidate.previewOffset)) return false;
+  *output = candidate;
+  return true;
+}
+
+// Returns S_FALSE only when this is not a v4 YoiStorage file, so callers can
+// fall back to the old ZIP-first-entry reader without scanning the file.
+HRESULT ReadYoiStorageV4Preview(IStream* stream, std::vector<uint8_t>* preview) {
+  LARGE_INTEGER start{};
+  HRESULT result = stream->Seek(start, STREAM_SEEK_SET, nullptr);
+  if (FAILED(result)) return result;
+  std::vector<uint8_t> header(kYoiHeaderBytes);
+  result = ReadExact(stream, header.data(), static_cast<ULONG>(header.size()));
+  if (FAILED(result)) return S_FALSE;
+  if (std::memcmp(header.data(), kYoiMagic, sizeof(kYoiMagic) - 1) != 0) return S_FALSE;
+  if (ReadU32(header.data() + 8) != 4 || ReadU32(header.data() + 12) != kYoiHeaderBytes) return E_FAIL;
+
+  STATSTG stat{};
+  result = stream->Stat(&stat, STATFLAG_NONAME);
+  if (FAILED(result) || stat.cbSize.QuadPart < kYoiHeaderBytes) return E_FAIL;
+  const uint64_t fileBytes = static_cast<uint64_t>(stat.cbSize.QuadPart);
+  bool found = false;
+  YoiSuperblock selected;
+  for (uint64_t offset : kYoiSuperblockOffsets) {
+    YoiSuperblock candidate;
+    const auto* slot = header.data() + offset;
+    if (!ValidYoiSuperblock(slot, fileBytes, &candidate)) continue;
+    if (!found || candidate.generation > selected.generation) { selected = candidate; found = true; }
+  }
+  if (!found || !selected.previewLength) return E_FAIL;
+
+  const uint64_t segmentOffset = selected.previewOffset - kYoiSegmentHeaderBytes;
+  if (segmentOffset > 0x7fffffffffffffffULL) return E_FAIL;
+  LARGE_INTEGER seek{};
+  seek.QuadPart = static_cast<LONGLONG>(segmentOffset);
+  result = stream->Seek(seek, STREAM_SEEK_SET, nullptr);
+  if (FAILED(result)) return result;
+  uint8_t segment[kYoiSegmentHeaderBytes];
+  result = ReadExact(stream, segment, sizeof(segment));
+  if (FAILED(result) || std::memcmp(segment, kYoiSegmentMagic, sizeof(kYoiSegmentMagic) - 1) != 0
+    || ReadU32(segment + 8) != 3 || ReadU32(segment + 12) != kYoiSegmentHeaderBytes
+    || ReadU64(segment + 16) != selected.previewLength) return E_FAIL;
+
+  preview->resize(static_cast<size_t>(selected.previewLength));
+  result = ReadExact(stream, preview->data(), static_cast<ULONG>(preview->size()));
+  if (FAILED(result) || !IsPng(*preview)) { preview->clear(); return E_FAIL; }
+  return S_OK;
+}
+
+HRESULT ReadProjectPreview(IStream* stream, std::vector<uint8_t>* preview) {
+  const HRESULT v4 = ReadYoiStorageV4Preview(stream, preview);
+  if (v4 != S_FALSE) return v4;
+  return ReadEmbeddedPreview(stream, preview);
 }
 
 template <typename T>
@@ -196,7 +304,7 @@ class ThumbnailProvider final : public IThumbnailProvider, public IInitializeWit
   STDMETHODIMP Initialize(IStream* stream, DWORD) override {
     if (!stream || initialized_) return initialized_ ? STG_E_ACCESSDENIED : E_INVALIDARG;
     initialized_ = true;
-    return ReadEmbeddedPreview(stream, &preview_);
+    return ReadProjectPreview(stream, &preview_);
   }
 
   STDMETHODIMP GetThumbnail(UINT size, HBITMAP* bitmap, WTS_ALPHATYPE* alphaType) override {

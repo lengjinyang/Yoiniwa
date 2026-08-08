@@ -1,7 +1,8 @@
 import type {
   CacheInfo, ImageItem, ImagePipelinePerformanceStats, ImagePrewarmProgress, ImageThumbnailReady, ImportedImage,
   NativePointerInput, PhotoshopColorSyncResult, PhotoshopDocumentResult, PhotoshopProjectMetadata, PhotoshopVersionRecord,
-  PickedColor, RecentScene, Scene, WindowState, PhotoshopDocumentInfoResult,
+  PickedColor, ProjectCommitRequest, ProjectCommitResult, ProjectOpenResult, ProjectStorageStats, RecentScene, Scene,
+  WindowState, PhotoshopDocumentInfoResult,
 } from '../types.js';
 
 export interface IpcContract<Args extends unknown[], Result> {
@@ -17,9 +18,13 @@ export interface IpcContractMap {
   'images:prewarm': IpcContract<[ids: string[], requestId: string], { canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   'images:performance-stats': IpcContract<[], ImagePipelinePerformanceStats>;
   'images:sample-pixel': IpcContract<[assetId: string, x: number, y: number], { r: number; g: number; b: number; a: number }>;
-  'scene:save': IpcContract<[scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
-  'scene:autosave': IpcContract<[scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer], { skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
-  'scene:open': IpcContract<[path?: string], { canceled: boolean; path?: string; scene?: Scene; metadata?: PhotoshopProjectMetadata }>;
+  'project:open': IpcContract<[path?: string], ProjectOpenResult>;
+  'project:commit': IpcContract<[request: ProjectCommitRequest], ProjectCommitResult>;
+  'project:save-as': IpcContract<[request: ProjectCommitRequest], ProjectCommitResult>;
+  'project:close': IpcContract<[sessionId?: string], void>;
+  'project:compact': IpcContract<[sessionId?: string], ProjectStorageStats | { skipped: true; message?: string }>;
+  'project:stats': IpcContract<[sessionId?: string], ProjectStorageStats>;
+  'project:recover': IpcContract<[sessionId?: string], { recovered: boolean; sessionId: string }>;
   'scene:import': IpcContract<[], { canceled: boolean; path?: string; scene?: Scene }>;
   'scene:recent': IpcContract<[], RecentScene[]>;
   'scene:startup-path': IpcContract<[], string | null>;
@@ -38,12 +43,14 @@ export interface IpcContractMap {
   'photoshop:open-rendered': IpcContract<[data: ArrayBuffer, name: string], PhotoshopDocumentResult>;
   'photoshop:get-document-info': IpcContract<[], PhotoshopDocumentInfoResult>;
   'photoshop:create-version': IpcContract<[
-    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number, preview?: ArrayBuffer,
-  ], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; version?: PhotoshopVersionRecord; message?: string }>;
-  'photoshop:open-version': IpcContract<[versionId: string], PhotoshopDocumentResult>;
+    sessionId: string | undefined, scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string,
+    revision?: number, preview?: ArrayBuffer,
+  ], ProjectCommitResult & { version?: PhotoshopVersionRecord; message?: string }>;
+  'photoshop:open-version': IpcContract<[sessionId: string | undefined, versionId: string], PhotoshopDocumentResult>;
   'photoshop:delete-version': IpcContract<[
-    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number, preview?: ArrayBuffer,
-  ], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; message?: string }>;
+    sessionId: string | undefined, scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string,
+    revision?: number, preview?: ArrayBuffer,
+  ], ProjectCommitResult & { message?: string }>;
   'window:set-mode': IpcContract<[mode: Partial<WindowState>], WindowState>;
   'window:get-mode': IpcContract<[], WindowState>;
   'window:get-work-area': IpcContract<[point?: { x: number; y: number }], { left: number; top: number; right: number; bottom: number }>;
@@ -65,6 +72,7 @@ export interface IpcEventMap {
   'window:click-through-disabled': void;
   'window:toggle-collaboration-requested': void;
   'window:native-pointer': NativePointerInput;
+  'window:native-zoom': 'in' | 'out';
 }
 
 export type IpcChannel = keyof IpcContractMap;

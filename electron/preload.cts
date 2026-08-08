@@ -23,16 +23,19 @@ contextBridge.exposeInMainWorld('refCanvas', {
     return () => ipcRenderer.removeListener('images:thumbnail-ready', handler);
   },
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || undefined; } catch { return undefined; } },
-  saveScene: (scene, saveAs, revision, metadata, preview) => invoke('scene:save', scene, saveAs, revision, metadata, preview),
-  autosaveScene: (scene, revision, metadata, preview) => invoke('scene:autosave', scene, revision, metadata, preview),
-  resetScenePath: () => ipcRenderer.send('scene:reset-path'),
+  openProject: (path) => invoke('project:open', path),
+  commitProject: (request) => invoke('project:commit', request),
+  saveProjectAs: (request) => invoke('project:save-as', request),
+  closeProject: (sessionId) => invoke('project:close', sessionId),
+  compactProject: (sessionId) => invoke('project:compact', sessionId),
+  projectStats: (sessionId) => invoke('project:stats', sessionId),
+  recoverProject: (sessionId) => invoke('project:recover', sessionId),
   consumeStartupPath: () => invoke('scene:startup-path'),
   onExternalOpen: (callback) => {
     const handler = (_event, path) => callback(path);
     ipcRenderer.on('scene:external-open', handler);
     return () => ipcRenderer.removeListener('scene:external-open', handler);
   },
-  openScene: (path) => invoke('scene:open', path),
   importScene: () => invoke('scene:import'),
   recentScenes: () => invoke('scene:recent'),
   getCacheInfo: () => invoke('cache:info'),
@@ -52,9 +55,9 @@ contextBridge.exposeInMainWorld('refCanvas', {
   placeRenderedLayersInPhotoshop: (images) => invoke('photoshop:place-rendered-layers', images),
   openRenderedInPhotoshop: (data, name) => invoke('photoshop:open-rendered', data, name),
   getPhotoshopDocumentInfo: () => invoke('photoshop:get-document-info'),
-  createPhotoshopVersion: (scene, metadata, name, note, revision, preview) => invoke('photoshop:create-version', scene, metadata, name, note, revision, preview),
-  openPhotoshopVersion: (versionId) => invoke('photoshop:open-version', versionId),
-  deletePhotoshopVersion: (scene, metadata, versionId, revision, preview) => invoke('photoshop:delete-version', scene, metadata, versionId, revision, preview),
+  createPhotoshopVersion: (sessionId, scene, metadata, name, note, revision, preview) => invoke('photoshop:create-version', sessionId, scene, metadata, name, note, revision, preview),
+  openPhotoshopVersion: (sessionId, versionId) => invoke('photoshop:open-version', sessionId, versionId),
+  deletePhotoshopVersion: (sessionId, scene, metadata, versionId, revision, preview) => invoke('photoshop:delete-version', sessionId, scene, metadata, versionId, revision, preview),
   setWindowMode: (mode) => invoke('window:set-mode', mode),
   getWindowMode: () => invoke('window:get-mode'),
   getWindowWorkArea: (point) => invoke('window:get-work-area', point),
@@ -88,5 +91,10 @@ contextBridge.exposeInMainWorld('refCanvas', {
     const handler = (_event, input) => callback(input);
     ipcRenderer.on('window:native-pointer', handler);
     return () => ipcRenderer.removeListener('window:native-pointer', handler);
+  },
+  onNativeZoom: (callback) => {
+    const handler = (_event, direction) => callback(direction);
+    ipcRenderer.on('window:native-zoom', handler);
+    return () => ipcRenderer.removeListener('window:native-zoom', handler);
   },
 });

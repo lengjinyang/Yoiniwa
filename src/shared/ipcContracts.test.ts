@@ -3,14 +3,15 @@ import type { IpcArgs, IpcChannel, IpcContract, IpcContractMap, IpcEventMap, Ipc
 
 const contractAssertions: [
   IpcContract<[], string> extends { args: []; result: string } ? true : false,
-  IpcArgs<'scene:save'> extends IpcContractMap['scene:save']['args'] ? true : false,
+  IpcArgs<'project:commit'> extends IpcContractMap['project:commit']['args'] ? true : false,
   IpcResult<'window:get-mode'> extends IpcContractMap['window:get-mode']['result'] ? true : false,
   'images:prewarm-progress' extends keyof IpcEventMap ? true : false,
 ] = [true, true, true, true];
 
 const invokeChannels = [
   'images:import', 'images:register-paths', 'images:register-urls', 'images:register-clipboard', 'images:prewarm',
-  'images:performance-stats', 'images:sample-pixel', 'scene:save', 'scene:autosave', 'scene:open', 'scene:import', 'scene:recent',
+  'images:performance-stats', 'images:sample-pixel', 'project:open', 'project:commit', 'project:save-as',
+  'project:close', 'project:compact', 'project:stats', 'project:recover', 'scene:import', 'scene:recent',
   'scene:startup-path', 'cache:info', 'cache:choose-location', 'cache:reset-location', 'image:export',
   'image:copy', 'image:show-source', 'photoshop:set-foreground', 'window:set-mode', 'window:get-mode',
   'window:set-collaboration-shortcut', 'window:get-collaboration-shortcut',

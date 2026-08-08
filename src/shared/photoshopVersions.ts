@@ -33,11 +33,15 @@ function versionRecord(value: unknown): PhotoshopVersionRecord | undefined {
     || !Number.isInteger(version.layerCount) || Number(version.layerCount) < 0
     || !format || !Number.isSafeInteger(version.byteLength) || Number(version.byteLength) < 1
     || typeof version.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(version.sha256)
-    || typeof version.archiveEntry !== 'string'
-    || version.archiveEntry !== `photoshop-versions/${version.id}.${format}`
+    || (version.blobId !== undefined && (typeof version.blobId !== 'string' || version.blobId !== version.sha256))
+    || (version.archiveEntry !== undefined && (typeof version.archiveEntry !== 'string'
+      || version.archiveEntry !== `photoshop-versions/${version.id}.${format}`))
+    || (version.blobId === undefined && version.archiveEntry === undefined)
     || typeof version.previewAssetId !== 'string' || previewAsset?.id !== version.previewAssetId
     || (version.note !== undefined && (typeof version.note !== 'string' || version.note.length > 4000))) return undefined;
-  return { ...version, name: version.name.trim(), note: typeof version.note === 'string' && version.note.trim() ? version.note.trim() : undefined,
+  return { ...version, blobId: typeof version.blobId === 'string' ? version.blobId : undefined,
+    archiveEntry: typeof version.archiveEntry === 'string' ? version.archiveEntry : undefined,
+    name: version.name.trim(), note: typeof version.note === 'string' && version.note.trim() ? version.note.trim() : undefined,
     format, previewAsset } as unknown as PhotoshopVersionRecord;
 }
 
@@ -53,4 +57,3 @@ export function normalizePhotoshopProjectMetadata(value: unknown): PhotoshopProj
   });
   return { versions };
 }
-
