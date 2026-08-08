@@ -174,6 +174,40 @@ export interface PhotoshopColorSyncResult {
   message?: string;
 }
 
+export interface PhotoshopDocumentResult {
+  ok: boolean;
+  status: 'completed' | 'not-running' | 'no-document' | 'automation-error' | 'unsupported' | 'blocked';
+  message?: string;
+}
+
+export interface PhotoshopDocumentInfoResult {
+  ok: boolean;
+  status: PhotoshopDocumentResult['status'];
+  documentName?: string;
+  message?: string;
+}
+
+export interface PhotoshopVersionRecord {
+  id: string;
+  name: string;
+  note?: string;
+  createdAt: string;
+  documentName: string;
+  width: number;
+  height: number;
+  colorMode: string;
+  bitDepth: number;
+  layerCount: number;
+  format: 'psd' | 'psb';
+  byteLength: number;
+  sha256: string;
+  archiveEntry: string;
+  previewAssetId: string;
+  previewAsset: AssetRecord;
+}
+
+export interface PhotoshopProjectMetadata { versions: PhotoshopVersionRecord[] }
+
 export interface RecentScene { path: string; name: string; openedAt: string; assetIds?: string[] }
 
 export interface CacheInfo {
@@ -232,18 +266,19 @@ interface RefCanvasAPI {
   registerImagePaths(paths: string[], sourceType: ImageItem['sourceType']): Promise<ImportedImage[]>;
   registerImageUrls(urls: string[]): Promise<ImportedImage[]>;
   registerClipboardImage(): Promise<ImportedImage[]>;
+  startImageDrag(assetIds: string[]): void;
   prewarmImages(ids: string[], requestId: string): Promise<{ canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   boostImageResource(key: string, priority: number): void;
   cancelPrewarmImages(requestId: string): void;
   onPrewarmProgress(callback: (progress: ImagePrewarmProgress) => void): () => void;
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
   pathForFile(file: File): string | undefined;
-  saveScene(scene: Scene, saveAs?: boolean, revision?: number): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number }>;
-  autosaveScene(scene: Scene, revision?: number): Promise<{ skipped?: boolean; path?: string; scene?: Scene; revision?: number }>;
+  saveScene(scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  autosaveScene(scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata): Promise<{ skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
   resetScenePath(): void;
   consumeStartupPath(): Promise<string | null>;
   onExternalOpen(callback: (path: string) => void): () => void;
-  openScene(path?: string): Promise<{ canceled: boolean; path?: string; scene?: Scene }>;
+  openScene(path?: string): Promise<{ canceled: boolean; path?: string; scene?: Scene; metadata?: PhotoshopProjectMetadata }>;
   importScene(): Promise<{ canceled: boolean; path?: string; scene?: Scene }>;
   recentScenes(): Promise<RecentScene[]>;
   getCacheInfo(): Promise<CacheInfo>;
@@ -262,8 +297,20 @@ interface RefCanvasAPI {
     color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,
     returnFocus?: boolean,
   ): Promise<PhotoshopColorSyncResult>;
+  placeRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
+  placeRenderedLayersInPhotoshop(images: Array<{ data: ArrayBuffer; name: string }>): Promise<PhotoshopDocumentResult>;
+  openRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
+  getPhotoshopDocumentInfo(): Promise<PhotoshopDocumentInfoResult>;
+  createPhotoshopVersion(
+    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number,
+  ): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; version?: PhotoshopVersionRecord; message?: string }>;
+  openPhotoshopVersion(versionId: string): Promise<PhotoshopDocumentResult>;
+  deletePhotoshopVersion(
+    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number,
+  ): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; message?: string }>;
   setWindowMode(mode: Partial<WindowState>): Promise<WindowState>;
   getWindowMode(): Promise<WindowState>;
+  getWindowWorkArea(point?: { x: number; y: number }): Promise<{ left: number; top: number; right: number; bottom: number }>;
   setCollaborationShortcut(shortcut: string): Promise<{ ok: boolean; shortcut: string; message?: string }>;
   getCollaborationShortcut(): Promise<{ shortcut: string }>;
   isKeyDown(key: 'Space'): Promise<boolean>;

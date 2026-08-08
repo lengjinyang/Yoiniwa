@@ -44,7 +44,7 @@ function combinedBounds(items: ImageItem[], groups: ImageGroup[], visualNotes?: 
 
 export async function renderItems(
   items: ImageItem[], background?: string, groups: ImageGroup[] = [], backgroundOpacity = 1,
-  visualNotes?: VisualNotesState,
+  visualNotes?: VisualNotesState, options: { margin?: number; maxSide?: number; pixelScale?: number } = {},
 ): Promise<ArrayBuffer> {
   const visibility = exportVisibility(groups);
   const visibleGroups = groups.filter((group) => !visibility.hiddenGroups.has(group.id));
@@ -56,9 +56,11 @@ export async function renderItems(
       && (mark.anchor.type === 'scene' || visibleImageIds.has(mark.anchor.imageId))),
   } : visualNotes;
   const bounds = combinedBounds(visibleItems, visibleGroups, exportNotes);
-  const margin = 24;
-  const maxSide = 12000;
-  const scale = Math.min(1, maxSide / Math.max(bounds.width + margin * 2, bounds.height + margin * 2));
+  const margin = Math.max(0, options.margin ?? 24);
+  const maxSide = Math.max(1, options.maxSide ?? 12000);
+  const requestedScale = Math.max(1, options.pixelScale ?? 1);
+  const scale = requestedScale * Math.min(1,
+    maxSide / (Math.max(bounds.width + margin * 2, bounds.height + margin * 2) * requestedScale));
   const worker = new ExportSceneWorker();
   try {
     return await new Promise<ArrayBuffer>((resolve, reject) => {

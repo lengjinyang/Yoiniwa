@@ -437,7 +437,7 @@ export async function runProjectZoomBenchmark({
     await writeScenePackage(migratedPath, migratedScene);
     const saveMs = performance.now() - saveStartedAt;
     const reopenStartedAt = performance.now();
-    const reopenedScene = await readScenePackage(migratedPath);
+    const { scene: reopenedScene } = await readScenePackage(migratedPath);
     const reopenMs = performance.now() - reopenStartedAt;
     const projectShape = (scene) => ({
       version: scene.version, viewport: scene.viewport,

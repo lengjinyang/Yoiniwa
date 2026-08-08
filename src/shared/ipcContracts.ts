@@ -1,6 +1,7 @@
 import type {
   CacheInfo, ImageItem, ImagePipelinePerformanceStats, ImagePrewarmProgress, ImageThumbnailReady, ImportedImage,
-  NativePointerInput, PhotoshopColorSyncResult, PickedColor, RecentScene, Scene, WindowState,
+  NativePointerInput, PhotoshopColorSyncResult, PhotoshopDocumentResult, PhotoshopProjectMetadata, PhotoshopVersionRecord,
+  PickedColor, RecentScene, Scene, WindowState, PhotoshopDocumentInfoResult,
 } from '../types.js';
 
 export interface IpcContract<Args extends unknown[], Result> {
@@ -16,9 +17,9 @@ export interface IpcContractMap {
   'images:prewarm': IpcContract<[ids: string[], requestId: string], { canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   'images:performance-stats': IpcContract<[], ImagePipelinePerformanceStats>;
   'images:sample-pixel': IpcContract<[assetId: string, x: number, y: number], { r: number; g: number; b: number; a: number }>;
-  'scene:save': IpcContract<[scene: Scene, saveAs?: boolean, revision?: number], { canceled: boolean; path?: string; scene?: Scene; revision?: number }>;
-  'scene:autosave': IpcContract<[scene: Scene, revision?: number], { skipped?: boolean; path?: string; scene?: Scene; revision?: number }>;
-  'scene:open': IpcContract<[path?: string], { canceled: boolean; path?: string; scene?: Scene }>;
+  'scene:save': IpcContract<[scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  'scene:autosave': IpcContract<[scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata], { skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  'scene:open': IpcContract<[path?: string], { canceled: boolean; path?: string; scene?: Scene; metadata?: PhotoshopProjectMetadata }>;
   'scene:import': IpcContract<[], { canceled: boolean; path?: string; scene?: Scene }>;
   'scene:recent': IpcContract<[], RecentScene[]>;
   'scene:startup-path': IpcContract<[], string | null>;
@@ -32,8 +33,20 @@ export interface IpcContractMap {
     color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,
     returnFocus?: boolean,
   ], PhotoshopColorSyncResult>;
+  'photoshop:place-rendered': IpcContract<[data: ArrayBuffer, name: string], PhotoshopDocumentResult>;
+  'photoshop:place-rendered-layers': IpcContract<[images: Array<{ data: ArrayBuffer; name: string }>], PhotoshopDocumentResult>;
+  'photoshop:open-rendered': IpcContract<[data: ArrayBuffer, name: string], PhotoshopDocumentResult>;
+  'photoshop:get-document-info': IpcContract<[], PhotoshopDocumentInfoResult>;
+  'photoshop:create-version': IpcContract<[
+    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number,
+  ], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; version?: PhotoshopVersionRecord; message?: string }>;
+  'photoshop:open-version': IpcContract<[versionId: string], PhotoshopDocumentResult>;
+  'photoshop:delete-version': IpcContract<[
+    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number,
+  ], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; message?: string }>;
   'window:set-mode': IpcContract<[mode: Partial<WindowState>], WindowState>;
   'window:get-mode': IpcContract<[], WindowState>;
+  'window:get-work-area': IpcContract<[point?: { x: number; y: number }], { left: number; top: number; right: number; bottom: number }>;
   'window:set-collaboration-shortcut': IpcContract<[shortcut: string], { ok: boolean; shortcut: string; message?: string }>;
   'window:get-collaboration-shortcut': IpcContract<[], { shortcut: string }>;
   'window:is-key-down': IpcContract<[key: 'Space'], boolean>;

@@ -23,7 +23,7 @@ async function temporaryDirectory() {
 
 function assetRecord(buffer: Buffer) {
   const hash = createHash('sha256').update(buffer).digest('hex');
-  return { id: hash, hash, mimeType: 'application/octet-stream', byteLength: buffer.length, naturalWidth: 1, naturalHeight: 1 };
+  return { id: hash, hash, mimeType: 'application/octet-stream', byteLength: buffer.length, naturalWidth: 1, naturalHeight: 1, originalName: 'asset.bin' };
 }
 
 async function writePackage(filePath: string, manifest: any, assets: Array<{ record: any; buffer: Buffer }> = []) {
@@ -68,7 +68,7 @@ describe('scene package extraction limits', () => {
     const directory = await temporaryDirectory();
     const filePath = path.join(directory, 'version-one.refcanvas');
     await writePackage(filePath, manifest([], { version: 1 }));
-    await expect(packageReader(path.join(directory, 'cache'))(filePath)).resolves.toMatchObject({ version: 1 });
+    await expect(packageReader(path.join(directory, 'cache'))(filePath)).resolves.toMatchObject({ scene: { version: 1 }, metadata: { versions: [] } });
   });
 
   it('reads the recent-project asset index without extracting source images', async () => {
@@ -129,7 +129,7 @@ describe('scene package extraction limits', () => {
     const buffer = Buffer.from('12345678');
     const record = assetRecord(buffer);
     await writePackage(filePath, manifest([record]), [{ record, buffer }]);
-    await expect(packageReader(path.join(directory, 'cache'))(filePath)).resolves.toMatchObject({ format: 'refcanvas', version: 2 });
+    await expect(packageReader(path.join(directory, 'cache'))(filePath)).resolves.toMatchObject({ scene: { format: 'refcanvas', version: 2 } });
   });
 
   it('replaces a same-sized corrupt cache entry with the verified package asset', async () => {
@@ -162,5 +162,49 @@ describe('scene package extraction limits', () => {
     await expect(packages.writeScenePackage(filePath, failingScene)).rejects.toThrow('source unavailable');
     await expect(fs.readFile(filePath)).resolves.toEqual(original);
     await expect(fs.stat(`${filePath}.${process.pid}.tmp`)).rejects.toThrow();
+  });
+
+  it('embeds, verifies and preserves a layered Photoshop version across ordinary saves', async () => {
+    const directory = await temporaryDirectory();
+    const filePath = path.join(directory, 'versions.refcanvas');
+    const cacheDirectory = path.join(directory, 'cache');
+    await fs.mkdir(cacheDirectory);
+    const previewBuffer = Buffer.from('preview');
+    const preview = assetRecord(previewBuffer);
+    const previewPath = path.join(cacheDirectory, `${preview.id}.bin`);
+    await fs.writeFile(previewPath, previewBuffer);
+    const layeredBuffer = Buffer.from('layered-photoshop-document');
+    const layeredPath = path.join(directory, 'source.psd');
+    await fs.writeFile(layeredPath, layeredBuffer);
+    const id = '12345678-1234-1234-1234-123456789012';
+    const metadata = { versions: [{
+      id, name: 'v001', createdAt: '2026-08-08T00:00:00.000Z', documentName: 'painting.psd',
+      width: 10, height: 20, colorMode: 'RGB', bitDepth: 8, layerCount: 4, format: 'psd' as const,
+      byteLength: layeredBuffer.length, sha256: createHash('sha256').update(layeredBuffer).digest('hex'),
+      archiveEntry: `photoshop-versions/${id}.psd`, previewAssetId: preview.id, previewAsset: preview,
+    }] };
+    const packages = createScenePackages({
+      assetRegistry: new Map(), assetCachePath: (value) => path.join(cacheDirectory, `${value.id}.bin`),
+      ensureAssetFile: async (assetId) => path.join(cacheDirectory, `${assetId}.bin`),
+      extByMime: { 'application/octet-stream': '.bin' }, limits: defaultLimits,
+    });
+    const scene = manifest([preview], { assets: { [preview.id]: preview } });
+    await packages.writeScenePackage(filePath, scene, metadata, new Map([[id, layeredPath]]));
+    const opened = await packages.readScenePackage(filePath);
+    expect(opened.metadata.versions).toHaveLength(1);
+    await packages.writeScenePackage(filePath, opened.scene, opened.metadata);
+    const extractedPath = path.join(directory, 'extracted.psd');
+    await packages.extractPhotoshopVersion(filePath, opened.metadata.versions[0], extractedPath);
+    await expect(fs.readFile(extractedPath)).resolves.toEqual(layeredBuffer);
+
+    const saveAsPath = path.join(directory, 'versions-copy.refcanvas');
+    await packages.writeScenePackage(saveAsPath, opened.scene, opened.metadata, new Map(), filePath);
+    const copiedVersionPath = path.join(directory, 'copied.psd');
+    await packages.extractPhotoshopVersion(saveAsPath, opened.metadata.versions[0], copiedVersionPath);
+    await expect(fs.readFile(copiedVersionPath)).resolves.toEqual(layeredBuffer);
+
+    const missingPreviewPath = path.join(directory, 'missing-preview.refcanvas');
+    await writePackage(missingPreviewPath, manifest([], { version: 3, photoshopProject: metadata }));
+    await expect(packages.readScenePackage(missingPreviewPath)).rejects.toThrow('缺少 Photoshop 版本预览');
   });
 });

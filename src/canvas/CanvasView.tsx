@@ -31,6 +31,7 @@ interface CanvasViewProps {
   onColorPicked(color: PickedColor): void;
   onFocusItem(item: ImageItem): void;
   onContextMenu(position: { x: number; y: number }): void;
+  onExternalImageDrag?(items: ImageItem[]): (() => void) | undefined;
   windowLocked: boolean;
   onWindowMoveStart(): void;
   onWindowMove(): void;
@@ -48,6 +49,7 @@ export function CanvasView({
   onRenameGroup,
   onOpenGroupMenu, onExpandGroup, groupMenuOpen, onGroupPreviewAnchor,
   colorPickerHeld, colorPickerShortcut, onColorPicked, onFocusItem, onContextMenu,
+  onExternalImageDrag,
   windowLocked, onWindowMoveStart, onWindowMove, onWindowMoveEnd,
   drawingCollaborationMode,
   visualNotesState, visualNotesTemporaryHidden, onVisualNotesChanged, onVisualNoteSelectionChange,
@@ -70,6 +72,7 @@ export function CanvasView({
   const groupPreviewAnchorRef = useRef(onGroupPreviewAnchor);
   const colorPickedRef = useRef(onColorPicked);
   const focusItemRef = useRef(onFocusItem); const contextMenuRef = useRef(onContextMenu);
+  const externalImageDragRef = useRef(onExternalImageDrag);
   const windowMoveStartRef = useRef(onWindowMoveStart); const windowMoveRef = useRef(onWindowMove); const windowMoveEndRef = useRef(onWindowMoveEnd);
   const visualNotesChangedRef = useRef(onVisualNotesChanged);
   const visualNoteSelectionRef = useRef(onVisualNoteSelectionChange);
@@ -85,6 +88,7 @@ export function CanvasView({
   groupPreviewAnchorRef.current = onGroupPreviewAnchor;
   colorPickedRef.current = onColorPicked;
   focusItemRef.current = onFocusItem; contextMenuRef.current = onContextMenu;
+  externalImageDragRef.current = onExternalImageDrag;
   windowMoveStartRef.current = onWindowMoveStart; windowMoveRef.current = onWindowMove; windowMoveEndRef.current = onWindowMoveEnd;
   visualNotesChangedRef.current = onVisualNotesChanged;
   visualNoteSelectionRef.current = onVisualNoteSelectionChange;
@@ -106,6 +110,7 @@ export function CanvasView({
       onGroupPreviewAnchor: (id, position) => groupPreviewAnchorRef.current(id, position),
       onColorPicked: (color) => colorPickedRef.current(color), onFocusItem: (item) => focusItemRef.current(item),
       onContextMenu: (position) => contextMenuRef.current(position),
+      onExternalImageDrag: (items) => externalImageDragRef.current?.(items),
       onWindowMoveStart: () => windowMoveStartRef.current(), onWindowMove: () => windowMoveRef.current(),
       onWindowMoveEnd: () => windowMoveEndRef.current(),
       onVisualNotesChanged: (notes) => visualNotesChangedRef.current(notes),

@@ -37,6 +37,7 @@ export interface CanvasRuntimeOptions {
   onGroupPreviewAnchor?(id: string, position: { x: number; y: number }): void;
   onFocusItem?(item: ImageItem): void;
   onContextMenu?(position: { x: number; y: number }): void;
+  onExternalImageDrag?(items: ImageItem[]): (() => void) | undefined;
   colorPickerHeld?: boolean;
   colorPickerShortcut?: ColorPickerShortcut;
   drawingCollaborationMode?: boolean;
@@ -188,6 +189,7 @@ export class CanvasRuntime {
       interactionBlocked: (event) => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked
         || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0))
         || (this.drawingCollaborationMode && Boolean((event as (PointerEvent & { spaceKey?: boolean }) | undefined)?.spaceKey && event?.button === 0)),
+      externalDrag: (items) => this.options.onExternalImageDrag?.(items),
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
         if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
@@ -262,11 +264,17 @@ export class CanvasRuntime {
         const image = topmostImageAtPoint(this.sceneStore?.images() ?? [], point);
         if (image) {
           this.selectionController?.setGroupSelection(undefined);
-          this.selectionController?.setSelection([image.id]);
           this.renderer.setSelectedGroup(undefined);
-          this.renderer.setSelectedImageCount(1);
           this.options.onGroupSelectionChange?.(undefined);
-          this.options.onSelectionChange?.([image.id]);
+          if (!this.selectionController?.hasSelection(image.id)) {
+            this.selectionController?.setSelection([image.id]);
+            this.renderer.setSelectedImageCount(1);
+            this.options.onSelectionChange?.([image.id]);
+          } else {
+            const selectedIds = this.selectionController.selectedIds();
+            this.renderer.setSelectedImageCount(selectedIds.length);
+            this.options.onSelectionChange?.(selectedIds);
+          }
         }
       }
       this.options.onContextMenu?.({ x: event.clientX, y: event.clientY });

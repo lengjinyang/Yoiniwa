@@ -8,14 +8,14 @@ import { renderItems } from './exportScene';
 import { applyLayout, type LayoutAction } from './layout';
 import { matchesColorPickerShortcut, MAX_ZOOM, MIN_ZOOM, type ColorPickerShortcut } from './interactions';
 import { arrangeImportedItems } from './importPlacement';
-import { preloadImagePreview } from './imageResources';
+import { imageSource, preloadImagePreview } from './imageResources';
 import { groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from './outline';
 import { startOperation, settleOperation, clearOperation, type OperationKind, type OperationState } from './operationState';
 import { addMemberToGroup, createGroupFrame, createScene, detachImageFromGroup, fitAutoGroupsToContents, fitGroupToContents, groupVisibleBounds, itemBounds, memberBounds, moveGroupWithContents, reconcileAllMemberships, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
 import type { GroupFrameBounds } from './canvas/selection/GroupResizeController';
 import { captureSceneSelection, pasteScenePayload, type SceneClipboardPayload } from './sceneClipboard';
 import { mergeSceneInto } from './sceneMerge';
-import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, RecentScene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
+import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, PhotoshopProjectMetadata, PhotoshopVersionRecord, RecentScene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
 import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
@@ -29,6 +29,7 @@ import './styles/quiet-controls.css';
 import './styles/quiet-surfaces.css';
 import type { VisualNotesToolState } from './canvas/interaction/VisualNotesController';
 import { shouldAutoPhotoshopRoundTrip } from './shared/photoshopIntegration';
+import { EMPTY_PHOTOSHOP_PROJECT_METADATA } from './shared/photoshopVersions';
 import { DEFAULT_SHORTCUTS, loadShortcutPreferences, SHORTCUT_LABELS, shortcutConflict, shortcutFromKeyboardEvent, shortcutMatchesEvent, SHORTCUT_PREFERENCES_STORAGE_KEY, type ShortcutId, type ShortcutPreferences } from './keyboardShortcuts';
 
 const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
@@ -42,6 +43,7 @@ const VISUAL_NOTE_COLOR_OPTIONS = [
   ['#d5d8dc', '白色'], ['#c97c80', '暖红'], ['#c6a15b', '暖黄'],
   ['#78a089', '青绿'], ['#7595b8', '冷蓝'], ['#9383ae', '灰紫'],
 ] as const;
+const PHOTOSHOP_VERSION_PREVIEW_MIME = 'application/x-yoiniwa-photoshop-version';
 
 export default function App() {
   performanceMonitor.markReactRender();
@@ -62,6 +64,13 @@ export default function App() {
   const operationRequestRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
+  const [photoshopVersionsOpen, setPhotoshopVersionsOpen] = useState(false);
+  const [photoshopMetadata, setPhotoshopMetadata] = useState<PhotoshopProjectMetadata>(EMPTY_PHOTOSHOP_PROJECT_METADATA);
+  const photoshopMetadataRef = useRef(photoshopMetadata);
+  photoshopMetadataRef.current = photoshopMetadata;
+  const [versionSaveDialogOpen, setVersionSaveDialogOpen] = useState(false);
+  const [versionName, setVersionName] = useState('');
+  const [versionNote, setVersionNote] = useState('');
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineQuery, setOutlineQuery] = useState('');
   const [visualNotesEnabled, setVisualNotesEnabled] = useState(false);
@@ -101,6 +110,7 @@ export default function App() {
   const lastPointerRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const api = window.refCanvas;
   const autoPhotoshopRoundTrip = shouldAutoPhotoshopRoundTrip(windowMode);
+  const photoshopDocumentBlocked = drawingCollaborationMode || (windowMode.locked && windowMode.alwaysOnTop);
   const activeColorPickerShortcut: ColorPickerShortcut = windowMode.locked ? 'alt' : colorPickerShortcut;
   const autosaveExecuteRef = useRef<(scene: typeof history.scene, revision: number) => Promise<void>>(async () => undefined);
   const autosaveCoordinatorRef = useRef<AutosaveCoordinator | undefined>(undefined);
@@ -108,7 +118,7 @@ export default function App() {
     autosaveCoordinatorRef.current = new AutosaveCoordinator((scene, revision) => autosaveExecuteRef.current(scene, revision));
   }
   autosaveExecuteRef.current = async (scene, revision) => {
-    const result = await api?.autosaveScene(scene, revision);
+    const result = await api?.autosaveScene(scene, revision, photoshopMetadataRef.current);
     if (result?.scene) history.markSaved(result.scene, result.revision ?? revision);
   };
   const performanceSceneRef = useRef(history.scene);
@@ -549,9 +559,10 @@ export default function App() {
     const saveRevision = flushed.revision;
     const requestId = beginOperation('save', '正在保存…');
     try {
-      const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision);
+      const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision, photoshopMetadataRef.current);
       if (!result.canceled) {
         const savedCurrentRevision = history.markSaved(result.scene, result.revision ?? saveRevision);
+        if (result.metadata) setPhotoshopMetadata(result.metadata);
         settleCurrentOperation(requestId, 'success', `已保存至 ${result.path}`);
         setStatus(savedCurrentRevision ? '' : '保存完成，但保存期间产生了新修改');
         api.recentScenes().then(setRecent).catch((error) => setStatus(`刷新最近画板失败：${String(error)}`));
@@ -572,6 +583,7 @@ export default function App() {
       const loaded = loadProjectScene(result.scene);
       if (!result.canceled && validateScene(loaded)) {
         history.load(loaded);
+        setPhotoshopMetadata(result.metadata ?? EMPTY_PHOTOSHOP_PROJECT_METADATA);
         setSelectedIds([]);
         setSelectedGroupId(undefined);
         settleCurrentOperation(requestId, 'success', `已打开 ${result.path}`);
@@ -633,6 +645,7 @@ export default function App() {
     if (history.dirty && !window.confirm('当前更改尚未保存，仍要新建画板吗？')) return;
     api?.resetScenePath();
     history.load(createScene());
+    setPhotoshopMetadata(EMPTY_PHOTOSHOP_PROJECT_METADATA);
     setSelectedIds([]);
     setSelectedGroupId(undefined);
     setStatus('已新建画板');
@@ -1035,6 +1048,103 @@ export default function App() {
     }
   }, [api, beginOperation, clearCurrentOperation, history.scene, selectedItems, settleCurrentOperation, visualNotesTemporaryHidden]);
 
+  const renderSelectedPhotoshopImage = useCallback(async () => {
+    if (!selectedItems.length) throw new Error('请先选择要发送到 Photoshop 的图片');
+    const selectedImageIds = new Set(selectedItems.map((item) => item.id));
+    const pixelScale = Math.max(1, ...selectedItems.map((item) => Math.max(
+      item.crop.width / Math.max(1, item.width),
+      item.crop.height / Math.max(1, item.height),
+    )));
+    const notes = visualNotesTemporaryHidden ? { ...history.scene.visualNotes, visible: false } : {
+      ...history.scene.visualNotes,
+      marks: history.scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'image'
+        && selectedImageIds.has(mark.anchor.imageId)),
+    };
+    return renderItems(selectedItems, undefined, [], 1, notes, { margin: 0, maxSide: 30000, pixelScale });
+  }, [history.scene.visualNotes, selectedItems, visualNotesTemporaryHidden]);
+
+  const renderSelectedPhotoshopLayers = useCallback(async () => {
+    if (!selectedItems.length) throw new Error('请先选择要发送到 Photoshop 的图片');
+    const layerItems = [...selectedItems].sort((left, right) => left.zIndex - right.zIndex);
+    return Promise.all(layerItems.map(async (item) => {
+      const notes = visualNotesTemporaryHidden ? { ...history.scene.visualNotes, visible: false } : {
+        ...history.scene.visualNotes,
+        marks: history.scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'image' && mark.anchor.imageId === item.id),
+      };
+      const pixelScale = Math.max(1,
+        item.crop.width / Math.max(1, item.width), item.crop.height / Math.max(1, item.height));
+      return {
+        data: await renderItems([item], undefined, [], 1, notes, { margin: 0, maxSide: 30000, pixelScale }),
+        name: item.name.replace(/\.[^.]+$/, '') || item.name,
+      };
+    }));
+  }, [history.scene.visualNotes, selectedItems, visualNotesTemporaryHidden]);
+
+  const sendSelectedToPhotoshop = useCallback(async (mode: 'layer' | 'image') => {
+    if (!api || photoshopDocumentBlocked) return;
+    const requestId = beginOperation('photoshop', mode === 'layer' ? '正在发送图层到 Photoshop…' : '正在打开 Photoshop 图像…');
+    try {
+      const result = mode === 'layer'
+        ? await api.placeRenderedLayersInPhotoshop(await renderSelectedPhotoshopLayers())
+        : await api.openRenderedInPhotoshop(await renderSelectedPhotoshopImage(), selectedItems.length === 1
+          ? selectedItems[0].name.replace(/\.[^.]+$/, '') || selectedItems[0].name : `${history.scene.name}-选中`);
+      if (result.ok) settleCurrentOperation(requestId, 'success', result.message ?? 'Photoshop 操作完成');
+      else settleCurrentOperation(requestId, 'error', result.message ?? 'Photoshop 操作失败');
+    } catch (error) { settleCurrentOperation(requestId, 'error', `发送到 Photoshop 失败：${String(error)}`); }
+  }, [api, beginOperation, history.scene.name, photoshopDocumentBlocked, renderSelectedPhotoshopImage, renderSelectedPhotoshopLayers, selectedItems, settleCurrentOperation]);
+
+  const savePhotoshopVersion = useCallback(async () => {
+    if (!api || photoshopDocumentBlocked) return;
+    const name = versionName.trim();
+    if (!name) { setStatus('请输入版本名称'); return; }
+    const flushed = history.flushViewport(liveViewportRef.current);
+    const requestId = beginOperation('photoshop', '正在保存 Photoshop 分层版本…');
+    try {
+      const result = await api.createPhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, name, versionNote, flushed.revision);
+      if (result.canceled) { clearCurrentOperation(requestId); return; }
+      if (!result.version || !result.metadata) throw new Error(result.message ?? 'Photoshop 版本保存失败');
+      history.markSaved(result.scene, result.revision ?? flushed.revision);
+      setPhotoshopMetadata(result.metadata);
+      setVersionSaveDialogOpen(false); setVersionName(''); setVersionNote('');
+      settleCurrentOperation(requestId, 'success', `已保存 Photoshop 版本 ${result.version.name}`);
+    } catch (error) { settleCurrentOperation(requestId, 'error', `保存 Photoshop 版本失败：${String(error)}`); }
+  }, [api, beginOperation, clearCurrentOperation, history, photoshopDocumentBlocked, settleCurrentOperation, versionName, versionNote]);
+
+  const openPhotoshopVersionSaveDialog = useCallback(async () => {
+    if (!api || photoshopDocumentBlocked) return;
+    const result = await api.getPhotoshopDocumentInfo();
+    if (!result.ok || !result.documentName) {
+      setStatus(result.message ?? '无法读取 Photoshop 当前文档名称');
+      return;
+    }
+    setVersionName(result.documentName);
+    setVersionNote('');
+    setVersionSaveDialogOpen(true);
+  }, [api, photoshopDocumentBlocked]);
+
+  const openPhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
+    if (!api || photoshopDocumentBlocked) return;
+    const result = await api.openPhotoshopVersion(version.id);
+    setStatus(result.ok ? (result.message ?? `已打开 ${version.name}`) : (result.message ?? '无法打开 Photoshop 版本'));
+  }, [api, photoshopDocumentBlocked]);
+
+  const deletePhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
+    if (!api || photoshopDocumentBlocked || !window.confirm(`确定删除版本“${version.name}”？此操作会从 .refcanvas 中移除完整分层文件。`)) return;
+    const flushed = history.flushViewport(liveViewportRef.current);
+    const result = await api.deletePhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, version.id, flushed.revision);
+    if (result.metadata) setPhotoshopMetadata(result.metadata);
+    if (result.scene) history.markSaved(result.scene, result.revision ?? flushed.revision);
+    setStatus(result.metadata ? `已删除版本 ${version.name}` : (result.message ?? '删除 Photoshop 版本失败'));
+  }, [api, history, photoshopDocumentBlocked]);
+
+  const placePhotoshopVersionPreview = useCallback(async (version: PhotoshopVersionRecord, placement?: { screenX: number; screenY: number }) => {
+    const source: ImportedImage = {
+      name: `${version.name}.png`, assetId: version.previewAssetId, asset: version.previewAsset, sourceType: 'file',
+    };
+    await prepareAndAddImages([source], placement ?? { screenX: window.innerWidth / 2, screenY: window.innerHeight / 2 });
+    setStatus(`已将版本 ${version.name} 的预览放入画板`);
+  }, [prepareAndAddImages]);
+
   const commands = useMemo(() => createAppCommandRegistry([
     { id: 'edit.undo', enabled: history.canUndo, execute: history.undo },
     { id: 'edit.redo', enabled: history.canRedo, execute: history.redo },
@@ -1214,6 +1324,7 @@ export default function App() {
         setColorPickerHeld(false);
         if (renamingGroupId) setRenamingGroupId(undefined);
         else if (contextMenu) setContextMenu(undefined);
+        else if (photoshopVersionsOpen) setPhotoshopVersionsOpen(false);
         else if (outlineOpen) setOutlineOpen(false);
         else if (propertiesOpen) setPropertiesOpen(false);
         else if (selectedVisualMarkId) setSelectedVisualMarkId(undefined);
@@ -1237,12 +1348,23 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
+  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, photoshopVersionsOpen, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
 
   useEffect(() => {
-    const over = (event: DragEvent) => event.preventDefault();
+    const over = (event: DragEvent) => {
+      event.preventDefault();
+      if (event.dataTransfer?.types.includes(PHOTOSHOP_VERSION_PREVIEW_MIME)) event.dataTransfer.dropEffect = 'copy';
+    };
     const drop = async (event: DragEvent) => {
       event.preventDefault();
+      const versionId = event.dataTransfer?.getData(PHOTOSHOP_VERSION_PREVIEW_MIME);
+      if (versionId) {
+        const version = photoshopMetadataRef.current.versions.find((value) => value.id === versionId);
+        if (version) {
+          await placePhotoshopVersionPreview(version, { screenX: event.clientX, screenY: event.clientY });
+          return;
+        }
+      }
       const supported = /\.(png|jpe?g|webp|bmp|gif)$/i;
       const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith('image/') || supported.test(file.name));
       if (!api) return;
@@ -1288,7 +1410,7 @@ export default function App() {
     window.addEventListener('drop', drop);
     window.addEventListener('paste', paste);
     return () => { window.removeEventListener('dragover', over); window.removeEventListener('drop', drop); window.removeEventListener('paste', paste); };
-  }, [api, prepareAndAddImages]);
+  }, [api, placePhotoshopVersionPreview, prepareAndAddImages]);
 
   useEffect(() => {
     if (!api || new URLSearchParams(window.location.search).get('smoke') !== '1') return;
@@ -1326,7 +1448,14 @@ export default function App() {
   const menuEntries: ContextMenuEntry[] = [
     { type: 'item', label: `${history.scene.name}${history.dirty ? '  • 未保存' : ''}`, disabled: true },
     { type: 'separator' },
-    { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => setOutlineOpen((value) => !value) },
+    { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => setOutlineOpen((value) => {
+      if (!value) setPhotoshopVersionsOpen(false);
+      return !value;
+    }) },
+    { type: 'item', label: '版本视图', checked: photoshopVersionsOpen, action: () => setPhotoshopVersionsOpen((value) => {
+      if (!value) setOutlineOpen(false);
+      return !value;
+    }) },
     { type: 'separator' },
     {
       type: 'item', label: '文件', children: [
@@ -1385,6 +1514,17 @@ export default function App() {
         { type: 'item', label: primary?.grayscale ? '恢复彩色' : '灰度去色', action: () => mutateSelected((item) => { item.grayscale = !item.grayscale; }) },
         { type: 'item', label: '打开源文件位置', disabled: !primary?.sourcePath, action: () => { void showPrimarySource(); } },
       ] : undefined,
+    },
+    {
+      type: 'item', label: '传输', children: [
+        { type: 'item', label: '将选中内容作为图层发送', disabled: !hasImageSelection || photoshopDocumentBlocked,
+          action: () => { void sendSelectedToPhotoshop('layer'); } },
+        { type: 'item', label: '将选中内容作为新图像打开', disabled: !hasImageSelection || photoshopDocumentBlocked,
+          action: () => { void sendSelectedToPhotoshop('image'); } },
+        { type: 'separator' },
+        { type: 'item', label: '保存当前 Photoshop 版本…', disabled: photoshopDocumentBlocked,
+          action: () => { void openPhotoshopVersionSaveDialog(); } },
+      ],
     },
     {
       type: 'item', label: '排列', disabled: layoutTargetCount < 2, children: [
@@ -1569,6 +1709,11 @@ export default function App() {
         onColorPicked={(color) => { void syncPickedColor(color); }}
         onFocusItem={focusItem}
         onContextMenu={(position) => { setPropertiesOpen(false); setGroupActionMenu(undefined); setContextMenu(position); }}
+        onExternalImageDrag={(items) => {
+          if (!api || photoshopDocumentBlocked) return undefined;
+          const assetIds = items.flatMap((item) => item.assetId ? [item.assetId] : []);
+          return assetIds.length ? () => api.startImageDrag(assetIds) : undefined;
+        }}
         windowLocked={windowMode.locked}
         onWindowMoveStart={() => api?.beginWindowMove()}
         onWindowMove={() => api?.updateWindowMove()}
@@ -1647,6 +1792,40 @@ export default function App() {
       </aside>}
     </section>
 
+    {photoshopVersionsOpen && <aside className="photoshop-version-panel no-drag">
+      <header className="photoshop-version-header">
+        <div><strong>版本视图</strong><span className="outline-count">{photoshopMetadata.versions.length}</span></div>
+        <button title="关闭版本面板" aria-label="关闭版本面板" onClick={() => setPhotoshopVersionsOpen(false)}><UiIcon name="close" /></button>
+      </header>
+      <div className="photoshop-version-toolbar">
+        <div><strong>项目版本库</strong><small>{formatBytes(photoshopMetadata.versions.reduce((sum, version) => sum + version.byteLength, 0))}</small></div>
+        <button className="photoshop-version-save-button" disabled={photoshopDocumentBlocked}
+          onClick={() => { void openPhotoshopVersionSaveDialog(); }}><UiIcon name="plus" size={13} />保存版本</button>
+      </div>
+      <div className="photoshop-version-list">
+        {photoshopMetadata.versions.length === 0 && <div className="photoshop-version-empty"><strong>暂无 Photoshop 版本</strong><span>保存版本后，完整 PSD/PSB 会随画板一起保存。</span></div>}
+        {[...photoshopMetadata.versions].reverse().map((version) => <article className="photoshop-version-card" key={version.id}>
+          <div className="photoshop-version-preview" draggable
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'copy';
+              event.dataTransfer.setData(PHOTOSHOP_VERSION_PREVIEW_MIME, version.id);
+            }}
+            onDoubleClick={() => { void placePhotoshopVersionPreview(version); }}>
+            <img src={imageSource({ assetId: version.previewAssetId }, 'original')} alt="" draggable={false} /><span>{version.format.toUpperCase()}</span>
+          </div>
+          <div className="photoshop-version-info"><strong title={version.name}>{version.name}</strong><small title={version.documentName}>{version.documentName}</small>
+            <small>{version.width}×{version.height} · {version.colorMode} · {version.bitDepth} bit</small>
+            <small>{version.layerCount} 层 · {formatBytes(version.byteLength)} · {new Date(version.createdAt).toLocaleString()}</small>
+            {version.note && <p>{version.note}</p>}</div>
+          <div className="photoshop-version-actions">
+            <button disabled={photoshopDocumentBlocked} onClick={() => { void openPhotoshopVersion(version); }}>在 PS 打开</button>
+            <button onClick={() => { void placePhotoshopVersionPreview(version); }}>放入画板</button>
+            <button className="danger" disabled={photoshopDocumentBlocked} onClick={() => { void deletePhotoshopVersion(version); }}><UiIcon name="trash" size={13} />删除</button>
+          </div>
+        </article>)}
+      </div>
+    </aside>}
+
     {outlineOpen && <aside className="outline-panel no-drag">
       <header>
         <div><strong>大纲</strong><span>{history.scene.items.length + history.scene.groups.length}</span></div>
@@ -1698,7 +1877,7 @@ export default function App() {
     {groupActionMenu && groupActionEntries.length > 0 && <ContextMenu variant="group" position={groupActionMenu.position}
       entries={groupActionEntries} onClose={() => setGroupActionMenu(undefined)} />}
 
-    {groupColorEditor && (() => {
+      {groupColorEditor && (() => {
       const group = history.scene.groups.find((value) => value.id === groupColorEditor.id);
       return group ? <ColorControl groupPalette key={group.id} ref={groupColorEditorRef} label="组背景颜色" value={group.color} alpha={group.opacity}
         anchor={groupColorEditor.anchor} onClose={() => setGroupColorEditor(undefined)}
@@ -1713,7 +1892,17 @@ export default function App() {
           const current = scene.groups.find((value) => value.id === group.id);
           if (current) current.opacity = opacity;
         })} /> : null;
-    })()}
+      })()}
+
+      {versionSaveDialogOpen && <div className="photoshop-version-dialog-backdrop no-drag" onPointerDown={(event) => {
+        if (event.target === event.currentTarget) setVersionSaveDialogOpen(false);
+      }}><form className="photoshop-version-dialog" onSubmit={(event) => { event.preventDefault(); void savePhotoshopVersion(); }}>
+        <header><div><strong>保存 Photoshop 版本</strong><span>完整分层 PSD/PSB 将嵌入当前 .refcanvas</span></div>
+          <button type="button" title="取消" onClick={() => setVersionSaveDialogOpen(false)}><UiIcon name="close" /></button></header>
+        <label><span>版本名称</span><input autoFocus maxLength={160} value={versionName} onChange={(event) => setVersionName(event.target.value)} /></label>
+        <label><span>备注（可选）</span><textarea maxLength={4000} rows={4} value={versionNote} onChange={(event) => setVersionNote(event.target.value)} /></label>
+        <footer><button type="button" onClick={() => setVersionSaveDialogOpen(false)}>取消</button><button type="submit" disabled={!versionName.trim()}>保存版本</button></footer>
+      </form></div>}
 
     {renamingGroupId && <div className="group-rename-overlay no-drag" onMouseDown={finishGroupRename}>
       <div className="group-rename-card" onMouseDown={(event) => event.stopPropagation()}>
