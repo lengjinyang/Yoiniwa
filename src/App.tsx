@@ -21,6 +21,7 @@ import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
 import { Button, formatBytes, OutlineThumbnail } from './app/components/CommonControls';
 import { UiIcon, type UiIconName } from './app/components/UiIcon';
+import { PhotoshopVersionComparePanel, type ComparisonMode, type ComparisonPreviewState } from './app/components/PhotoshopVersionComparePanel';
 import { appCommand, createAppCommandRegistry } from './app/AppCommand';
 import { ColorControl, type ColorControlHandle } from './ColorControl';
 import './styles.css';
@@ -45,6 +46,14 @@ const VISUAL_NOTE_COLOR_OPTIONS = [
   ['#78a089', '青绿'], ['#7595b8', '冷蓝'], ['#9383ae', '灰紫'],
 ] as const;
 const PHOTOSHOP_VERSION_PREVIEW_MIME = 'application/x-yoiniwa-photoshop-version';
+
+interface ComparisonPreview {
+  url?: string;
+  state: ComparisonPreviewState;
+  error?: string;
+  capturedAt?: string;
+  documentName?: string;
+}
 
 async function renderProjectPreview(scene: Scene): Promise<ArrayBuffer | undefined> {
   try {
@@ -87,6 +96,13 @@ export default function App() {
   const [versionSaveDialogOpen, setVersionSaveDialogOpen] = useState(false);
   const [versionName, setVersionName] = useState('');
   const [versionNote, setVersionNote] = useState('');
+  const [comparisonVersionId, setComparisonVersionId] = useState<string>();
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('ab');
+  const [comparisonSplit, setComparisonSplit] = useState(50);
+  const [comparisonOpacity, setComparisonOpacity] = useState(50);
+  const [comparisonPreview, setComparisonPreview] = useState<ComparisonPreview>({ state: 'loading' });
+  const comparisonPreviewUrlRef = useRef<string>();
+  const comparisonPreviewRequestRef = useRef(0);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [outlineQuery, setOutlineQuery] = useState('');
   const [visualNotesEnabled, setVisualNotesEnabled] = useState(false);
@@ -128,6 +144,66 @@ export default function App() {
   const autoPhotoshopRoundTrip = shouldAutoPhotoshopRoundTrip(windowMode);
   const photoshopDocumentBlocked = drawingCollaborationMode || (windowMode.locked && windowMode.alwaysOnTop);
   const activeColorPickerShortcut: ColorPickerShortcut = windowMode.locked ? 'alt' : colorPickerShortcut;
+  const revokeComparisonPreview = useCallback(() => {
+    const url = comparisonPreviewUrlRef.current;
+    comparisonPreviewUrlRef.current = undefined;
+    if (url) URL.revokeObjectURL(url);
+  }, []);
+  const resetComparisonPreview = useCallback(() => {
+    comparisonPreviewRequestRef.current += 1;
+    revokeComparisonPreview();
+    setComparisonPreview({ state: 'loading' });
+  }, [revokeComparisonPreview]);
+  const closeVersionComparison = useCallback(() => {
+    resetComparisonPreview();
+    setComparisonVersionId(undefined);
+  }, [resetComparisonPreview]);
+  const captureComparisonPreview = useCallback(async () => {
+    const request = ++comparisonPreviewRequestRef.current;
+    setComparisonPreview((current) => ({ ...current, state: 'loading', error: undefined }));
+    try {
+      const result = await api?.capturePhotoshopPreview();
+      if (!result?.ok || !result.preview) throw new Error(result?.message ?? '无法捕获 Photoshop 当前文档预览');
+      const url = URL.createObjectURL(new Blob([result.preview], { type: 'image/png' }));
+      if (request !== comparisonPreviewRequestRef.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      revokeComparisonPreview();
+      comparisonPreviewUrlRef.current = url;
+      setComparisonPreview({ url, state: 'ready', capturedAt: new Date().toISOString(), documentName: result.documentName });
+    } catch (error) {
+      if (request !== comparisonPreviewRequestRef.current) return;
+      setComparisonPreview((current) => ({ ...current, state: 'error', error: String(error) }));
+    }
+  }, [api, revokeComparisonPreview]);
+  const refreshComparisonPreview = useCallback(() => {
+    if (!comparisonVersionId) return;
+    void captureComparisonPreview();
+  }, [captureComparisonPreview, comparisonVersionId]);
+  const openVersionComparison = useCallback((version: PhotoshopVersionRecord) => {
+    if (photoshopDocumentBlocked) return;
+    resetComparisonPreview();
+    setComparisonVersionId(version.id);
+    setComparisonMode('ab');
+    setComparisonSplit(50);
+    setComparisonOpacity(50);
+    setPhotoshopVersionsOpen(false);
+    void captureComparisonPreview();
+  }, [captureComparisonPreview, photoshopDocumentBlocked, resetComparisonPreview]);
+  const comparisonVersions = useMemo(() => [...photoshopMetadata.versions].reverse(), [photoshopMetadata.versions]);
+  const comparisonVersion = comparisonVersionId
+    ? photoshopMetadata.versions.find((version) => version.id === comparisonVersionId) : undefined;
+  useEffect(() => () => {
+    comparisonPreviewRequestRef.current += 1;
+    revokeComparisonPreview();
+  }, [revokeComparisonPreview]);
+  useEffect(() => {
+    if (comparisonVersionId && !comparisonVersion) closeVersionComparison();
+  }, [closeVersionComparison, comparisonVersion, comparisonVersionId]);
+  useEffect(() => {
+    if (drawingCollaborationMode && comparisonVersionId) closeVersionComparison();
+  }, [closeVersionComparison, comparisonVersionId, drawingCollaborationMode]);
   const autosaveExecuteRef = useRef<(scene: typeof history.scene, revision: number) => Promise<void>>(async () => undefined);
   const autosaveCoordinatorRef = useRef<AutosaveCoordinator | undefined>(undefined);
   if (!autosaveCoordinatorRef.current) {
@@ -619,6 +695,7 @@ export default function App() {
   const open = useCallback(async (path?: string) => {
     if (!api) return;
     if (history.dirty && !window.confirm('当前更改尚未保存，仍要打开其他画板吗？')) return;
+    closeVersionComparison();
     const requestId = beginOperation('open', '正在打开画板…');
     try {
       const result = await api.openProject(path);
@@ -636,7 +713,7 @@ export default function App() {
       } else if (!result.canceled) settleCurrentOperation(requestId, 'error', '无法打开：不是有效的 Yoiniwa 画板');
       else clearCurrentOperation(requestId);
     } catch (error) { settleCurrentOperation(requestId, 'error', `打开失败：${String(error)}`); }
-  }, [api, beginOperation, clearCurrentOperation, history, settleCurrentOperation]);
+  }, [api, beginOperation, clearCurrentOperation, closeVersionComparison, history, settleCurrentOperation]);
 
   const openRef = useRef(open);
   useEffect(() => { openRef.current = open; }, [open]);
@@ -688,6 +765,7 @@ export default function App() {
 
   const newScene = useCallback(() => {
     if (history.dirty && !window.confirm('当前更改尚未保存，仍要新建画板吗？')) return;
+    closeVersionComparison();
     void api?.closeProject(projectSessionIdRef.current);
     projectSessionIdRef.current = undefined;
     history.load(createScene());
@@ -695,7 +773,7 @@ export default function App() {
     setSelectedIds([]);
     setSelectedGroupId(undefined);
     setStatus('已新建画板');
-  }, [api, history]);
+  }, [api, closeVersionComparison, history]);
 
   const mutateSelected = useCallback((updater: (item: ImageItem) => void) => {
     if (!selectedIds.length) return;
@@ -1404,6 +1482,7 @@ export default function App() {
         setColorPickerHeld(false);
         if (renamingGroupId) setRenamingGroupId(undefined);
         else if (contextMenu) setContextMenu(undefined);
+        else if (comparisonVersionId) closeVersionComparison();
         else if (photoshopVersionsOpen) setPhotoshopVersionsOpen(false);
         else if (outlineOpen) setOutlineOpen(false);
         else if (propertiesOpen) setPropertiesOpen(false);
@@ -1428,7 +1507,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [activeColorPickerShortcut, api, commands, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, photoshopVersionsOpen, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
+  }, [activeColorPickerShortcut, api, closeVersionComparison, commands, comparisonVersionId, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, photoshopVersionsOpen, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
 
   useEffect(() => {
     const over = (event: DragEvent) => {
@@ -1528,14 +1607,14 @@ export default function App() {
   const menuEntries: ContextMenuEntry[] = [
     { type: 'item', label: `${history.scene.name}${history.dirty ? '  • 未保存' : ''}`, disabled: true },
     { type: 'separator' },
-    { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => setOutlineOpen((value) => {
-      if (!value) setPhotoshopVersionsOpen(false);
-      return !value;
-    }) },
-    { type: 'item', label: '版本视图', checked: photoshopVersionsOpen, action: () => setPhotoshopVersionsOpen((value) => {
-      if (!value) setOutlineOpen(false);
-      return !value;
-    }) },
+    { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => {
+      if (!outlineOpen) { setPhotoshopVersionsOpen(false); closeVersionComparison(); }
+      setOutlineOpen((value) => !value);
+    } },
+    { type: 'item', label: '版本视图', checked: photoshopVersionsOpen, action: () => {
+      if (!photoshopVersionsOpen) { setOutlineOpen(false); closeVersionComparison(); }
+      setPhotoshopVersionsOpen((value) => !value);
+    } },
     { type: 'separator' },
     {
       type: 'item', label: '文件', children: [
@@ -1877,7 +1956,26 @@ export default function App() {
       </aside>}
     </section>
 
-    {photoshopVersionsOpen && <aside className="photoshop-version-panel no-drag">
+    {comparisonVersion && <PhotoshopVersionComparePanel
+      currentPreviewUrl={comparisonPreview.url}
+      currentPreviewState={comparisonPreview.state}
+      currentPreviewError={comparisonPreview.error}
+      currentCapturedAt={comparisonPreview.capturedAt}
+      currentLabel={comparisonPreview.documentName || 'Photoshop 当前文档'}
+      version={comparisonVersion}
+      versions={comparisonVersions}
+      mode={comparisonMode}
+      split={comparisonSplit}
+      opacity={comparisonOpacity}
+      onModeChange={setComparisonMode}
+      onSplitChange={setComparisonSplit}
+      onOpacityChange={setComparisonOpacity}
+      onVersionChange={setComparisonVersionId}
+      onRefreshCurrent={refreshComparisonPreview}
+      onClose={closeVersionComparison}
+    />}
+
+    {photoshopVersionsOpen && !comparisonVersionId && <aside className="photoshop-version-panel no-drag">
       <header className="photoshop-version-header">
         <div><strong>版本视图</strong><span className="outline-count">{photoshopMetadata.versions.length}</span></div>
         <button title="关闭版本面板" aria-label="关闭版本面板" onClick={() => setPhotoshopVersionsOpen(false)}><UiIcon name="close" /></button>
@@ -1905,6 +2003,7 @@ export default function App() {
           <div className="photoshop-version-actions">
             <button disabled={photoshopDocumentBlocked} onClick={() => { void openPhotoshopVersion(version); }}>在 PS 打开</button>
             <button onClick={() => { void placePhotoshopVersionPreview(version); }}>放入画板</button>
+            <button disabled={photoshopDocumentBlocked} onClick={() => openVersionComparison(version)}><UiIcon name="eye" size={13} />比较</button>
             <button className="danger" disabled={photoshopDocumentBlocked} onClick={() => { void deletePhotoshopVersion(version); }}><UiIcon name="trash" size={13} />删除</button>
           </div>
         </article>)}

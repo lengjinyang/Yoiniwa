@@ -27,7 +27,7 @@ import { closestManifestLevel, readImagePyramidManifest } from './services/image
 import { trimImagePyramidCache } from './services/image-cache-cleaner.js';
 import { WorkerAssetRegistrations } from './services/worker-asset-registrations.js';
 import { collectRecentAssetIds, hydrateRecentAssetIds } from './services/recent-assets.js';
-import type { ImportedImage, PhotoshopColorSyncResult, PhotoshopDocumentInfoResult, PhotoshopProjectMetadata, PhotoshopVersionRecord, Scene } from '../src/types.js';
+import type { ImportedImage, PhotoshopColorSyncResult, PhotoshopDocumentInfoResult, PhotoshopDocumentPreviewResult, PhotoshopProjectMetadata, PhotoshopVersionRecord, Scene } from '../src/types.js';
 import { createDirtyRevisionState, markRevisionSaved, updateDirtyRevision } from '../src/shared/dirtyRevision.js';
 import { PhotoshopColorBridge } from './services/photoshop-color-bridge.js';
 import { shouldAutoPhotoshopRoundTrip, shouldUseFocuslessPhotoshopPicker } from '../src/shared/photoshopIntegration.js';
@@ -1182,6 +1182,13 @@ function projectPreviewBuffer(value: unknown): Buffer | undefined {
   const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   return preview && preview.length >= pngSignature.length && preview.length <= 4 * 1024 * 1024
     && pngSignature.every((byte, index) => preview[index] === byte) ? preview : undefined;
+}
+
+function photoshopPreviewArrayBuffer(value: Buffer): ArrayBuffer | undefined {
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (value.length < pngSignature.length || value.length > 32 * 1024 * 1024
+    || !pngSignature.every((byte, index) => value[index] === byte)) return undefined;
+  return new Uint8Array(value).slice().buffer;
 }
 
 async function readState() {
@@ -2692,6 +2699,35 @@ handleIpc('photoshop:get-document-info', async (): Promise<PhotoshopDocumentInfo
   }
   const result = await enqueuePhotoshopOperation(() => photoshopDocumentBridge.run({ kind: 'document-info' }));
   return { ok: result.ok, status: result.status, message: result.message, documentName: result.documentInfo?.documentName };
+});
+
+handleIpc('photoshop:capture-preview', async (): Promise<PhotoshopDocumentPreviewResult> => {
+  if (photoshopDocumentInteractionBlocked()) {
+    return blockedPhotoshopDocumentResult('无焦点取色模式期间不能读取 Photoshop 当前文档预览，请先退出协作模式或解除锁定置顶');
+  }
+  const temporaryRoot = await fs.mkdtemp(path.join(app.getPath('temp'), 'yoiniwa-photoshop-preview-'));
+  const previewPath = path.join(temporaryRoot, 'current.png');
+  try {
+    const capture = await enqueuePhotoshopOperation(() => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return Promise.resolve(blockedPhotoshopDocumentResult('无焦点取色模式期间不能读取 Photoshop 当前文档预览，请先退出协作模式或解除锁定置顶'));
+      }
+      return photoshopDocumentBridge.run({ kind: 'capture-preview', previewPath });
+    });
+    if (!capture.ok || !capture.preview) {
+      return { ok: false, status: capture.status, message: capture.message ?? '无法捕获 Photoshop 当前文档预览' };
+    }
+    const preview = photoshopPreviewArrayBuffer(await fs.readFile(capture.preview.previewPath));
+    if (!preview) return { ok: false, status: 'automation-error', message: 'Photoshop 当前文档预览不是有效的 PNG 或大小超出限制' };
+    return {
+      ok: true, status: 'completed', message: '已捕获 Photoshop 当前文档预览', preview,
+      documentName: capture.preview.documentName, width: capture.preview.width, height: capture.preview.height,
+      colorMode: capture.preview.colorMode, bitDepth: capture.preview.bitDepth,
+      layerCount: capture.preview.layerCount, format: capture.preview.format,
+    };
+  } catch (error) {
+    return { ok: false, status: 'automation-error', message: `捕获 Photoshop 当前文档预览失败：${String(error)}` };
+  } finally { await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined); }
 });
 
 handleIpc('photoshop:create-version', async (_event, sessionId, scene: Scene, rawMetadata, rawName, rawNote, revision, projectPreview) => {

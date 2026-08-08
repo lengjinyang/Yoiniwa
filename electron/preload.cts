@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('refCanvas', {
   placeRenderedLayersInPhotoshop: (images) => invoke('photoshop:place-rendered-layers', images),
   openRenderedInPhotoshop: (data, name) => invoke('photoshop:open-rendered', data, name),
   getPhotoshopDocumentInfo: () => invoke('photoshop:get-document-info'),
+  capturePhotoshopPreview: () => invoke('photoshop:capture-preview'),
   createPhotoshopVersion: (sessionId, scene, metadata, name, note, revision, preview) => invoke('photoshop:create-version', sessionId, scene, metadata, name, note, revision, preview),
   openPhotoshopVersion: (sessionId, versionId) => invoke('photoshop:open-version', sessionId, versionId),
   deletePhotoshopVersion: (sessionId, scene, metadata, versionId, revision, preview) => invoke('photoshop:delete-version', sessionId, scene, metadata, versionId, revision, preview),
