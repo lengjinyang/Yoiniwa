@@ -23,8 +23,8 @@ contextBridge.exposeInMainWorld('refCanvas', {
     return () => ipcRenderer.removeListener('images:thumbnail-ready', handler);
   },
   pathForFile: (file) => { try { return webUtils.getPathForFile(file) || undefined; } catch { return undefined; } },
-  saveScene: (scene, saveAs, revision, metadata) => invoke('scene:save', scene, saveAs, revision, metadata),
-  autosaveScene: (scene, revision, metadata) => invoke('scene:autosave', scene, revision, metadata),
+  saveScene: (scene, saveAs, revision, metadata, preview) => invoke('scene:save', scene, saveAs, revision, metadata, preview),
+  autosaveScene: (scene, revision, metadata, preview) => invoke('scene:autosave', scene, revision, metadata, preview),
   resetScenePath: () => ipcRenderer.send('scene:reset-path'),
   consumeStartupPath: () => invoke('scene:startup-path'),
   onExternalOpen: (callback) => {
@@ -52,9 +52,9 @@ contextBridge.exposeInMainWorld('refCanvas', {
   placeRenderedLayersInPhotoshop: (images) => invoke('photoshop:place-rendered-layers', images),
   openRenderedInPhotoshop: (data, name) => invoke('photoshop:open-rendered', data, name),
   getPhotoshopDocumentInfo: () => invoke('photoshop:get-document-info'),
-  createPhotoshopVersion: (scene, metadata, name, note, revision) => invoke('photoshop:create-version', scene, metadata, name, note, revision),
+  createPhotoshopVersion: (scene, metadata, name, note, revision, preview) => invoke('photoshop:create-version', scene, metadata, name, note, revision, preview),
   openPhotoshopVersion: (versionId) => invoke('photoshop:open-version', versionId),
-  deletePhotoshopVersion: (scene, metadata, versionId, revision) => invoke('photoshop:delete-version', scene, metadata, versionId, revision),
+  deletePhotoshopVersion: (scene, metadata, versionId, revision, preview) => invoke('photoshop:delete-version', scene, metadata, versionId, revision, preview),
   setWindowMode: (mode) => invoke('window:set-mode', mode),
   getWindowMode: () => invoke('window:get-mode'),
   getWindowWorkArea: (point) => invoke('window:get-work-area', point),

@@ -11,10 +11,11 @@
     "typecheck:electron": "tsc -p tsconfig.electron.json --noEmit",
     "typecheck": "npm run typecheck:renderer && npm run typecheck:electron",
     "build:electron": "node scripts/clean-electron-build.mjs && tsc -p tsconfig.electron.json",
+    "build:thumbnail-provider": "node scripts/build-thumbnail-provider.mjs",
     "lint": "eslint src electron scripts tools --max-warnings=0",
     "check:dead-code": "knip",
     "check": "npm run typecheck && npm run lint && npm run check:dead-code && npm test",
-    "build": "npm run typecheck && npm run build:electron && vite build",
+    "build": "npm run typecheck && npm run build:thumbnail-provider && npm run build:electron && vite build",
     "start": "npm run build:electron && electron .",
     "smoke": "npm run build:electron && set \"REFCANVAS_SMOKE_TEST=1\" && electron .",
     "smoke:pixi": "npm run build && set \"REFCANVAS_PIXI_SMOKE=1\" && electron .",
@@ -69,6 +70,13 @@
       "electron/native/native-window-move.ps1",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "build/thumbnail-provider",
+        "to": "thumbnail-provider",
+        "filter": ["**/*"]
+      }
+    ],
     "asarUnpack": [
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
@@ -85,13 +93,20 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "perMachine": true,
+      "include": "build/installer.nsh"
     },
     "fileAssociations": [
       {
-        "ext": "refcanvas",
+        "ext": "yoi",
         "name": "Yoiniwa Board",
         "description": "Yoiniwa reference board"
+      },
+      {
+        "ext": "refcanvas",
+        "name": "Yoiniwa Legacy Board",
+        "description": "Legacy Yoiniwa reference board"
       }
     ]
   }

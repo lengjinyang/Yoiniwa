@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ZipArchive } from 'archiver';
+import unzipper from 'unzipper';
 import { createScenePackages, type ScenePackageLimits } from './scene-packages';
 
 const temporaryDirectories: string[] = [];
@@ -162,6 +163,27 @@ describe('scene package extraction limits', () => {
     await expect(packages.writeScenePackage(filePath, failingScene)).rejects.toThrow('source unavailable');
     await expect(fs.readFile(filePath)).resolves.toEqual(original);
     await expect(fs.stat(`${filePath}.${process.pid}.tmp`)).rejects.toThrow();
+  });
+
+  it('writes a bounded Explorer project preview as the first uncompressed archive entry', async () => {
+    const directory = await temporaryDirectory();
+    const filePath = path.join(directory, 'preview.yoi');
+    const preview = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('preview')]);
+    const packages = createScenePackages({
+      assetRegistry: new Map(), assetCachePath: (value) => path.join(directory, `${value.id}.bin`),
+      ensureAssetFile: async () => { throw new Error('not used'); },
+      extByMime: { 'application/octet-stream': '.bin' }, limits: defaultLimits,
+    });
+    await packages.writeScenePackage(filePath, manifest([], { version: 3 }), { versions: [] }, new Map(), filePath, preview);
+    const archive = await unzipper.Open.file(filePath);
+    expect(archive.files[0].path).toBe('preview.png');
+    expect(archive.files[0].compressionMethod).toBe(0);
+    await expect(archive.files[0].buffer()).resolves.toEqual(preview);
+    const raw = await fs.readFile(filePath);
+    expect(raw.readUInt32LE(0)).toBe(0x04034b50);
+    expect(raw.readUInt16LE(6)).toBe(0);
+    expect(raw.readUInt16LE(8)).toBe(0);
+    expect(raw.subarray(30, 41).toString('utf8')).toBe('preview.png');
   });
 
   it('embeds, verifies and preserves a layered Photoshop version across ordinary saves', async () => {

@@ -56,7 +56,7 @@ const {
   stressTest, performanceBenchmark, projectZoomBenchmark, devSmokeTest, realImageTest,
   forceThumbnailFailure, smokeTest, cleanTestSession,
 } = runtimeFlags;
-const sceneFilters = [{ name: 'Yoiniwa 画板', extensions: ['refcanvas'] }];
+const sceneFilters = [{ name: 'Yoiniwa 画板', extensions: ['yoi', 'refcanvas'] }];
 const imageFilters = [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] }];
 const mimeByExt = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.bmp': 'image/bmp', '.gif': 'image/gif' };
 const extByMime = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/bmp': '.bmp', 'image/gif': '.gif' };
@@ -70,7 +70,7 @@ let dirtyRevisionState = createDirtyRevisionState();
 let currentScenePath;
 let currentPhotoshopMetadata: PhotoshopProjectMetadata = EMPTY_PHOTOSHOP_PROJECT_METADATA;
 const enqueuePersistence = createRecoveringQueue();
-let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.find((value) => /\.refcanvas$/i.test(value));
+let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.find((value) => /\.(?:yoi|refcanvas)$/i.test(value));
 // Temporary manual-verification hook. Keep explicit CLI/file-association paths
 // authoritative, otherwise open the desktop fixture on every normal launch.
 const TEMPORARY_DESKTOP_SCENE_NAME = '未命名画板.refcanvas';
@@ -1106,15 +1106,33 @@ function registerCollaborationShortcut(shortcut) {
   return true;
 }
 
-function enqueueSceneSave(filePath, scene, revision, metadata: PhotoshopProjectMetadata = currentPhotoshopMetadata) {
+function projectFilePath(pathname: string) {
+  if (/\.yoi$/i.test(pathname)) return pathname;
+  if (/\.refcanvas$/i.test(pathname)) return `${pathname.slice(0, -'.refcanvas'.length)}.yoi`;
+  return `${pathname}.yoi`;
+}
+
+function projectName(pathname: string) {
+  return path.basename(pathname, path.extname(pathname));
+}
+
+function projectPreviewBuffer(value: unknown): Buffer | undefined {
+  const preview = value instanceof ArrayBuffer ? Buffer.from(value)
+    : ArrayBuffer.isView(value) ? Buffer.from(value.buffer, value.byteOffset, value.byteLength) : undefined;
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  return preview && preview.length >= pngSignature.length && preview.length <= 4 * 1024 * 1024
+    && pngSignature.every((byte, index) => preview[index] === byte) ? preview : undefined;
+}
+
+function enqueueSceneSave(filePath, scene, revision, metadata: PhotoshopProjectMetadata = currentPhotoshopMetadata, projectPreview?: Buffer) {
   dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
   const versionSourcePath = currentScenePath ?? filePath;
-  const savedScene = { ...scene, name: path.basename(filePath, '.refcanvas'), savedAt: new Date().toISOString() };
+  const savedScene = { ...scene, name: projectName(filePath), savedAt: new Date().toISOString() };
   return enqueuePersistence(async () => {
     const startedAt = performance.now();
     try {
       const normalizedMetadata = normalizePhotoshopProjectMetadata(metadata);
-      await writeScenePackage(filePath, savedScene, normalizedMetadata, new Map(), versionSourcePath);
+      await writeScenePackage(filePath, savedScene, normalizedMetadata, new Map(), versionSourcePath, projectPreview);
       currentScenePath = filePath;
       currentPhotoshopMetadata = normalizedMetadata;
       dirtyRevisionState = markRevisionSaved(dirtyRevisionState, revision);
@@ -2276,7 +2294,7 @@ else app.whenReady().then(async () => {
 });
 
 app.on('second-instance', (_event, argv) => {
-  const filePath = argv.find((value) => /\.refcanvas$/i.test(value));
+  const filePath = argv.find((value) => /\.(?:yoi|refcanvas)$/i.test(value));
   if (filePath && mainWindow) mainWindow.webContents.send('scene:external-open', filePath);
   if (mainWindow?.isMinimized()) mainWindow.restore();
   mainWindow?.focus();
@@ -2484,21 +2502,22 @@ ipcMain.on('images:boost-resource', (_event, resourceKey, requestedPriority) => 
   } catch { /* Ignore malformed renderer hints. */ }
 });
 
-handleIpc('scene:save', async (_event, scene, saveAs = false, revision, metadata) => {
-  const targetPath = !saveAs ? currentScenePath : undefined;
-  if (targetPath) return enqueueSceneSave(targetPath, scene, revision, metadata);
+handleIpc('scene:save', async (_event, scene, saveAs = false, revision, metadata, preview) => {
+  const projectPreview = projectPreviewBuffer(preview);
+  const targetPath = !saveAs && currentScenePath ? projectFilePath(currentScenePath) : undefined;
+  if (targetPath) return enqueueSceneSave(targetPath, scene, revision, metadata, projectPreview);
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${scene.name || '未命名画板'}.refcanvas`,
+    defaultPath: `${scene.name || '未命名画板'}.yoi`,
     filters: sceneFilters,
   });
   if (result.canceled || !result.filePath) return { canceled: true };
-  const filePath = result.filePath.endsWith('.refcanvas') ? result.filePath : `${result.filePath}.refcanvas`;
-  return enqueueSceneSave(filePath, scene, revision, metadata);
+  const filePath = projectFilePath(result.filePath);
+  return enqueueSceneSave(filePath, scene, revision, metadata, projectPreview);
 });
 
-handleIpc('scene:autosave', async (_event, scene, revision, metadata) => {
+handleIpc('scene:autosave', async (_event, scene, revision, metadata, preview) => {
   if (!currentScenePath) return { skipped: true };
-  return enqueueSceneSave(currentScenePath, scene, revision, metadata);
+  return enqueueSceneSave(projectFilePath(currentScenePath), scene, revision, metadata, projectPreviewBuffer(preview));
 });
 
 handleIpc('scene:open', async (_event, requestedPath) => {
@@ -2622,19 +2641,19 @@ handleIpc('photoshop:get-document-info', async (): Promise<PhotoshopDocumentInfo
   return { ok: result.ok, status: result.status, message: result.message, documentName: result.documentInfo?.documentName };
 });
 
-handleIpc('photoshop:create-version', async (_event, scene: Scene, rawMetadata, rawName, rawNote, revision) => {
+handleIpc('photoshop:create-version', async (_event, scene: Scene, rawMetadata, rawName, rawNote, revision, projectPreview) => {
   if (photoshopDocumentInteractionBlocked()) return { canceled: false, message: blockedPhotoshopDocumentResult('无焦点取色模式期间不能保存 Photoshop 版本，请先退出协作模式或解除锁定置顶').message };
   const name = normalizedPhotoshopName(rawName, '');
   if (!name) return { canceled: false, message: '请输入版本名称' };
   const note = typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim().slice(0, 4000) : undefined;
   const scenePathAtRequest = currentScenePath;
-  let targetPath = currentScenePath;
+  let targetPath = currentScenePath ? projectFilePath(currentScenePath) : undefined;
   if (!targetPath) {
     const save = await dialog.showSaveDialog(mainWindow, {
-      defaultPath: `${scene.name || '未命名画板'}.refcanvas`, filters: sceneFilters,
+      defaultPath: `${scene.name || '未命名画板'}.yoi`, filters: sceneFilters,
     });
     if (save.canceled || !save.filePath) return { canceled: true };
-    targetPath = save.filePath.endsWith('.refcanvas') ? save.filePath : `${save.filePath}.refcanvas`;
+    targetPath = projectFilePath(save.filePath);
   }
   const metadata = normalizePhotoshopProjectMetadata(rawMetadata);
   const temporaryRoot = await fs.mkdtemp(path.join(app.getPath('temp'), 'yoiniwa-photoshop-version-'));
@@ -2663,7 +2682,7 @@ handleIpc('photoshop:create-version', async (_event, scene: Scene, rawMetadata, 
       previewAssetId: preview.assetId, previewAsset: preview.asset,
     };
     const nextMetadata: PhotoshopProjectMetadata = { versions: [...metadata.versions, version] };
-    const savedScene = { ...scene, name: path.basename(targetPath, '.refcanvas'), savedAt: new Date().toISOString() };
+    const savedScene = { ...scene, name: projectName(targetPath), savedAt: new Date().toISOString() };
     return await enqueuePersistence(async () => {
       if (photoshopDocumentInteractionBlocked()) {
         return { canceled: false, message: '协作模式期间不能保存 Photoshop 版本' };
@@ -2672,7 +2691,7 @@ handleIpc('photoshop:create-version', async (_event, scene: Scene, rawMetadata, 
         return { canceled: false, message: '画板已切换，未保存 Photoshop 版本' };
       }
       dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
-      await writeScenePackage(targetPath, savedScene, nextMetadata, new Map([[versionId, archivePath]]));
+      await writeScenePackage(targetPath, savedScene, nextMetadata, new Map([[versionId, archivePath]]), scenePathAtRequest ?? targetPath, projectPreviewBuffer(projectPreview));
       currentScenePath = targetPath;
       currentPhotoshopMetadata = nextMetadata;
       dirtyRevisionState = markRevisionSaved(dirtyRevisionState, revision);
@@ -2709,24 +2728,25 @@ handleIpc('photoshop:open-version', async (_event, versionId) => {
   } finally { await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined); }
 });
 
-handleIpc('photoshop:delete-version', async (_event, scene: Scene, rawMetadata, versionId, revision) => {
+handleIpc('photoshop:delete-version', async (_event, scene: Scene, rawMetadata, versionId, revision, projectPreview) => {
   if (photoshopDocumentInteractionBlocked()) return { canceled: false, message: blockedPhotoshopDocumentResult('无焦点取色模式期间不能删除 Photoshop 版本，请先退出协作模式或解除锁定置顶').message };
   if (!currentScenePath) return { canceled: false, message: '当前画板尚未保存' };
-  const targetPath = currentScenePath;
+  const sourcePath = currentScenePath;
+  const targetPath = projectFilePath(sourcePath);
   const metadata = normalizePhotoshopProjectMetadata(rawMetadata);
   if (!metadata.versions.some((version) => version.id === versionId)) return { canceled: false, message: '找不到 Photoshop 版本' };
   const nextMetadata: PhotoshopProjectMetadata = { versions: metadata.versions.filter((version) => version.id !== versionId) };
-  const savedScene = { ...scene, name: path.basename(targetPath, '.refcanvas'), savedAt: new Date().toISOString() };
+  const savedScene = { ...scene, name: projectName(targetPath), savedAt: new Date().toISOString() };
   try {
     return await enqueuePersistence(async () => {
       if (photoshopDocumentInteractionBlocked()) {
         return { canceled: false, message: '协作模式期间不能删除 Photoshop 版本' };
       }
-      if (currentScenePath !== targetPath) {
+      if (currentScenePath !== sourcePath) {
         return { canceled: false, message: '画板已切换，未删除 Photoshop 版本' };
       }
       dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
-      await writeScenePackage(targetPath, savedScene, nextMetadata);
+      await writeScenePackage(targetPath, savedScene, nextMetadata, new Map(), sourcePath, projectPreviewBuffer(projectPreview));
       currentPhotoshopMetadata = nextMetadata;
       dirtyRevisionState = markRevisionSaved(dirtyRevisionState, revision);
       return { canceled: false, path: targetPath, scene: savedScene, revision, metadata: nextMetadata };

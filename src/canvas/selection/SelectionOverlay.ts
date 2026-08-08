@@ -1,5 +1,6 @@
 import { Graphics, type Container } from 'pixi.js';
 import type { ImageItem } from '../../types';
+import type { LassoPoint } from './SelectionController';
 import type { SceneBounds } from '../scene/SceneNode';
 import { unionImageBounds } from './HitTestService';
 import { GROUP_RESIZE_HANDLE_SCREEN_SIZE } from '../groups/GroupPresentation';
@@ -13,7 +14,7 @@ export class SelectionOverlay {
 
   constructor(layer: Container) { layer.addChild(this.graphics); }
 
-  draw(items: ImageItem[], scale: number, box?: SceneBounds) {
+  draw(items: ImageItem[], scale: number, box?: SceneBounds, lasso?: LassoPoint[]) {
     this.scale = scale;
     this.selectionBounds = unionImageBounds(items);
     const lineWidth = 1 / scale;
@@ -39,6 +40,12 @@ export class SelectionOverlay {
     }
     if (box) this.graphics.rect(box.x, box.y, box.width, box.height)
       .fill({ color: 0x708cff, alpha: 0.1 }).stroke({ color: 0x708cff, width: lineWidth });
+    if (lasso?.length) {
+      this.graphics.moveTo(lasso[0].x, lasso[0].y);
+      for (const point of lasso.slice(1)) this.graphics.lineTo(point.x, point.y);
+      if (lasso.length > 2) this.graphics.closePath();
+      this.graphics.fill({ color: 0x708cff, alpha: 0.1 }).stroke({ color: 0x8ca1ff, width: lineWidth, alpha: 0.9 });
+    }
   }
 
   hit(point: { x: number; y: number }): TransformHandle | undefined {

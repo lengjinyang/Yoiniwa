@@ -5,6 +5,7 @@ import type { GroupFrameBounds } from './selection/GroupResizeController';
 import type { VisualNotesToolState } from './interaction/VisualNotesController';
 import type { VisualNotesState } from '../types';
 import type { ColorPickerShortcut } from '../interactions';
+import type { LassoPoint } from './selection/SelectionController';
 
 interface CanvasViewProps {
   background: string;
@@ -14,7 +15,9 @@ interface CanvasViewProps {
   onViewportCommit?(viewport: Viewport): void;
   selectedIds: string[];
   selectedGroupId?: string;
-  onSelectionChange(ids: string[]): void;
+  lassoClearRequest: number;
+  onSelectionChange(ids: string[], source?: 'lasso'): void;
+  onLassoSelectionChange(points?: LassoPoint[]): void;
   onGroupSelectionChange(id?: string): void;
   onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>): void;
   onGroupMoved(id: string, deltaX: number, deltaY: number): void;
@@ -43,8 +46,8 @@ interface CanvasViewProps {
 }
 
 export function CanvasView({
-  background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, projectEpoch,
-  onViewportCommit, onSelectionChange, onGroupSelectionChange,
+  background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, lassoClearRequest, projectEpoch,
+  onViewportCommit, onSelectionChange, onLassoSelectionChange, onGroupSelectionChange,
   onItemsChanged, onGroupMoved, onGroupResized,
   onRenameGroup,
   onOpenGroupMenu, onExpandGroup, groupMenuOpen, onGroupPreviewAnchor,
@@ -62,6 +65,7 @@ export function CanvasView({
   });
   const viewportCommitRef = useRef(onViewportCommit);
   const selectionChangeRef = useRef(onSelectionChange);
+  const lassoSelectionChangeRef = useRef(onLassoSelectionChange);
   const itemsChangedRef = useRef(onItemsChanged);
   const groupSelectionRef = useRef(onGroupSelectionChange);
   const groupMovedRef = useRef(onGroupMoved);
@@ -78,6 +82,7 @@ export function CanvasView({
   const visualNoteSelectionRef = useRef(onVisualNoteSelectionChange);
   viewportCommitRef.current = onViewportCommit;
   selectionChangeRef.current = onSelectionChange;
+  lassoSelectionChangeRef.current = onLassoSelectionChange;
   itemsChangedRef.current = onItemsChanged;
   groupSelectionRef.current = onGroupSelectionChange;
   groupMovedRef.current = onGroupMoved;
@@ -99,7 +104,8 @@ export function CanvasView({
     const runtime = new CanvasRuntime(container, {
       ...initialOptionsRef.current,
       onViewportCommit: (nextViewport) => viewportCommitRef.current?.(nextViewport),
-      onSelectionChange: (ids) => selectionChangeRef.current(ids),
+      onSelectionChange: (ids, source) => selectionChangeRef.current(ids, source),
+      onLassoSelectionChange: (points) => lassoSelectionChangeRef.current(points),
       onGroupSelectionChange: (id) => groupSelectionRef.current(id),
       onItemsChanged: (changes) => itemsChangedRef.current(changes),
       onGroupMoved: (id, deltaX, deltaY) => groupMovedRef.current(id, deltaX, deltaY),
@@ -129,6 +135,7 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setViewport(viewport); }, [viewport]);
   useEffect(() => { runtimeRef.current?.setScene(scene); }, [scene]);
   useEffect(() => { runtimeRef.current?.setSelection(selectedIds); }, [selectedIds]);
+  useEffect(() => { runtimeRef.current?.clearLasso(); }, [lassoClearRequest]);
   useEffect(() => { runtimeRef.current?.setGroupSelection(selectedGroupId); }, [selectedGroupId]);
   useEffect(() => { runtimeRef.current?.setGroupMenuOpen(groupMenuOpen); }, [groupMenuOpen]);
   useEffect(() => { runtimeRef.current?.setProjectEpoch(projectEpoch); }, [projectEpoch]);

@@ -14,6 +14,7 @@ interface ExportRequest {
   items: ExportImage[];
   groups: ImageGroup[];
   visualNotes?: VisualNotesState;
+  clipPolygon?: Array<{ x: number; y: number }>;
 }
 
 function drawVisualNotes(context: OffscreenCanvasRenderingContext2D, request: ExportRequest) {
@@ -59,6 +60,13 @@ async function render(request: ExportRequest) {
     context.globalAlpha = 1;
   }
   context.translate(request.offsetX, request.offsetY);
+  if (request.clipPolygon?.length && request.clipPolygon.length >= 3) {
+    context.beginPath();
+    context.moveTo(request.clipPolygon[0].x, request.clipPolygon[0].y);
+    for (const point of request.clipPolygon.slice(1)) context.lineTo(point.x, point.y);
+    context.closePath();
+    context.clip();
+  }
   for (const group of request.groups) {
     if (!group.collapsed) {
       context.save(); context.globalAlpha = group.opacity; context.fillStyle = group.color;

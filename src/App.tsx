@@ -15,7 +15,7 @@ import { addMemberToGroup, createGroupFrame, createScene, detachImageFromGroup, 
 import type { GroupFrameBounds } from './canvas/selection/GroupResizeController';
 import { captureSceneSelection, pasteScenePayload, type SceneClipboardPayload } from './sceneClipboard';
 import { mergeSceneInto } from './sceneMerge';
-import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, PhotoshopProjectMetadata, PhotoshopVersionRecord, RecentScene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
+import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, PhotoshopProjectMetadata, PhotoshopVersionRecord, RecentScene, Scene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
 import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
@@ -28,6 +28,7 @@ import './styles/quiet-tokens.css';
 import './styles/quiet-controls.css';
 import './styles/quiet-surfaces.css';
 import type { VisualNotesToolState } from './canvas/interaction/VisualNotesController';
+import type { LassoPoint } from './canvas/selection/SelectionController';
 import { shouldAutoPhotoshopRoundTrip } from './shared/photoshopIntegration';
 import { EMPTY_PHOTOSHOP_PROJECT_METADATA } from './shared/photoshopVersions';
 import { DEFAULT_SHORTCUTS, loadShortcutPreferences, SHORTCUT_LABELS, shortcutConflict, shortcutFromKeyboardEvent, shortcutMatchesEvent, SHORTCUT_PREFERENCES_STORAGE_KEY, type ShortcutId, type ShortcutPreferences } from './keyboardShortcuts';
@@ -45,10 +46,24 @@ const VISUAL_NOTE_COLOR_OPTIONS = [
 ] as const;
 const PHOTOSHOP_VERSION_PREVIEW_MIME = 'application/x-yoiniwa-photoshop-version';
 
+async function renderProjectPreview(scene: Scene): Promise<ArrayBuffer | undefined> {
+  try {
+    return await renderItems(
+      scene.items, scene.canvas.background, scene.groups, scene.canvas.backgroundOpacity ?? 1,
+      scene.visualNotes, { margin: 20, maxSide: 512 },
+    );
+  } catch {
+    // A preview must never prevent the project itself from being saved.
+    return undefined;
+  }
+}
+
 export default function App() {
   performanceMonitor.markReactRender();
   const history = useSceneHistory();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [lassoPoints, setLassoPoints] = useState<LassoPoint[]>();
+  const [lassoClearRequest, setLassoClearRequest] = useState(0);
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
   const [renamingGroupId, setRenamingGroupId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState('');
@@ -118,7 +133,8 @@ export default function App() {
     autosaveCoordinatorRef.current = new AutosaveCoordinator((scene, revision) => autosaveExecuteRef.current(scene, revision));
   }
   autosaveExecuteRef.current = async (scene, revision) => {
-    const result = await api?.autosaveScene(scene, revision, photoshopMetadataRef.current);
+    const preview = await renderProjectPreview(scene);
+    const result = await api?.autosaveScene(scene, revision, photoshopMetadataRef.current, preview);
     if (result?.scene) history.markSaved(result.scene, result.revision ?? revision);
   };
   const performanceSceneRef = useRef(history.scene);
@@ -559,7 +575,8 @@ export default function App() {
     const saveRevision = flushed.revision;
     const requestId = beginOperation('save', '正在保存…');
     try {
-      const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision, photoshopMetadataRef.current);
+      const preview = await renderProjectPreview(flushed.scene);
+      const result = await api.saveScene(serializeProjectScene(flushed.scene), saveAs, saveRevision, photoshopMetadataRef.current, preview);
       if (!result.canceled) {
         const savedCurrentRevision = history.markSaved(result.scene, result.revision ?? saveRevision);
         if (result.metadata) setPhotoshopMetadata(result.metadata);
@@ -1080,18 +1097,42 @@ export default function App() {
     }));
   }, [history.scene.visualNotes, selectedItems, visualNotesTemporaryHidden]);
 
+  const renderLassoPhotoshopImage = useCallback(async () => {
+    if (!selectedItems.length || !lassoPoints || lassoPoints.length < 3) {
+      throw new Error('请先按住 D 绘制要发送的区域');
+    }
+    const selectedImageIds = new Set(selectedItems.map((item) => item.id));
+    const pixelScale = Math.max(1, ...selectedItems.map((item) => Math.max(
+      item.crop.width / Math.max(1, item.width),
+      item.crop.height / Math.max(1, item.height),
+    )));
+    const notes = visualNotesTemporaryHidden ? { ...history.scene.visualNotes, visible: false } : {
+      ...history.scene.visualNotes,
+      marks: history.scene.visualNotes.marks.filter((mark) => mark.anchor.type === 'image'
+        && selectedImageIds.has(mark.anchor.imageId)),
+    };
+    return renderItems(selectedItems, undefined, [], 1, notes, {
+      margin: 0, maxSide: 30000, pixelScale, clipPolygon: lassoPoints,
+    });
+  }, [history.scene.visualNotes, lassoPoints, selectedItems, visualNotesTemporaryHidden]);
+
   const sendSelectedToPhotoshop = useCallback(async (mode: 'layer' | 'image') => {
     if (!api || photoshopDocumentBlocked) return;
+    setLassoPoints(undefined);
+    setLassoClearRequest((request) => request + 1);
     const requestId = beginOperation('photoshop', mode === 'layer' ? '正在发送图层到 Photoshop…' : '正在打开 Photoshop 图像…');
     try {
+      const hasLasso = Boolean(lassoPoints && lassoPoints.length >= 3);
       const result = mode === 'layer'
-        ? await api.placeRenderedLayersInPhotoshop(await renderSelectedPhotoshopLayers())
-        : await api.openRenderedInPhotoshop(await renderSelectedPhotoshopImage(), selectedItems.length === 1
+        ? await api.placeRenderedLayersInPhotoshop(hasLasso
+          ? [{ data: await renderLassoPhotoshopImage(), name: `${history.scene.name}-选区` }]
+          : await renderSelectedPhotoshopLayers())
+        : await api.openRenderedInPhotoshop(hasLasso ? await renderLassoPhotoshopImage() : await renderSelectedPhotoshopImage(), selectedItems.length === 1
           ? selectedItems[0].name.replace(/\.[^.]+$/, '') || selectedItems[0].name : `${history.scene.name}-选中`);
       if (result.ok) settleCurrentOperation(requestId, 'success', result.message ?? 'Photoshop 操作完成');
       else settleCurrentOperation(requestId, 'error', result.message ?? 'Photoshop 操作失败');
     } catch (error) { settleCurrentOperation(requestId, 'error', `发送到 Photoshop 失败：${String(error)}`); }
-  }, [api, beginOperation, history.scene.name, photoshopDocumentBlocked, renderSelectedPhotoshopImage, renderSelectedPhotoshopLayers, selectedItems, settleCurrentOperation]);
+  }, [api, beginOperation, history.scene.name, lassoPoints, photoshopDocumentBlocked, renderLassoPhotoshopImage, renderSelectedPhotoshopImage, renderSelectedPhotoshopLayers, selectedItems, settleCurrentOperation]);
 
   const savePhotoshopVersion = useCallback(async () => {
     if (!api || photoshopDocumentBlocked) return;
@@ -1100,7 +1141,8 @@ export default function App() {
     const flushed = history.flushViewport(liveViewportRef.current);
     const requestId = beginOperation('photoshop', '正在保存 Photoshop 分层版本…');
     try {
-      const result = await api.createPhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, name, versionNote, flushed.revision);
+      const preview = await renderProjectPreview(flushed.scene);
+      const result = await api.createPhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, name, versionNote, flushed.revision, preview);
       if (result.canceled) { clearCurrentOperation(requestId); return; }
       if (!result.version || !result.metadata) throw new Error(result.message ?? 'Photoshop 版本保存失败');
       history.markSaved(result.scene, result.revision ?? flushed.revision);
@@ -1129,9 +1171,10 @@ export default function App() {
   }, [api, photoshopDocumentBlocked]);
 
   const deletePhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
-    if (!api || photoshopDocumentBlocked || !window.confirm(`确定删除版本“${version.name}”？此操作会从 .refcanvas 中移除完整分层文件。`)) return;
+    if (!api || photoshopDocumentBlocked || !window.confirm(`确定删除版本“${version.name}”？此操作会从 .yoi 中移除完整分层文件。`)) return;
     const flushed = history.flushViewport(liveViewportRef.current);
-    const result = await api.deletePhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, version.id, flushed.revision);
+    const preview = await renderProjectPreview(flushed.scene);
+    const result = await api.deletePhotoshopVersion(serializeProjectScene(flushed.scene), photoshopMetadataRef.current, version.id, flushed.revision, preview);
     if (result.metadata) setPhotoshopMetadata(result.metadata);
     if (result.scene) history.markSaved(result.scene, result.revision ?? flushed.revision);
     setStatus(result.metadata ? `已删除版本 ${version.name}` : (result.message ?? '删除 Photoshop 版本失败'));
@@ -1602,7 +1645,7 @@ export default function App() {
   ] : [];
 
   const groupedImageIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'image').map((member) => member.id)));
-  const displaySceneName = history.scene.name === '未命名画板' ? history.scene.name : `${history.scene.name}.refcanvas`;
+  const displaySceneName = history.scene.name === '未命名画板' ? history.scene.name : `${history.scene.name}.yoi`;
   useEffect(() => {
     const title = `${displaySceneName}${history.dirty ? ' •' : ''} · Yoiniwa`;
     document.title = title;
@@ -1692,8 +1735,13 @@ export default function App() {
         viewport={history.scene.viewport}
         selectedIds={selectedIds}
         selectedGroupId={selectedGroupId}
+        lassoClearRequest={lassoClearRequest}
         projectEpoch={history.projectEpoch}
-        onSelectionChange={(ids) => { setSelectedIds(ids); setSelectedGroupId(undefined); }}
+        onSelectionChange={(ids, source) => {
+          setSelectedIds(ids); setSelectedGroupId(undefined);
+          if (source !== 'lasso') setLassoPoints(undefined);
+        }}
+        onLassoSelectionChange={setLassoPoints}
         onGroupSelectionChange={(id) => { setSelectedGroupId(id); if (id) setSelectedIds([]); }}
         onItemsChanged={commitItemChanges}
         onGroupMoved={moveGroup}
@@ -1803,7 +1851,7 @@ export default function App() {
           onClick={() => { void openPhotoshopVersionSaveDialog(); }}><UiIcon name="plus" size={13} />保存版本</button>
       </div>
       <div className="photoshop-version-list">
-        {photoshopMetadata.versions.length === 0 && <div className="photoshop-version-empty"><strong>暂无 Photoshop 版本</strong><span>保存版本后，完整 PSD/PSB 会随画板一起保存。</span></div>}
+        {photoshopMetadata.versions.length === 0 && <div className="photoshop-version-empty"><strong>暂无 Photoshop 版本</strong><span>保存版本后，完整 PSD/PSB 会随 .yoi 画板一起保存。</span></div>}
         {[...photoshopMetadata.versions].reverse().map((version) => <article className="photoshop-version-card" key={version.id}>
           <div className="photoshop-version-preview" draggable
             onDragStart={(event) => {
@@ -1897,7 +1945,7 @@ export default function App() {
       {versionSaveDialogOpen && <div className="photoshop-version-dialog-backdrop no-drag" onPointerDown={(event) => {
         if (event.target === event.currentTarget) setVersionSaveDialogOpen(false);
       }}><form className="photoshop-version-dialog" onSubmit={(event) => { event.preventDefault(); void savePhotoshopVersion(); }}>
-        <header><div><strong>保存 Photoshop 版本</strong><span>完整分层 PSD/PSB 将嵌入当前 .refcanvas</span></div>
+        <header><div><strong>保存 Photoshop 版本</strong><span>完整分层 PSD/PSB 将嵌入当前 .yoi</span></div>
           <button type="button" title="取消" onClick={() => setVersionSaveDialogOpen(false)}><UiIcon name="close" /></button></header>
         <label><span>版本名称</span><input autoFocus maxLength={160} value={versionName} onChange={(event) => setVersionName(event.target.value)} /></label>
         <label><span>备注（可选）</span><textarea maxLength={4000} rows={4} value={versionNote} onChange={(event) => setVersionNote(event.target.value)} /></label>
