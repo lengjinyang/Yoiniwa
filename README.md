@@ -2,7 +2,7 @@
 
 > 接手开发前请先阅读 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 和 [`docs/DEBUGGING.md`](./docs/DEBUGGING.md)。历史性能证据保存在 [`docs/performance/PERFORMANCE_AUDIT.md`](./docs/performance/PERFORMANCE_AUDIT.md)。
 
-Yoiniwa（宵庭）是一款 Windows 优先、完全离线的参考图画板。项目使用 Electron、React、TypeScript 和 PixiJS 构建，场景文件扩展名为 `.refcanvas`。
+Yoiniwa（宵庭）是一款 Windows 优先、完全离线的参考图画板。项目使用 Electron、React、TypeScript 和 PixiJS 构建；新建或保存工程默认使用 `.yoi` 扩展名，并会在 Windows 资源管理器显示画布缩略图。旧 `.refcanvas` 工程仍可打开，下一次保存会迁移为 `.yoi`。
 
 ## 已实现
 
@@ -12,7 +12,7 @@ Yoiniwa（宵庭）是一款 Windows 优先、完全离线的参考图画板。�
 - 非破坏性裁剪及恢复原图
 - 边缘/中心吸附、紧密排列、对齐、分布和尺寸统一
 - 200 步撤销/重做
-- 图片嵌入式 `.refcanvas` 场景、最近打开、显式保存和未保存提醒（自动保存关闭）
+- 图片嵌入式 `.yoi` 场景、最近打开、保存、自动保存和未保存提醒
 - PNG/JPEG 画板导出、选中内容导出和复制合成图
 - 无边框窗口、始终置顶、窗口透明度、锁定窗口和鼠标穿透
 - 默认按住 `S` 从参考图片原始像素取色，也可在交互设置中改为 `Alt`；松开后同步到正在运行的 Photoshop 前景色，失败时自动复制 HEX

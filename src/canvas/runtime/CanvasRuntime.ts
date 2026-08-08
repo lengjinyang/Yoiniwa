@@ -7,6 +7,7 @@ import { RuntimeLifecycle } from './RuntimeLifecycle';
 import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
 import { SelectionController } from '../selection/SelectionController';
+import type { LassoPoint } from '../selection/SelectionController';
 import type { ImageItem, PickedColor } from '../../types';
 import { ImageTransformCommand } from '../commands/ImageTransformCommand';
 import { PREFETCH_VIEWPORT_MARGIN } from '../textures/TextureConfig';
@@ -26,7 +27,8 @@ export interface CanvasRuntimeOptions {
   onViewportCommit?(viewport: Viewport): void;
   selectedIds?: string[];
   selectedGroupId?: string;
-  onSelectionChange?(ids: string[]): void;
+  onSelectionChange?(ids: string[], source?: 'lasso'): void;
+  onLassoSelectionChange?(points?: LassoPoint[]): void;
   onGroupSelectionChange?(id?: string): void;
   onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>): void;
   onGroupMoved?(id: string, deltaX: number, deltaY: number): void;
@@ -162,7 +164,8 @@ export class CanvasRuntime {
         }
         this.options.onItemsChanged?.(changes);
       },
-      selectionChanged: (ids) => { this.renderer.setSelectedImageCount(ids.length); this.options.onSelectionChange?.(ids); },
+      selectionChanged: (ids, source) => { this.renderer.setSelectedImageCount(ids.length); this.options.onSelectionChange?.(ids, source); },
+      lassoSelectionChanged: (points) => this.options.onLassoSelectionChange?.(points),
       groupSelectionChanged: (id) => { this.renderer.setSelectedGroup(id); this.options.onGroupSelectionChange?.(id); },
       previewGroup: (id, deltaX, deltaY) => {
         this.sceneStore?.previewGroupMove(id, deltaX, deltaY);
@@ -183,12 +186,13 @@ export class CanvasRuntime {
       groupHeaderHoverChanged: (id, action) => {
         if (this.renderer.setGroupHeaderHover(id, action)) this.scheduleRender();
       },
-      drawOverlay: (items, scale, box) => this.renderer.drawSelection(items, scale, box),
+      drawOverlay: (items, scale, box, lasso) => this.renderer.drawSelection(items, scale, box, lasso),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
       interactionBlocked: (event) => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked
         || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0))
         || (this.drawingCollaborationMode && Boolean((event as (PointerEvent & { spaceKey?: boolean }) | undefined)?.spaceKey && event?.button === 0)),
+      documentInteractionBlocked: () => this.drawingCollaborationMode || this.windowLocked,
       externalDrag: (items) => this.options.onExternalImageDrag?.(items),
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
@@ -254,6 +258,7 @@ export class CanvasRuntime {
       const point = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
       const group = groupHeaderAtPoint(this.sceneStore?.groups() ?? [], point, this.camera.snapshot().scale);
       if (group) {
+        this.selectionController?.clearLasso();
         this.selectionController?.setSelection([]);
         this.selectionController?.setGroupSelection(group.id);
         this.renderer.setSelectedImageCount(0);
@@ -267,6 +272,7 @@ export class CanvasRuntime {
           this.renderer.setSelectedGroup(undefined);
           this.options.onGroupSelectionChange?.(undefined);
           if (!this.selectionController?.hasSelection(image.id)) {
+            this.selectionController?.clearLasso();
             this.selectionController?.setSelection([image.id]);
             this.renderer.setSelectedImageCount(1);
             this.options.onSelectionChange?.([image.id]);
@@ -340,6 +346,11 @@ export class CanvasRuntime {
     this.scheduleRender();
   }
   setSelection(ids: string[]) { this.selectionController?.setSelection(ids); this.renderer.setSelectedImageCount(ids.length); }
+  clearLasso() {
+    this.selectionController?.clearLasso();
+    this.selectionController?.refresh();
+    this.scheduleRender();
+  }
   setGroupSelection(id?: string) { this.selectionController?.setGroupSelection(id); this.renderer.setSelectedGroup(id); }
   setGroupMenuOpen(open: boolean) { this.renderer.setGroupControlsMuted(open); }
   setColorPickerHeld(held: boolean) {
@@ -361,6 +372,7 @@ export class CanvasRuntime {
     this.container.classList.toggle('canvas-content-locked', locked);
     if (!locked) return;
     this.selectionController?.setSelection([]);
+    this.selectionController?.clearLasso();
     this.selectionController?.setGroupSelection(undefined);
     this.renderer.setSelectedImageCount(0);
     this.renderer.setSelectedGroup(undefined);

@@ -273,8 +273,8 @@ interface RefCanvasAPI {
   onPrewarmProgress(callback: (progress: ImagePrewarmProgress) => void): () => void;
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
   pathForFile(file: File): string | undefined;
-  saveScene(scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
-  autosaveScene(scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata): Promise<{ skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  saveScene(scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  autosaveScene(scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer): Promise<{ skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
   resetScenePath(): void;
   consumeStartupPath(): Promise<string | null>;
   onExternalOpen(callback: (path: string) => void): () => void;
@@ -302,11 +302,11 @@ interface RefCanvasAPI {
   openRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
   getPhotoshopDocumentInfo(): Promise<PhotoshopDocumentInfoResult>;
   createPhotoshopVersion(
-    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number,
+    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number, preview?: ArrayBuffer,
   ): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; version?: PhotoshopVersionRecord; message?: string }>;
   openPhotoshopVersion(versionId: string): Promise<PhotoshopDocumentResult>;
   deletePhotoshopVersion(
-    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number,
+    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number, preview?: ArrayBuffer,
   ): Promise<{ canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; message?: string }>;
   setWindowMode(mode: Partial<WindowState>): Promise<WindowState>;
   getWindowMode(): Promise<WindowState>;

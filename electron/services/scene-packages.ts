@@ -31,6 +31,16 @@ const DEFAULT_SCENE_PACKAGE_LIMITS: ScenePackageLimits = {
   totalAssetBytes: 4 * 1024 * 1024 * 1024,
 };
 
+const PROJECT_PREVIEW_ENTRY = 'preview.png';
+const PROJECT_PREVIEW_MAXIMUM_BYTES = 4 * 1024 * 1024;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function validProjectPreview(value: unknown): value is Buffer {
+  return Buffer.isBuffer(value) && value.length >= PNG_SIGNATURE.length
+    && value.length <= PROJECT_PREVIEW_MAXIMUM_BYTES
+    && value.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+}
+
 export function createScenePackages({ assetRegistry, assetCachePath, ensureAssetFile, extByMime, limits }: ScenePackageServices) {
   const packageLimits = { ...DEFAULT_SCENE_PACKAGE_LIMITS, ...limits };
   async function mapWithConcurrency<T>(values: T[], mapper: (value: T) => Promise<void>, concurrency = 2) {
@@ -116,6 +126,7 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     metadata: PhotoshopProjectMetadata = EMPTY_PHOTOSHOP_PROJECT_METADATA,
     versionFiles: ReadonlyMap<string, string> = new Map(),
     versionSourcePath = filePath,
+    projectPreview?: Buffer,
   ) {
     const manifest = serializableScene(scene, metadata);
     const tempPath = `${filePath}.${process.pid}.tmp`;
@@ -125,15 +136,24 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
       output.once('close', resolve); output.once('error', reject); archive.once('error', reject);
     });
     try {
+      let existingDirectory: Awaited<ReturnType<typeof unzipper.Open.file>> | undefined;
+      if ((manifest.photoshopProject?.versions.length ?? 0) > versionFiles.size || !validProjectPreview(projectPreview)) {
+        try { existingDirectory = await unzipper.Open.file(versionSourcePath); } catch { /* A new project has no previous archive. */ }
+      }
+      const previousPreview = existingDirectory?.files.find((value) => value.path === PROJECT_PREVIEW_ENTRY);
+      if (!validProjectPreview(projectPreview) && previousPreview
+        && Number.isFinite((previousPreview as any).uncompressedSize)
+        && (previousPreview as any).uncompressedSize > PROJECT_PREVIEW_MAXIMUM_BYTES) {
+        throw new Error('画板预览超过大小限制');
+      }
       archive.pipe(output);
+      // Explorer's thumbnail provider reads this first, uncompressed ZIP entry without parsing the full project.
+      if (validProjectPreview(projectPreview)) archive.append(projectPreview, { name: PROJECT_PREVIEW_ENTRY, store: true } as any);
+      else if (previousPreview) archive.append(previousPreview.stream(), { name: PROJECT_PREVIEW_ENTRY, store: true } as any);
       archive.append(JSON.stringify(manifest), { name: 'manifest.json' });
       for (const record of Object.values(manifest.assets ?? {}) as any[]) {
         const assetPath = await ensureAssetFile(record.id);
         archive.file(assetPath, { name: `assets/${record.id}${extByMime[record.mimeType] ?? '.bin'}`, store: true } as any);
-      }
-      let existingDirectory: Awaited<ReturnType<typeof unzipper.Open.file>> | undefined;
-      if ((manifest.photoshopProject?.versions.length ?? 0) > versionFiles.size) {
-        try { existingDirectory = await unzipper.Open.file(versionSourcePath); } catch { /* A new project has no previous archive. */ }
       }
       for (const version of manifest.photoshopProject?.versions ?? []) {
         const sourcePath = versionFiles.get(version.id);

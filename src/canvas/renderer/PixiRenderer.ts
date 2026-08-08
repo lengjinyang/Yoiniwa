@@ -4,6 +4,7 @@ import { boundedDevicePixelRatio } from '../runtime/CanvasConfig';
 import { ImageRenderer } from './ImageRenderer';
 import { RenderLayers } from './RenderLayers';
 import { SelectionOverlay, type TransformHandle } from '../selection/SelectionOverlay';
+import type { LassoPoint } from '../selection/SelectionController';
 import type { ImageItem } from '../../types';
 import { TextureManager } from '../textures/TextureManager';
 import { performanceMonitor } from '../../performanceMonitor';
@@ -117,8 +118,8 @@ export class PixiRenderer {
     this.visualNotes?.setEraserCursor(point, radiusScreen); this.requestRender();
   }
   setSelectedVisualNote(id?: string) { this.visualNotes?.setSelection(id); this.requestRender(); }
-  drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }) {
-    this.selection?.draw(items, scale, box);
+  drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[]) {
+    this.selection?.draw(items, scale, box, lasso);
     this.requestRender();
   }
   hitSelectionHandle(point: { x: number; y: number }): TransformHandle | undefined { return this.selection?.hit(point); }

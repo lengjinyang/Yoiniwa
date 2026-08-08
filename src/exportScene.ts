@@ -44,7 +44,9 @@ function combinedBounds(items: ImageItem[], groups: ImageGroup[], visualNotes?: 
 
 export async function renderItems(
   items: ImageItem[], background?: string, groups: ImageGroup[] = [], backgroundOpacity = 1,
-  visualNotes?: VisualNotesState, options: { margin?: number; maxSide?: number; pixelScale?: number } = {},
+  visualNotes?: VisualNotesState, options: {
+    margin?: number; maxSide?: number; pixelScale?: number; clipPolygon?: Array<{ x: number; y: number }>;
+  } = {},
 ): Promise<ArrayBuffer> {
   const visibility = exportVisibility(groups);
   const visibleGroups = groups.filter((group) => !visibility.hiddenGroups.has(group.id));
@@ -55,7 +57,8 @@ export async function renderItems(
     marks: visualNotes.marks.filter((mark) => !visibility.hiddenMarks.has(mark.id)
       && (mark.anchor.type === 'scene' || visibleImageIds.has(mark.anchor.imageId))),
   } : visualNotes;
-  const bounds = combinedBounds(visibleItems, visibleGroups, exportNotes);
+  const clipPolygon = options.clipPolygon?.length && options.clipPolygon.length >= 3 ? options.clipPolygon : undefined;
+  const bounds = clipPolygon ? polygonBounds(clipPolygon) : combinedBounds(visibleItems, visibleGroups, exportNotes);
   const margin = Math.max(0, options.margin ?? 24);
   const maxSide = Math.max(1, options.maxSide ?? 12000);
   const requestedScale = Math.max(1, options.pixelScale ?? 1);
@@ -77,7 +80,16 @@ export async function renderItems(
           .map((item) => ({ ...item, resourceUrl: imageSource(item, 'original') })),
         groups: visibleGroups,
         visualNotes: exportNotes,
+        clipPolygon,
       });
     });
   } finally { worker.terminate(); }
+}
+
+function polygonBounds(points: Array<{ x: number; y: number }>) {
+  const x = Math.min(...points.map((point) => point.x));
+  const y = Math.min(...points.map((point) => point.y));
+  const right = Math.max(...points.map((point) => point.x));
+  const bottom = Math.max(...points.map((point) => point.y));
+  return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
 }

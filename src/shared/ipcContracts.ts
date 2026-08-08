@@ -17,8 +17,8 @@ export interface IpcContractMap {
   'images:prewarm': IpcContract<[ids: string[], requestId: string], { canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   'images:performance-stats': IpcContract<[], ImagePipelinePerformanceStats>;
   'images:sample-pixel': IpcContract<[assetId: string, x: number, y: number], { r: number; g: number; b: number; a: number }>;
-  'scene:save': IpcContract<[scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
-  'scene:autosave': IpcContract<[scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata], { skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  'scene:save': IpcContract<[scene: Scene, saveAs?: boolean, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
+  'scene:autosave': IpcContract<[scene: Scene, revision?: number, metadata?: PhotoshopProjectMetadata, preview?: ArrayBuffer], { skipped?: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata }>;
   'scene:open': IpcContract<[path?: string], { canceled: boolean; path?: string; scene?: Scene; metadata?: PhotoshopProjectMetadata }>;
   'scene:import': IpcContract<[], { canceled: boolean; path?: string; scene?: Scene }>;
   'scene:recent': IpcContract<[], RecentScene[]>;
@@ -38,11 +38,11 @@ export interface IpcContractMap {
   'photoshop:open-rendered': IpcContract<[data: ArrayBuffer, name: string], PhotoshopDocumentResult>;
   'photoshop:get-document-info': IpcContract<[], PhotoshopDocumentInfoResult>;
   'photoshop:create-version': IpcContract<[
-    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number,
+    scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string, revision?: number, preview?: ArrayBuffer,
   ], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; version?: PhotoshopVersionRecord; message?: string }>;
   'photoshop:open-version': IpcContract<[versionId: string], PhotoshopDocumentResult>;
   'photoshop:delete-version': IpcContract<[
-    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number,
+    scene: Scene, metadata: PhotoshopProjectMetadata, versionId: string, revision?: number, preview?: ArrayBuffer,
   ], { canceled: boolean; path?: string; scene?: Scene; revision?: number; metadata?: PhotoshopProjectMetadata; message?: string }>;
   'window:set-mode': IpcContract<[mode: Partial<WindowState>], WindowState>;
   'window:get-mode': IpcContract<[], WindowState>;
