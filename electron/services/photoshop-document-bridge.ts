@@ -17,6 +17,16 @@ export interface PhotoshopDocumentBridgeResult {
     archivePath: string;
     previewPath: string;
   };
+  preview?: {
+    documentName: string;
+    width: number;
+    height: number;
+    colorMode: string;
+    bitDepth: number;
+    layerCount: number;
+    format: 'psd' | 'psb';
+    previewPath: string;
+  };
   documentInfo?: { documentName: string };
 }
 
@@ -25,6 +35,7 @@ type PhotoshopDocumentRequest =
   | { kind: 'place-raster-batch'; images: Array<{ imagePath: string; name: string; pixelWidth?: number; pixelHeight?: number }> }
   | { kind: 'open-image'; imagePath: string; name: string }
   | { kind: 'document-info' }
+  | { kind: 'capture-preview'; previewPath: string }
   | { kind: 'capture-version'; archivePsdPath: string; archivePsbPath: string; previewPath: string }
   | { kind: 'open-version'; versionPath: string; name: string };
 
@@ -33,8 +44,8 @@ $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
-function Result([bool]$ok, [string]$status, [string]$message, $document = $null, $documentInfo = $null) {
-  @{ ok = $ok; status = $status; message = $message; document = $document; documentInfo = $documentInfo } | ConvertTo-Json -Compress -Depth 6
+function Result([bool]$ok, [string]$status, [string]$message, $document = $null, $documentInfo = $null, $preview = $null) {
+  @{ ok = $ok; status = $status; message = $message; document = $document; documentInfo = $documentInfo; preview = $preview } | ConvertTo-Json -Compress -Depth 6
 }
 function Js([string]$value) {
   if ($null -eq $value) { return '""' }
@@ -46,7 +57,7 @@ try {
   $request = $json | ConvertFrom-Json
   try { $photoshop = [Runtime.InteropServices.Marshal]::GetActiveObject('Photoshop.Application') }
   catch { Result $false 'not-running' 'Photoshop 未运行'; exit 0 }
-  if ($request.kind -in @('place-raster', 'place-raster-batch', 'capture-version', 'document-info') -and $photoshop.Documents.Count -lt 1) {
+  if ($request.kind -in @('place-raster', 'place-raster-batch', 'capture-preview', 'capture-version', 'document-info') -and $photoshop.Documents.Count -lt 1) {
     Result $false 'no-document' 'Photoshop 没有可用的活动文档'; exit 0
   }
   if ($request.kind -eq 'document-info') {
@@ -158,6 +169,43 @@ try{
     $null = $photoshop.DoJavaScript($jsx)
     Result $true 'completed' '已在 Photoshop 中打开分层版本'; exit 0
   }
+  if ($request.kind -eq 'capture-preview') {
+    $preview = Js ([string]$request.previewPath)
+    $jsx = @"
+function countLayers(container){var count=0;for(var i=0;i<container.layers.length;i++){count++;if(container.layers[i].typename==='LayerSet')count+=countLayers(container.layers[i]);}return count;}
+function modeName(mode){try{return mode.toString().replace('DocumentMode.','');}catch(e){return 'UNKNOWN';}}
+function jsonQuote(value){return '"'+String(value).replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\r/g,'\\r').replace(/\n/g,'\\n').replace(/\t/g,'\\t')+'"';}
+var original=app.activeDocument;
+var previewDocument=null,resultJson='';
+try{
+  previewDocument=original.duplicate();
+  previewDocument.flatten();
+  try{if(previewDocument.mode!==DocumentMode.RGB)previewDocument.changeMode(ChangeMode.RGB);}catch(e){}
+  try{previewDocument.bitsPerChannel=BitsPerChannelType.EIGHT;}catch(e){}
+  try{previewDocument.convertProfile('sRGB IEC61966-2.1',Intent.PERCEPTUAL,true,false);}catch(e){}
+  var previewWidth=previewDocument.width.as('px'),previewHeight=previewDocument.height.as('px');
+  var previewScale=Math.min(1,2048/Math.max(previewWidth,previewHeight));
+  if(previewScale<1){previewDocument.resizeImage(UnitValue(Math.max(1,Math.round(previewWidth*previewScale)),'px'),UnitValue(Math.max(1,Math.round(previewHeight*previewScale)),'px'),null,ResampleMethod.BICUBICSHARPER);}
+  previewDocument.saveAs(new File($preview),new PNGSaveOptions(),true,Extension.LOWERCASE);
+  var width=Math.round(original.width.as('px')),height=Math.round(original.height.as('px'));
+  var bitDepth=Number(original.bitsPerChannel.toString().replace(/[^0-9]/g,''))||8;
+  resultJson='{'+
+    '"documentName":'+jsonQuote(original.name)+','+
+    '"width":'+width+',"height":'+height+','+
+    '"colorMode":'+jsonQuote(modeName(original.mode))+','+
+    '"bitDepth":'+bitDepth+',"layerCount":'+countLayers(original)+','+
+    '"format":'+jsonQuote(width>30000||height>30000?'psb':'psd')+','+
+    '"previewPath":'+jsonQuote($preview)+'}';
+}finally{
+  if(previewDocument){try{previewDocument.close(SaveOptions.DONOTSAVECHANGES);}catch(previewCloseError){}}
+  try{app.activeDocument=original;}catch(activateError){}
+}
+resultJson;
+"@
+    $raw = [string]$photoshop.DoJavaScript($jsx)
+    $previewDocument = $raw | ConvertFrom-Json
+    Result $true 'completed' 'Photoshop 当前文档预览已捕获' $null $null $previewDocument; exit 0
+  }
   if ($request.kind -eq 'capture-version') {
     $psd = Js ([string]$request.archivePsdPath); $psb = Js ([string]$request.archivePsbPath); $preview = Js ([string]$request.previewPath)
     $jsx = @"
@@ -221,7 +269,7 @@ export function parsePhotoshopDocumentBridgeResponse(output: string): PhotoshopD
 export class PhotoshopDocumentBridge {
   private transition = Promise.resolve<unknown>(undefined);
 
-  run(request: PhotoshopDocumentRequest, timeoutMs = request.kind === 'capture-version' ? 120_000 : 15_000) {
+  run(request: PhotoshopDocumentRequest, timeoutMs = request.kind === 'capture-version' || request.kind === 'capture-preview' ? 120_000 : 15_000) {
     const operation = this.transition.then(() => this.execute(request, timeoutMs));
     this.transition = operation.then(() => undefined, () => undefined);
     return operation;

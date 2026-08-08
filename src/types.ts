@@ -187,6 +187,17 @@ export interface PhotoshopDocumentInfoResult {
   message?: string;
 }
 
+export interface PhotoshopDocumentPreviewResult extends PhotoshopDocumentResult {
+  preview?: ArrayBuffer;
+  documentName?: string;
+  width?: number;
+  height?: number;
+  colorMode?: string;
+  bitDepth?: number;
+  layerCount?: number;
+  format?: 'psd' | 'psb';
+}
+
 export interface PhotoshopVersionRecord {
   id: string;
   name: string;
@@ -351,6 +362,7 @@ interface RefCanvasAPI {
   placeRenderedLayersInPhotoshop(images: Array<{ data: ArrayBuffer; name: string }>): Promise<PhotoshopDocumentResult>;
   openRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
   getPhotoshopDocumentInfo(): Promise<PhotoshopDocumentInfoResult>;
+  capturePhotoshopPreview(): Promise<PhotoshopDocumentPreviewResult>;
   createPhotoshopVersion(
     sessionId: string | undefined, scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string,
     revision?: number, preview?: ArrayBuffer,

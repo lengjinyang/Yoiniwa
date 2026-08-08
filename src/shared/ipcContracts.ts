@@ -1,6 +1,6 @@
 import type {
   CacheInfo, ImageItem, ImagePipelinePerformanceStats, ImagePrewarmProgress, ImageThumbnailReady, ImportedImage,
-  NativePointerInput, PhotoshopColorSyncResult, PhotoshopDocumentResult, PhotoshopProjectMetadata, PhotoshopVersionRecord,
+  NativePointerInput, PhotoshopColorSyncResult, PhotoshopDocumentPreviewResult, PhotoshopDocumentResult, PhotoshopProjectMetadata, PhotoshopVersionRecord,
   PickedColor, ProjectCommitRequest, ProjectCommitResult, ProjectOpenResult, ProjectStorageStats, RecentScene, Scene,
   WindowState, PhotoshopDocumentInfoResult,
 } from '../types.js';
@@ -42,6 +42,7 @@ export interface IpcContractMap {
   'photoshop:place-rendered-layers': IpcContract<[images: Array<{ data: ArrayBuffer; name: string }>], PhotoshopDocumentResult>;
   'photoshop:open-rendered': IpcContract<[data: ArrayBuffer, name: string], PhotoshopDocumentResult>;
   'photoshop:get-document-info': IpcContract<[], PhotoshopDocumentInfoResult>;
+  'photoshop:capture-preview': IpcContract<[], PhotoshopDocumentPreviewResult>;
   'photoshop:create-version': IpcContract<[
     sessionId: string | undefined, scene: Scene, metadata: PhotoshopProjectMetadata, name: string, note?: string,
     revision?: number, preview?: ArrayBuffer,
