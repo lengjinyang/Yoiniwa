@@ -245,7 +245,7 @@ export async function runPerformanceBenchmark({ mainWindow, rootDir, app, writeS
       await writeScenePackage(packagePath, scene);
       const saveMs = performance.now() - saveStartedAt;
       const openStartedAt = performance.now();
-      const reopened = await readScenePackage(packagePath);
+      const { scene: reopened } = await readScenePackage(packagePath);
       const reopenMs = performance.now() - openStartedAt;
       const rendererResult = await mainWindow.webContents.executeJavaScript(`new Promise((resolve) => {
         window.__refCanvasPerf.loadScene(${JSON.stringify(reopened)});

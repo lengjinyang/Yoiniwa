@@ -1,12 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, protocol, screen, shell } from 'electron';
 import fs from 'node:fs/promises';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { fork as forkChildProcess, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants as osConstants, setPriority } from 'node:os';
 import sharp from 'sharp';
 import unzipper from 'unzipper';
@@ -26,11 +26,13 @@ import { closestManifestLevel, readImagePyramidManifest } from './services/image
 import { trimImagePyramidCache } from './services/image-cache-cleaner.js';
 import { WorkerAssetRegistrations } from './services/worker-asset-registrations.js';
 import { collectRecentAssetIds, hydrateRecentAssetIds } from './services/recent-assets.js';
-import type { ImportedImage, PhotoshopColorSyncResult } from '../src/types.js';
+import type { ImportedImage, PhotoshopColorSyncResult, PhotoshopDocumentInfoResult, PhotoshopProjectMetadata, PhotoshopVersionRecord, Scene } from '../src/types.js';
 import { createDirtyRevisionState, markRevisionSaved, updateDirtyRevision } from '../src/shared/dirtyRevision.js';
 import { PhotoshopColorBridge } from './services/photoshop-color-bridge.js';
 import { shouldAutoPhotoshopRoundTrip, shouldUseFocuslessPhotoshopPicker } from '../src/shared/photoshopIntegration.js';
 import { createPhotoshopSyncQueue } from './services/photoshop-sync-queue.js';
+import { PhotoshopDocumentBridge } from './services/photoshop-document-bridge.js';
+import { EMPTY_PHOTOSHOP_PROJECT_METADATA, normalizePhotoshopProjectMetadata } from '../src/shared/photoshopVersions.js';
 
 process.on('uncaughtExceptionMonitor', (error, origin) => logError('process.uncaught-exception', error, { origin }));
 process.on('unhandledRejection', (reason) => logError('process.unhandled-rejection', reason));
@@ -66,6 +68,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'refcanvas-asset', privileges: {
 let mainWindow;
 let dirtyRevisionState = createDirtyRevisionState();
 let currentScenePath;
+let currentPhotoshopMetadata: PhotoshopProjectMetadata = EMPTY_PHOTOSHOP_PROJECT_METADATA;
 const enqueuePersistence = createRecoveringQueue();
 let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.find((value) => /\.refcanvas$/i.test(value));
 // Temporary manual-verification hook. Keep explicit CLI/file-association paths
@@ -102,6 +105,7 @@ const pendingNativeInputRequests = new Map<string, {
   timer: NodeJS.Timeout;
 }>();
 const photoshopColorBridge = new PhotoshopColorBridge();
+const photoshopDocumentBridge = new PhotoshopDocumentBridge();
 let imageWorker;
 let imageWorkerPaused = false;
 let imageWorkerRequest = 0;
@@ -355,7 +359,7 @@ async function ensureAssetFile(id) {
   return registered.cachePath;
 }
 
-const { writeScenePackage, readScenePackage, readSceneAssetIds } = createScenePackages({
+const { writeScenePackage, readScenePackage, readSceneAssetIds, extractPhotoshopVersion } = createScenePackages({
   assetRegistry, assetCachePath, ensureAssetFile, extByMime,
 });
 
@@ -873,8 +877,9 @@ async function assetResponse(request) {
       const cached = await readPyramidLevel(id, Math.min(4096, Math.max(
         registered.record.naturalWidth, registered.record.naturalHeight,
       ))).catch(() => undefined);
-      if (cached) return new Response(cached, { headers: {
-        'Content-Type': encodedImageContentType(cached),
+      const source = cached ?? await ensureAssetBuffer(id);
+      return new Response(source, { headers: {
+        'Content-Type': encodedImageContentType(source),
         'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*',
       } });
     }
@@ -930,8 +935,116 @@ async function applyPhotoshopForeground(color, returnFocus: boolean): Promise<Ph
   return result('automation-error', bridgeResult.focusStatus, true, 'Photoshop 自动化失败，颜色已复制');
 }
 
+let photoshopOperationTransition = Promise.resolve<unknown>(undefined);
+function enqueuePhotoshopOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const next = photoshopOperationTransition.then(operation);
+  photoshopOperationTransition = next.then(() => undefined, () => undefined);
+  return next;
+}
+
+function blockedPhotoshopDocumentResult(message = '协作模式期间不能执行 Photoshop 文档操作') {
+  return { ok: false, status: 'blocked' as const, message };
+}
+
+function photoshopDocumentInteractionBlocked() {
+  return windowState.collaborationMode || (process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState));
+}
+
+function normalizedPhotoshopName(value: unknown, fallback: string) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 160) : fallback;
+}
+
+async function fileSha256(filePath: string) {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length; hash.update(buffer);
+  }
+  return { bytes, sha256: hash.digest('hex') };
+}
+
+async function runRenderedPhotoshopCommand(data: ArrayBuffer, name: string, kind: 'place-raster' | 'open-image') {
+  if (photoshopDocumentInteractionBlocked()) return blockedPhotoshopDocumentResult('无焦点取色模式期间不能执行 Photoshop 文档操作，请先退出协作模式或解除锁定置顶');
+  const buffer = Buffer.from(data);
+  if (!buffer.length || buffer.length > 512 * 1024 * 1024) return {
+    ok: false, status: 'automation-error' as const, message: '发送到 Photoshop 的图片大小无效',
+  };
+  const directory = await fs.mkdtemp(path.join(app.getPath('temp'), 'yoiniwa-photoshop-'));
+  const imagePath = path.join(directory, 'selection.png');
+  try {
+    await fs.writeFile(imagePath, buffer);
+    let pixelWidth: number | undefined;
+    let pixelHeight: number | undefined;
+    if (kind === 'place-raster') {
+      try {
+        const metadata = await sharp(imagePath, { sequentialRead: true }).metadata();
+        if (Number.isInteger(metadata.width) && metadata.width! > 0
+          && Number.isInteger(metadata.height) && metadata.height! > 0) {
+          pixelWidth = metadata.width;
+          pixelHeight = metadata.height;
+        }
+      } catch (error) { logWarn('photoshop.rendered-image-metadata-failed', { error: String(error) }); }
+    }
+    const result = await enqueuePhotoshopOperation(() => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return Promise.resolve(blockedPhotoshopDocumentResult('无焦点取色模式期间不能执行 Photoshop 文档操作，请先退出协作模式或解除锁定置顶'));
+      }
+      const documentName = normalizedPhotoshopName(name, 'Yoiniwa Selection');
+      return photoshopDocumentBridge.run(kind === 'place-raster'
+        ? { kind: 'place-raster', imagePath, name: documentName, pixelWidth, pixelHeight }
+        : { kind: 'open-image', imagePath, name: documentName });
+    });
+    if (result.ok && !photoshopDocumentInteractionBlocked()) await photoshopColorBridge.activate().catch(() => undefined);
+    return result;
+  } finally { await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined); }
+}
+
+async function runRenderedPhotoshopLayers(images: Array<{ data: ArrayBuffer; name: string }>) {
+  if (photoshopDocumentInteractionBlocked()) return blockedPhotoshopDocumentResult('无焦点取色模式期间不能执行 Photoshop 文档操作，请先退出协作模式或解除锁定置顶');
+  if (!Array.isArray(images) || !images.length) return {
+    ok: false, status: 'automation-error' as const, message: '没有可发送到 Photoshop 的图片',
+  };
+  const buffers = images.map((image) => Buffer.from(image.data));
+  if (buffers.some((buffer) => !buffer.length || buffer.length > 512 * 1024 * 1024)
+    || buffers.reduce((total, buffer) => total + buffer.length, 0) > 512 * 1024 * 1024) return {
+    ok: false, status: 'automation-error' as const, message: '发送到 Photoshop 的图片大小无效',
+  };
+  const directory = await fs.mkdtemp(path.join(app.getPath('temp'), 'yoiniwa-photoshop-batch-'));
+  try {
+    const entries = await Promise.all(buffers.map(async (buffer, index) => {
+      const imagePath = path.join(directory, `selection-${index}.png`);
+      await fs.writeFile(imagePath, buffer);
+      let pixelWidth: number | undefined;
+      let pixelHeight: number | undefined;
+      try {
+        const metadata = await sharp(imagePath, { sequentialRead: true }).metadata();
+        if (Number.isInteger(metadata.width) && metadata.width! > 0
+          && Number.isInteger(metadata.height) && metadata.height! > 0) {
+          pixelWidth = metadata.width; pixelHeight = metadata.height;
+        }
+      } catch (error) { logWarn('photoshop.rendered-image-metadata-failed', { error: String(error), index }); }
+      return {
+        imagePath,
+        name: normalizedPhotoshopName(images[index].name, `Yoiniwa Selection ${index + 1}`),
+        pixelWidth, pixelHeight,
+      };
+    }));
+    const result = await enqueuePhotoshopOperation(() => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return Promise.resolve(blockedPhotoshopDocumentResult('无焦点取色模式期间不能执行 Photoshop 文档操作，请先退出协作模式或解除锁定置顶'));
+      }
+      return photoshopDocumentBridge.run({ kind: 'place-raster-batch', images: entries });
+    });
+    if (result.ok && !photoshopDocumentInteractionBlocked()) await photoshopColorBridge.activate().catch(() => undefined);
+    return result;
+  } catch (error) {
+    return { ok: false, status: 'automation-error' as const, message: `发送到 Photoshop 失败：${String(error)}` };
+  } finally { await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined); }
+}
+
 const photoshopSyncQueue = createPhotoshopSyncQueue(async ({ color, returnFocus }) => {
-  try { return await applyPhotoshopForeground(color, returnFocus); }
+  try { return await enqueuePhotoshopOperation(() => applyPhotoshopForeground(color, returnFocus)); }
   catch {
     clipboard.writeText(color.hex);
     return {
@@ -993,14 +1106,17 @@ function registerCollaborationShortcut(shortcut) {
   return true;
 }
 
-function enqueueSceneSave(filePath, scene, revision) {
+function enqueueSceneSave(filePath, scene, revision, metadata: PhotoshopProjectMetadata = currentPhotoshopMetadata) {
   dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
+  const versionSourcePath = currentScenePath ?? filePath;
   const savedScene = { ...scene, name: path.basename(filePath, '.refcanvas'), savedAt: new Date().toISOString() };
   return enqueuePersistence(async () => {
     const startedAt = performance.now();
     try {
-      await writeScenePackage(filePath, savedScene);
+      const normalizedMetadata = normalizePhotoshopProjectMetadata(metadata);
+      await writeScenePackage(filePath, savedScene, normalizedMetadata, new Map(), versionSourcePath);
       currentScenePath = filePath;
+      currentPhotoshopMetadata = normalizedMetadata;
       dirtyRevisionState = markRevisionSaved(dirtyRevisionState, revision);
       const savedAssetIds: string[] = (savedScene.items ?? []).flatMap((item: { assetId?: unknown }) => (
         typeof item.assetId === 'string' ? [item.assetId] : []
@@ -1010,7 +1126,7 @@ function enqueueSceneSave(filePath, scene, revision) {
         name: path.basename(filePath), items: scene.items?.length ?? 0, assets: Object.keys(scene.assets ?? {}).length,
         durationMs: performance.now() - startedAt,
       });
-      return { canceled: false, path: filePath, scene: savedScene, revision };
+      return { canceled: false, path: filePath, scene: savedScene, revision, metadata: normalizedMetadata };
     } catch (error) {
       logError('scene.save-failed', error, { name: path.basename(filePath), durationMs: performance.now() - startedAt });
       throw error;
@@ -2056,7 +2172,7 @@ function createWindow() {
         }], groups: [], visualNotes: { visible: true, nextNumber: 1, marks: [], localTags: [] },
       };
       await writeScenePackage(packagePath, packageScene);
-      const reopened = await readScenePackage(packagePath);
+      const { scene: reopened } = await readScenePackage(packagePath);
       await fs.rm(packagePath, { force: true });
       const packageReady = reopened.version === 3 && Boolean(reopened.assets[smokeAsset.assetId]);
       let cacheMigrationReady = true;
@@ -2259,6 +2375,28 @@ handleIpc('images:register-clipboard', async () => {
   return [await registerAssetBuffer(`clipboard-${Date.now()}.png`, buffer, undefined, 'clipboard')] as ImportedImage[];
 });
 
+ipcMain.on('images:start-native-drag', (event, requestedAssetIds) => {
+  if (photoshopDocumentInteractionBlocked() || !Array.isArray(requestedAssetIds)) return;
+  const assetIds = [...new Set(requestedAssetIds.filter((value): value is string => (
+    typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
+  )))].slice(0, 32);
+  const files = assetIds.flatMap((assetId) => {
+    const registered = assetRegistry.get(assetId);
+    if (!registered) return [];
+    const sourcePath = registered.record.sourcePath;
+    if (typeof sourcePath === 'string' && path.isAbsolute(sourcePath) && existsSync(sourcePath)) return [sourcePath];
+    return existsSync(registered.cachePath) ? [registered.cachePath] : [];
+  });
+  if (!files.length) return;
+  try {
+    const iconPath = path.join(rootDir, app.isPackaged ? 'dist' : 'public', 'yoiniwa-icon.png');
+    const icon = nativeImage.createFromPath(iconPath).resize({ width: 64, height: 64 });
+    event.sender.startDrag({ file: files[0], files, icon });
+  } catch (error) {
+    logWarn('images.native-drag-failed', { error: String(error), count: files.length });
+  }
+});
+
 handleIpc('images:prewarm', async (event, ids, requestId) => {
   if (typeof requestId !== 'string' || !requestId) throw new Error('预热请求无效');
   return prewarmImages(ids, event.sender, requestId);
@@ -2346,21 +2484,21 @@ ipcMain.on('images:boost-resource', (_event, resourceKey, requestedPriority) => 
   } catch { /* Ignore malformed renderer hints. */ }
 });
 
-handleIpc('scene:save', async (_event, scene, saveAs = false, revision) => {
+handleIpc('scene:save', async (_event, scene, saveAs = false, revision, metadata) => {
   const targetPath = !saveAs ? currentScenePath : undefined;
-  if (targetPath) return enqueueSceneSave(targetPath, scene, revision);
+  if (targetPath) return enqueueSceneSave(targetPath, scene, revision, metadata);
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: `${scene.name || '未命名画板'}.refcanvas`,
     filters: sceneFilters,
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   const filePath = result.filePath.endsWith('.refcanvas') ? result.filePath : `${result.filePath}.refcanvas`;
-  return enqueueSceneSave(filePath, scene, revision);
+  return enqueueSceneSave(filePath, scene, revision, metadata);
 });
 
-handleIpc('scene:autosave', async (_event, scene, revision) => {
+handleIpc('scene:autosave', async (_event, scene, revision, metadata) => {
   if (!currentScenePath) return { skipped: true };
-  return enqueueSceneSave(currentScenePath, scene, revision);
+  return enqueueSceneSave(currentScenePath, scene, revision, metadata);
 });
 
 handleIpc('scene:open', async (_event, requestedPath) => {
@@ -2373,16 +2511,18 @@ handleIpc('scene:open', async (_event, requestedPath) => {
   return enqueuePersistence(async () => {
     const startedAt = performance.now();
     try {
-      const scene = await readScenePackage(filePath);
+      const packaged = await readScenePackage(filePath);
+      const scene = packaged.scene;
       await retainAssetRegistry(Object.keys(scene.assets ?? {}));
       currentScenePath = filePath;
+      currentPhotoshopMetadata = packaged.metadata;
       dirtyRevisionState = createDirtyRevisionState();
       await addRecent(filePath, Object.keys(scene.assets ?? {}));
       logInfo('scene.opened', {
         name: path.basename(filePath), items: scene.items?.length ?? 0, assets: Object.keys(scene.assets ?? {}).length,
         durationMs: performance.now() - startedAt,
       });
-      return { canceled: false, path: filePath, scene };
+      return { canceled: false, path: filePath, scene, metadata: packaged.metadata };
     } catch (error) {
       logError('scene.open-failed', error, { name: path.basename(filePath), durationMs: performance.now() - startedAt });
       throw error;
@@ -2394,8 +2534,8 @@ handleIpc('scene:import', async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: sceneFilters });
   if (result.canceled || !result.filePaths[0]) return { canceled: true };
   const [filePath] = result.filePaths;
-  const scene = await readScenePackage(filePath, { registerAssets: true });
-  return { canceled: false, path: filePath, scene };
+  const packaged = await readScenePackage(filePath, { registerAssets: true });
+  return { canceled: false, path: filePath, scene: packaged.scene };
 });
 
 handleIpc('scene:recent', async () => cleanTestSession ? [] : (await readState()).recent ?? []);
@@ -2410,6 +2550,7 @@ handleIpc('cache:choose-location', async () => {
 handleIpc('cache:reset-location', async () => setCacheLocation());
 ipcMain.on('scene:reset-path', () => {
   dirtyRevisionState = createDirtyRevisionState();
+  currentPhotoshopMetadata = EMPTY_PHOTOSHOP_PROJECT_METADATA;
   void enqueuePersistence(async () => {
     currentScenePath = undefined;
     await retainAssetRegistry([]);
@@ -2458,6 +2599,142 @@ handleIpc('photoshop:set-foreground', async (_event, rawColor, requestedReturnFo
   return new Promise<PhotoshopColorSyncResult>((resolve) => {
     setImmediate(() => { void photoshopSyncQueue.enqueue({ color, returnFocus }).then(resolve); });
   });
+});
+
+handleIpc('photoshop:place-rendered', async (_event, data, name) => {
+  return runRenderedPhotoshopCommand(data, name, 'place-raster');
+});
+
+handleIpc('photoshop:place-rendered-layers', async (_event, images) => {
+  return runRenderedPhotoshopLayers(images);
+});
+
+handleIpc('photoshop:open-rendered', async (_event, data, name) => {
+  return runRenderedPhotoshopCommand(data, name, 'open-image');
+});
+
+handleIpc('photoshop:get-document-info', async (): Promise<PhotoshopDocumentInfoResult> => {
+  if (photoshopDocumentInteractionBlocked()) {
+    const blocked = blockedPhotoshopDocumentResult('无焦点取色模式期间不能读取 Photoshop 文档，请先退出协作模式或解除锁定置顶');
+    return { ...blocked };
+  }
+  const result = await enqueuePhotoshopOperation(() => photoshopDocumentBridge.run({ kind: 'document-info' }));
+  return { ok: result.ok, status: result.status, message: result.message, documentName: result.documentInfo?.documentName };
+});
+
+handleIpc('photoshop:create-version', async (_event, scene: Scene, rawMetadata, rawName, rawNote, revision) => {
+  if (photoshopDocumentInteractionBlocked()) return { canceled: false, message: blockedPhotoshopDocumentResult('无焦点取色模式期间不能保存 Photoshop 版本，请先退出协作模式或解除锁定置顶').message };
+  const name = normalizedPhotoshopName(rawName, '');
+  if (!name) return { canceled: false, message: '请输入版本名称' };
+  const note = typeof rawNote === 'string' && rawNote.trim() ? rawNote.trim().slice(0, 4000) : undefined;
+  const scenePathAtRequest = currentScenePath;
+  let targetPath = currentScenePath;
+  if (!targetPath) {
+    const save = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: `${scene.name || '未命名画板'}.refcanvas`, filters: sceneFilters,
+    });
+    if (save.canceled || !save.filePath) return { canceled: true };
+    targetPath = save.filePath.endsWith('.refcanvas') ? save.filePath : `${save.filePath}.refcanvas`;
+  }
+  const metadata = normalizePhotoshopProjectMetadata(rawMetadata);
+  const temporaryRoot = await fs.mkdtemp(path.join(app.getPath('temp'), 'yoiniwa-photoshop-version-'));
+  const versionId = randomUUID();
+  const psdPath = path.join(temporaryRoot, `${versionId}.psd`);
+  const psbPath = path.join(temporaryRoot, `${versionId}.psb`);
+  const previewPath = path.join(temporaryRoot, `${versionId}.png`);
+  try {
+    const capture = await enqueuePhotoshopOperation(() => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return Promise.resolve(blockedPhotoshopDocumentResult('无焦点取色模式期间不能保存 Photoshop 版本，请先退出协作模式或解除锁定置顶'));
+      }
+      return photoshopDocumentBridge.run({
+        kind: 'capture-version', archivePsdPath: psdPath, archivePsbPath: psbPath, previewPath,
+      });
+    });
+    if (!capture.ok || !capture.document) return { canceled: false, message: capture.message ?? '无法保存 Photoshop 版本' };
+    const archivePath = capture.document.archivePath;
+    const digest = await fileSha256(archivePath);
+    const preview = await registerAssetBuffer(`${name}.png`, await fs.readFile(previewPath), undefined, 'file');
+    const version: PhotoshopVersionRecord = {
+      id: versionId, name, note, createdAt: new Date().toISOString(), documentName: capture.document.documentName,
+      width: capture.document.width, height: capture.document.height, colorMode: capture.document.colorMode,
+      bitDepth: capture.document.bitDepth, layerCount: capture.document.layerCount, format: capture.document.format,
+      byteLength: digest.bytes, sha256: digest.sha256, archiveEntry: `photoshop-versions/${versionId}.${capture.document.format}`,
+      previewAssetId: preview.assetId, previewAsset: preview.asset,
+    };
+    const nextMetadata: PhotoshopProjectMetadata = { versions: [...metadata.versions, version] };
+    const savedScene = { ...scene, name: path.basename(targetPath, '.refcanvas'), savedAt: new Date().toISOString() };
+    return await enqueuePersistence(async () => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return { canceled: false, message: '协作模式期间不能保存 Photoshop 版本' };
+      }
+      if (currentScenePath !== scenePathAtRequest) {
+        return { canceled: false, message: '画板已切换，未保存 Photoshop 版本' };
+      }
+      dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
+      await writeScenePackage(targetPath, savedScene, nextMetadata, new Map([[versionId, archivePath]]));
+      currentScenePath = targetPath;
+      currentPhotoshopMetadata = nextMetadata;
+      dirtyRevisionState = markRevisionSaved(dirtyRevisionState, revision);
+      await addRecent(targetPath, (savedScene.items ?? []).flatMap((item: { assetId?: string }) => item.assetId ? [item.assetId] : []));
+      return { canceled: false, path: targetPath, scene: savedScene, revision, metadata: nextMetadata, version };
+    });
+  } catch (error) {
+    logError('photoshop.version-create-failed', error);
+    return { canceled: false, message: `保存 Photoshop 版本失败：${String(error)}` };
+  } finally { await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined); }
+});
+
+handleIpc('photoshop:open-version', async (_event, versionId) => {
+  if (photoshopDocumentInteractionBlocked()) return blockedPhotoshopDocumentResult('无焦点取色模式期间不能打开 Photoshop 版本，请先退出协作模式或解除锁定置顶');
+  if (!currentScenePath) return { ok: false, status: 'automation-error', message: '当前画板尚未保存' };
+  const version = currentPhotoshopMetadata.versions.find((value) => value.id === versionId);
+  if (!version) return { ok: false, status: 'automation-error', message: '找不到 Photoshop 版本' };
+  const temporaryRoot = await fs.mkdtemp(path.join(app.getPath('temp'), 'yoiniwa-photoshop-open-'));
+  const versionPath = path.join(temporaryRoot, `${version.id}.${version.format}`);
+  try {
+    await extractPhotoshopVersion(currentScenePath, version, versionPath);
+    const result = await enqueuePhotoshopOperation(() => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return Promise.resolve(blockedPhotoshopDocumentResult('无焦点取色模式期间不能打开 Photoshop 版本，请先退出协作模式或解除锁定置顶'));
+      }
+      return photoshopDocumentBridge.run({
+        kind: 'open-version', versionPath, name: version.name,
+      });
+    });
+    if (result.ok && !photoshopDocumentInteractionBlocked()) await photoshopColorBridge.activate().catch(() => undefined);
+    return result;
+  } catch (error) {
+    return { ok: false, status: 'automation-error', message: `无法打开 Photoshop 版本：${String(error)}` };
+  } finally { await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined); }
+});
+
+handleIpc('photoshop:delete-version', async (_event, scene: Scene, rawMetadata, versionId, revision) => {
+  if (photoshopDocumentInteractionBlocked()) return { canceled: false, message: blockedPhotoshopDocumentResult('无焦点取色模式期间不能删除 Photoshop 版本，请先退出协作模式或解除锁定置顶').message };
+  if (!currentScenePath) return { canceled: false, message: '当前画板尚未保存' };
+  const targetPath = currentScenePath;
+  const metadata = normalizePhotoshopProjectMetadata(rawMetadata);
+  if (!metadata.versions.some((version) => version.id === versionId)) return { canceled: false, message: '找不到 Photoshop 版本' };
+  const nextMetadata: PhotoshopProjectMetadata = { versions: metadata.versions.filter((version) => version.id !== versionId) };
+  const savedScene = { ...scene, name: path.basename(targetPath, '.refcanvas'), savedAt: new Date().toISOString() };
+  try {
+    return await enqueuePersistence(async () => {
+      if (photoshopDocumentInteractionBlocked()) {
+        return { canceled: false, message: '协作模式期间不能删除 Photoshop 版本' };
+      }
+      if (currentScenePath !== targetPath) {
+        return { canceled: false, message: '画板已切换，未删除 Photoshop 版本' };
+      }
+      dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, revision);
+      await writeScenePackage(targetPath, savedScene, nextMetadata);
+      currentPhotoshopMetadata = nextMetadata;
+      dirtyRevisionState = markRevisionSaved(dirtyRevisionState, revision);
+      return { canceled: false, path: targetPath, scene: savedScene, revision, metadata: nextMetadata };
+    });
+  } catch (error) {
+    logError('photoshop.version-delete-failed', error, { versionId });
+    return { canceled: false, message: `删除 Photoshop 版本失败：${String(error)}` };
+  }
 });
 
 handleIpc('window:set-mode', async (_event, patch) => {
@@ -2552,6 +2829,21 @@ handleIpc('window:set-mode', async (_event, patch) => {
   return windowState;
 });
 handleIpc('window:get-mode', () => windowState);
+handleIpc('window:get-work-area', (_event, point) => {
+  const contentBounds = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getContentBounds() : undefined;
+  if (!contentBounds) return { left: 0, top: 0, right: 0, bottom: 0 };
+  const localPoint = point && Number.isFinite(point.x) && Number.isFinite(point.y) ? point : {
+    x: contentBounds.width / 2, y: contentBounds.height / 2,
+  };
+  const display = screen.getDisplayNearestPoint({ x: contentBounds.x + localPoint.x, y: contentBounds.y + localPoint.y });
+  const workArea = display.workArea;
+  return {
+    left: Math.max(0, workArea.x - contentBounds.x),
+    top: Math.max(0, workArea.y - contentBounds.y),
+    right: Math.min(contentBounds.width, workArea.x + workArea.width - contentBounds.x),
+    bottom: Math.min(contentBounds.height, workArea.y + workArea.height - contentBounds.y),
+  };
+});
 handleIpc('window:get-collaboration-shortcut', () => ({ shortcut: collaborationShortcut }));
 handleIpc('window:set-collaboration-shortcut', async (_event, shortcut) => {
   if (windowState.collaborationMode) return { ok: false, shortcut: collaborationShortcut, message: '请先退出协作模式，再更改协作快捷键' };

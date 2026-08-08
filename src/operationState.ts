@@ -1,4 +1,4 @@
-export type OperationKind = 'save' | 'open' | 'import' | 'export';
+export type OperationKind = 'save' | 'open' | 'import' | 'export' | 'photoshop';
 export type OperationStatus = 'running' | 'success' | 'error';
 
 export interface OperationState {

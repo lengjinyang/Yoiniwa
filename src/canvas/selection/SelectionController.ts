@@ -41,6 +41,7 @@ interface SelectionControllerOptions {
   hitHandle(point: { x: number; y: number }): TransformHandle | undefined;
   hitGroupHandle(point: { x: number; y: number }): GroupResizeHandle | undefined;
   interactionBlocked(event?: PointerEvent): boolean;
+  externalDrag(items: ImageItem[]): (() => void) | undefined;
   cameraChanged(committed: boolean): void;
 }
 
@@ -60,7 +61,8 @@ export class SelectionController {
     const disposers = [
       this.options.input.onPointerDown(down), this.options.input.onPointerMove(move), this.options.input.onPointerUp(up),
     ];
-    const leave = () => {
+    const leave = (event: PointerEvent) => {
+      if (this.tryStartExternalDrag(event)) return;
       this.options.groupHeaderHoverChanged();
       this.options.element.style.cursor = '';
     };
@@ -74,6 +76,8 @@ export class SelectionController {
   }
 
   setSelection(ids: string[]) { this.selection.replace(ids); this.refresh(); }
+  hasSelection(id: string) { return this.selection.has(id); }
+  selectedIds() { return this.selection.values(); }
   setGroupSelection(id?: string) { this.selectedGroupId = id; }
   refresh() {
     const scene = this.options.scene();
@@ -188,6 +192,7 @@ export class SelectionController {
       return;
     }
     if (!this.pointer.update(event)) return;
+    if (this.tryStartExternalDrag(event)) return;
     if (this.drag.kind === 'box') {
       const local = this.local(event);
       const width = this.options.element.clientWidth; const height = this.options.element.clientHeight;
@@ -246,6 +251,27 @@ export class SelectionController {
   }
 
   private emitSelection() { this.options.selectionChanged(this.selection.values()); this.refresh(); }
+
+  private tryStartExternalDrag(event: PointerEvent) {
+    if (this.drag?.kind !== 'move' || (event.buttons & 1) !== 1) return false;
+    const bounds = this.options.element.getBoundingClientRect();
+    const outside = event.clientX <= bounds.left + 1 || event.clientX >= bounds.right - 1
+      || event.clientY <= bounds.top + 1 || event.clientY >= bounds.bottom - 1;
+    if (!outside) return false;
+    const start = this.options.externalDrag(this.drag.originals);
+    if (!start) return false;
+    if (this.pendingChanges.length) {
+      this.options.preview(this.drag.originals.map((item) => ({ id: item.id, x: item.x, y: item.y })));
+    }
+    if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);
+    this.pointer.cancel();
+    this.pendingChanges = [];
+    this.drag = undefined;
+    this.options.element.style.cursor = '';
+    this.refresh();
+    queueMicrotask(start);
+    return true;
+  }
 
   private beginPointer(event: PointerEvent) {
     this.pointer.begin(event);

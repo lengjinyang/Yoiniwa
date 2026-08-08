@@ -6,6 +6,8 @@ import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ZipArchive } from 'archiver';
 import unzipper from 'unzipper';
+import type { PhotoshopProjectMetadata, PhotoshopVersionRecord } from '../../src/types.js';
+import { EMPTY_PHOTOSHOP_PROJECT_METADATA, normalizePhotoshopProjectMetadata } from '../../src/shared/photoshopVersions.js';
 
 interface ScenePackageServices {
   assetRegistry: Map<string, any>;
@@ -92,20 +94,33 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     }
     if (hasBackup) await fs.rm(backupPath, { force: true }).catch(() => undefined);
   }
-  function serializableScene(scene: any) {
-    const usedAssets = new Set(scene.items.flatMap((item) => item.assetId ? [item.assetId] : []));
+  function serializableScene(scene: any, metadata: PhotoshopProjectMetadata = EMPTY_PHOTOSHOP_PROJECT_METADATA) {
+    const normalizedMetadata = normalizePhotoshopProjectMetadata(metadata);
+    const usedAssets = new Set([
+      ...scene.items.flatMap((item) => item.assetId ? [item.assetId] : []),
+      ...normalizedMetadata.versions.map((version) => version.previewAssetId),
+    ]);
+    const availableAssets = { ...scene.assets };
+    normalizedMetadata.versions.forEach((version) => { availableAssets[version.previewAssetId] = version.previewAsset; });
     return {
       ...scene, version: 3,
-      assets: Object.fromEntries(Object.entries(scene.assets ?? {}).filter(([id]) => usedAssets.has(id))),
+      photoshopProject: normalizedMetadata,
+      assets: Object.fromEntries(Object.entries(availableAssets).filter(([id]) => usedAssets.has(id))),
       items: scene.items.map(({ dataUrl: _dataUrl, ...item }) => item),
     };
   }
 
-  async function writeScenePackage(filePath, scene) {
-    const manifest = serializableScene(scene);
+  async function writeScenePackage(
+    filePath: string,
+    scene: any,
+    metadata: PhotoshopProjectMetadata = EMPTY_PHOTOSHOP_PROJECT_METADATA,
+    versionFiles: ReadonlyMap<string, string> = new Map(),
+    versionSourcePath = filePath,
+  ) {
+    const manifest = serializableScene(scene, metadata);
     const tempPath = `${filePath}.${process.pid}.tmp`;
     const output = createWriteStream(tempPath);
-    const archive = new ZipArchive({ zlib: { level: 0 } });
+    const archive = new ZipArchive({ zlib: { level: 0 }, forceZip64: true } as any);
     const completed = new Promise<void>((resolve, reject) => {
       output.once('close', resolve); output.once('error', reject); archive.once('error', reject);
     });
@@ -115,6 +130,20 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
       for (const record of Object.values(manifest.assets ?? {}) as any[]) {
         const assetPath = await ensureAssetFile(record.id);
         archive.file(assetPath, { name: `assets/${record.id}${extByMime[record.mimeType] ?? '.bin'}`, store: true } as any);
+      }
+      let existingDirectory: Awaited<ReturnType<typeof unzipper.Open.file>> | undefined;
+      if ((manifest.photoshopProject?.versions.length ?? 0) > versionFiles.size) {
+        try { existingDirectory = await unzipper.Open.file(versionSourcePath); } catch { /* A new project has no previous archive. */ }
+      }
+      for (const version of manifest.photoshopProject?.versions ?? []) {
+        const sourcePath = versionFiles.get(version.id);
+        if (sourcePath) {
+          archive.file(sourcePath, { name: version.archiveEntry, store: true } as any);
+          continue;
+        }
+        const entry = existingDirectory?.files.find((value) => value.path === version.archiveEntry);
+        if (!entry) throw new Error(`画板缺少 Photoshop 版本数据：${version.name}`);
+        archive.append(entry.stream(), { name: version.archiveEntry, store: true } as any);
       }
       await archive.finalize();
       await completed;
@@ -215,7 +244,21 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
         assetRegistry.set(record.id, { record, cachePath, archivePath: filePath, entryPath });
       });
     }
-    return scene;
+    const metadata = normalizePhotoshopProjectMetadata(scene.photoshopProject);
+    delete scene.photoshopProject;
+    for (const version of metadata.versions) {
+      const previewRecord = scene.assets?.[version.previewAssetId];
+      if (!previewRecord || previewRecord.hash !== version.previewAsset.hash
+        || previewRecord.byteLength !== version.previewAsset.byteLength
+        || previewRecord.mimeType !== version.previewAsset.mimeType) {
+        throw new Error(`场景包缺少 Photoshop 版本预览：${version.name}`);
+      }
+      const entry = directory.files.find((value) => value.path === version.archiveEntry);
+      if (!entry) throw new Error(`场景包缺少 Photoshop 版本：${version.name}`);
+      const declared = Number((entry as any).uncompressedSize);
+      if (Number.isFinite(declared) && declared !== version.byteLength) throw new Error(`Photoshop 版本大小不匹配：${version.name}`);
+    }
+    return { scene, metadata };
   }
 
   async function readSceneAssetIds(filePath: string) {
@@ -249,5 +292,26 @@ export function createScenePackages({ assetRegistry, assetCachePath, ensureAsset
     }));
   }
 
-  return { serializableScene, writeScenePackage, readScenePackage, readSceneAssetIds, registerRecoveredSceneAssets };
+  async function extractPhotoshopVersion(filePath: string, version: PhotoshopVersionRecord, targetPath: string) {
+    const directory = await unzipper.Open.file(filePath);
+    const entry = directory.files.find((value) => value.path === version.archiveEntry);
+    if (!entry) throw new Error(`画板缺少 Photoshop 版本：${version.name}`);
+    const hash = createHash('sha256');
+    let bytes = 0;
+    const verify = new Transform({ transform(chunk, _encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > version.byteLength) { callback(new Error(`Photoshop 版本大小超过记录：${version.name}`)); return; }
+      hash.update(chunk); callback(undefined, chunk);
+    } });
+    try {
+      await pipeline(entry.stream(), verify, createWriteStream(targetPath, { flags: 'wx' }));
+      if (bytes !== version.byteLength || hash.digest('hex') !== version.sha256) throw new Error(`Photoshop 版本校验失败：${version.name}`);
+      return targetPath;
+    } catch (error) {
+      await fs.rm(targetPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  return { serializableScene, writeScenePackage, readScenePackage, readSceneAssetIds, registerRecoveredSceneAssets, extractPhotoshopVersion };
 }

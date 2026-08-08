@@ -18,4 +18,5 @@ export class PointerState {
     this.pointerId = undefined;
     return true;
   }
+  cancel() { this.pointerId = undefined; }
 }
