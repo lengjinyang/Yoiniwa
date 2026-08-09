@@ -101,7 +101,7 @@ export function useProjectLifecycle({
   }, [api, history.dirty, history.revision]);
 
   const save = useCallback(async (saveAs = false) => {
-    if (!api || saveInFlightRef.current) return;
+    if (!api || saveInFlightRef.current) return false;
     saveInFlightRef.current = true;
     const flushed = history.flushViewport(liveViewportRef.current);
     const saveRevision = flushed.revision;
@@ -129,9 +129,13 @@ export function useProjectLifecycle({
         settleOperation(requestId, 'success', `已保存至 ${result.path}${upgrade}`);
         setStatus(savedCurrentRevision ? '' : '保存完成，但保存期间产生了新修改');
         refreshRecent();
-      } else clearOperation(requestId);
+        return savedCurrentRevision;
+      }
+      clearOperation(requestId);
+      return false;
     } catch (error) {
       settleOperation(requestId, 'error', `保存失败：${String(error)}`);
+      return false;
     } finally {
       saveInFlightRef.current = false;
     }

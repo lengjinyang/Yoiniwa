@@ -6,7 +6,7 @@ export type UiIconName =
   | 'chevrons-down' | 'chevrons-up' | 'clock' | 'close' | 'eye' | 'eye-off' | 'file' | 'group'
   | 'lightness' | 'lock' | 'maximize' | 'minimize' | 'opacity' | 'pen' | 'pin'
   | 'plus' | 'reset' | 'saturation' | 'search' | 'trash' | 'unlock'
-  | 'note-arrow' | 'note-number' | 'tag' | 'eraser' | 'pressure' | 'renumber' | 'edit' | 'palette' | 'smooth' | 'version';
+  | 'note-arrow' | 'note-number' | 'tag' | 'eraser' | 'pressure' | 'renumber' | 'edit' | 'palette' | 'smooth' | 'version' | 'warning';
 
 export function UiIcon({ name, size = 16, ...props }: SVGProps<SVGSVGElement> & { name: UiIconName; size?: number }) {
   return <svg {...props} className={`ui-icon${props.className ? ` ${props.className}` : ''}`}
@@ -49,5 +49,6 @@ export function UiIcon({ name, size = 16, ...props }: SVGProps<SVGSVGElement> & 
     {name === 'palette' && <><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6h1.1c.8 0 1.2-.9.7-1.5-.6-.7-.1-1.8.8-1.8h1.1c1.3 0 2.1-1.2 2.1-2.5A5.8 5.8 0 0 0 8 2.2Z" /><circle cx="5" cy="6" r=".7" /><circle cx="8" cy="4.8" r=".7" /><circle cx="11" cy="6.2" r=".7" /></>}
     {name === 'smooth' && <path d="M2 10.8c1.7 0 1.8-5.6 3.8-5.6 1.8 0 1.9 5.6 3.7 5.6 2 0 2.1-5.6 4.5-5.6" />}
     {name === 'version' && <><rect x="3.2" y="3" width="9.6" height="10.3" rx="1.3" /><path d="M5.1 3V1.8h5.8V3M5.4 6h5.2M5.4 8.3h5.2M5.4 10.6h3.2" /></>}
+    {name === 'warning' && <><path d="M8 2.2 14 13.3H2Z" /><path d="M8 6v3.2M8 11.6h.01" /></>}
   </svg>;
 }

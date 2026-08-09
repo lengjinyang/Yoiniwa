@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react';
+import { useRef, type Dispatch, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
 import { CanvasView } from '../../canvas/CanvasView';
 import { ColorControl } from '../../ColorControl';
 import { ContextMenu, type ContextMenuEntry } from '../../ContextMenu';
@@ -158,7 +158,6 @@ interface AppOverlaysProps {
   visualNotes: VisualNotes;
   project: Project;
   windowController: WindowController;
-  colorPicker: ColorPicker;
   versions: Versions;
   imageImport: ImageImport;
   context: Context;
@@ -177,7 +176,6 @@ export function AppOverlays({
   visualNotes,
   project,
   windowController,
-  colorPicker,
   versions,
   imageImport,
   context,
@@ -188,6 +186,51 @@ export function AppOverlays({
   photoshopDocumentBlocked,
 }: AppOverlaysProps) {
   const comparison = versions.comparisonPreview;
+  const emptyStateWindowDragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | undefined>(undefined);
+  const suppressEmptyStateContextMenuRef = useRef(false);
+  const startEmptyStateWindowDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== 'mouse' || event.button !== 2 || windowController.mode.locked) return;
+    suppressEmptyStateContextMenuRef.current = false;
+    emptyStateWindowDragRef.current = {
+      pointerId: event.pointerId, startX: event.screenX, startY: event.screenY, moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    api?.beginWindowMove();
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const moveEmptyStateWindow = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = emptyStateWindowDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.moved && Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY) >= 4) {
+      drag.moved = true;
+      suppressEmptyStateContextMenuRef.current = true;
+    }
+    if (drag.moved) api?.updateWindowMove();
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const endEmptyStateWindowDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = emptyStateWindowDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    emptyStateWindowDragRef.current = undefined;
+    if (!drag.moved) suppressEmptyStateContextMenuRef.current = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    api?.endWindowMove();
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const openEmptyStateContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (suppressEmptyStateContextMenuRef.current) {
+      suppressEmptyStateContextMenuRef.current = false;
+      return;
+    }
+    panels.setPropertiesOpen(false);
+    workspace.setGroupActionMenu(undefined);
+    context.open({ x: event.clientX, y: event.clientY });
+  };
   return <>
     {versions.comparisonVersion && <PhotoshopVersionComparePanel
       currentPreviewUrl={comparison.url}
@@ -308,7 +351,10 @@ export function AppOverlays({
 
     <VisualNotesToolbar {...visualNotes.toolbarProps} />
 
-    {!workspace.hasContent && <div className="empty-state no-drag">
+    {!workspace.hasContent && <div className="empty-state no-drag"
+      onPointerDown={startEmptyStateWindowDrag} onPointerMove={moveEmptyStateWindow}
+      onPointerUp={endEmptyStateWindowDrag} onPointerCancel={endEmptyStateWindowDrag}
+      onContextMenu={openEmptyStateContextMenu}>
       <img className="empty-brand-icon" src="./yoiniwa-icon.png" alt="宵庭 Logo" draggable={false} />
       <div className="empty-brand-name"><strong>Yoiniwa</strong><span>宵庭</span></div>
       <h1>建立你的参考画板</h1>
@@ -325,9 +371,6 @@ export function AppOverlays({
           </button>)}
         </div>
       </section>}
-      <small>右键菜单/拖动窗口 · {colorPicker.activeShortcut === 's'
-        ? 'S+左键取色 · Alt+左键或中键平移'
-        : 'Alt+笔尖取色 · 中键平移'} · 空格聚焦</small>
     </div>}
 
     <ImageImportProgress progress={imageImport.progress} />

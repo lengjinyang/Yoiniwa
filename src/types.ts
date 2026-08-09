@@ -386,6 +386,8 @@ interface RefCanvasAPI {
   endWindowMove(): void;
   onWindowMoveFinished(callback: () => void): () => void;
   close(): void;
+  respondToClose(shouldClose: boolean): void;
+  onCloseRequested(callback: () => void): () => void;
   setDirty(dirty: boolean, revision?: number): void;
   onClickThroughDisabled(callback: () => void): () => void;
   onToggleCollaborationRequested(callback: () => void): () => void;

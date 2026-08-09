@@ -68,6 +68,8 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'refcanvas-asset', privileges: {
 
 let mainWindow;
 let dirtyRevisionState = createDirtyRevisionState();
+let closeConfirmationPending = false;
+let closeConfirmed = false;
 let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.find((value) => /\.(?:yoi|refcanvas)$/i.test(value));
 let windowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 const DEFAULT_COLLABORATION_SHORTCUT = 'Ctrl+Alt+Y';
@@ -1778,6 +1780,8 @@ function finishWindowMove() {
 
 function createWindow() {
   logInfo('window.create', { width: 1280, height: 820, smokeTest, projectZoomBenchmark });
+  closeConfirmationPending = false;
+  closeConfirmed = false;
   mainWindow = new BrowserWindow({
     title: '未命名画板 · Yoiniwa',
     icon: path.join(rootDir, app.isPackaged ? 'dist' : 'public', 'yoiniwa-icon.png'),
@@ -2288,19 +2292,17 @@ function createWindow() {
     mainWindow.loadURL(target.toString());
   } else mainWindow.loadFile(path.join(rootDir, 'dist', 'index.html'), Object.keys(rendererQuery).length ? { query: rendererQuery } : undefined);
   mainWindow.on('close', (event) => {
-    if (!dirtyRevisionState.dirty || smokeTest) return;
-    const choice = dialog.showMessageBoxSync(mainWindow, {
-      type: 'warning',
-      buttons: ['取消', '仍然关闭'],
-      defaultId: 0,
-      cancelId: 0,
-      title: '尚未保存',
-      message: '当前画板有尚未保存的更改。',
-      detail: '关闭后，未手动保存的更改将会丢失。确定要关闭吗？',
-    });
-    if (choice === 0) event.preventDefault();
+    if (closeConfirmed || !dirtyRevisionState.dirty || smokeTest || mainWindow.webContents.isDestroyed()) return;
+    event.preventDefault();
+    if (closeConfirmationPending) return;
+    closeConfirmationPending = true;
+    mainWindow.webContents.send('window:close-requested');
   });
-  mainWindow.on('closed', () => { mainWindow = undefined; });
+  mainWindow.on('closed', () => {
+    closeConfirmationPending = false;
+    closeConfirmed = false;
+    mainWindow = undefined;
+  });
   mainWindow.on('blur', () => {
     finishWindowMove();
     if (shouldUseFocuslessPhotoshopPicker(windowState)) scheduleNativeWindowLayerRepair();
@@ -2997,6 +2999,14 @@ ipcMain.on('window:move-update', () => {
 });
 ipcMain.on('window:move-end', finishWindowMove);
 ipcMain.on('window:close', () => mainWindow.close());
+ipcMain.on('window:close-response', (event, shouldClose) => {
+  const source = BrowserWindow.fromWebContents(event.sender);
+  if (!mainWindow || mainWindow.isDestroyed() || source !== mainWindow || !closeConfirmationPending) return;
+  closeConfirmationPending = false;
+  if (shouldClose !== true) return;
+  closeConfirmed = true;
+  mainWindow.close();
+});
 ipcMain.handle('window:taskbar-pen-start', async (event, input) => {
   const source = BrowserWindow.fromWebContents(event.sender);
   if (!source || !taskbarPenWindows.includes(source) || !mainWindow || mainWindow.isDestroyed()

@@ -234,7 +234,7 @@ button:disabled { opacity: .35; cursor: default; }
 
 
 .empty-state { position: absolute; z-index: 5; left: 50%; top: 50%; width: 360px; transform: translate(-50%, -50%); text-align: center; pointer-events: none; color: #dfe6eb; }
-.empty-state > * { pointer-events: auto; }
+.empty-state button { pointer-events: auto; }
 .empty-icon { width: 58px; height: 58px; margin: 0 auto 17px; display: grid; place-items: center; border: 1px dashed rgba(255,255,255,.28); border-radius: 18px; color: var(--accent); font-size: 31px; }
 .empty-brand-icon { display: block; width: 88px; height: 88px; margin: 0 auto 12px; border-radius: 22px; box-shadow: 0 12px 34px rgba(0,0,0,.32); object-fit: cover; }
 .empty-brand-name { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-bottom: 22px; color: #f2f0eb; }
