@@ -28,7 +28,7 @@ export function PhotoshopVersionsPanel({
     </header>
     <div className="photoshop-version-toolbar">
       <div><strong>项目版本库</strong><small>{formatBytes(versions.reduce((sum, version) => sum + version.byteLength, 0))}</small></div>
-      <button className="photoshop-version-save-button" disabled={documentBlocked} onClick={onSaveVersion}><UiIcon name="plus" size={13} />保存版本</button>
+      <button className="photoshop-version-save-button" disabled={documentBlocked} onClick={onSaveVersion}><UiIcon name="version" size={14} />保存版本</button>
     </div>
     <div className="photoshop-version-list">
       {versions.length === 0 && <div className="photoshop-version-empty"><strong>暂无 Photoshop 版本</strong><span>保存版本后，完整 PSD/PSB 会随 .yoi 画板一起保存。</span></div>}
@@ -39,10 +39,14 @@ export function PhotoshopVersionsPanel({
         }} onDoubleClick={() => onPlacePreview(version)}>
           <img src={imageSource({ assetId: version.previewAssetId }, 'original')} alt="" draggable={false} /><span>{version.format.toUpperCase()}</span>
         </div>
-        <div className="photoshop-version-info"><strong title={version.name}>{version.name}</strong><small title={version.documentName}>{version.documentName}</small>
-          <small>{version.width}×{version.height} · {version.colorMode} · {version.bitDepth} bit</small>
-          <small>{version.layerCount} 层 · {formatBytes(version.byteLength)} · {new Date(version.createdAt).toLocaleString()}</small>
-          {version.note && <p>{version.note}</p>}</div>
+        <div className="photoshop-version-info"><strong title={version.name}>{version.name}</strong><small className="photoshop-version-document" title={version.documentName}>{version.documentName}</small>
+          <div className="photoshop-version-details">
+            <span>{version.width}×{version.height} · {version.colorMode} · {version.bitDepth} bit</span>
+            <span>{version.layerCount} 层 · {formatBytes(version.byteLength)}</span>
+          </div>
+          <time className="photoshop-version-saved-at" dateTime={version.createdAt}><UiIcon name="clock" size={13} />保存于 {new Date(version.createdAt).toLocaleString()}</time>
+        </div>
+        {version.note && <div className="photoshop-version-note"><p>{version.note}</p></div>}
         <div className="photoshop-version-actions">
           <button disabled={documentBlocked} onClick={() => onOpenVersion(version)}>在 PS 打开</button>
           <button onClick={() => onPlacePreview(version)}>放入画板</button>

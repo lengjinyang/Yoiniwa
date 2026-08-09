@@ -213,22 +213,34 @@ function countLayers(container){var count=0;for(var i=0;i<container.layers.lengt
 function modeName(mode){try{return mode.toString().replace('DocumentMode.','');}catch(e){return 'UNKNOWN';}}
 function jsonQuote(value){return '"'+String(value).replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\r/g,'\\r').replace(/\n/g,'\\n').replace(/\t/g,'\\t')+'"';}
 var original=app.activeDocument;
-var snapshot=null,preview=null,resultJson='';
+var previousDialogs=app.displayDialogs,resultJson='';
 try{
-  snapshot=original.duplicate();
+  app.displayDialogs=DialogModes.NO;
   var usePsb=original.width.as('px')>30000||original.height.as('px')>30000;
-  var archivePath=$psd;
-  if(!usePsb){try{snapshot.saveAs(new File($psd),new PhotoshopSaveOptions(),true,Extension.LOWERCASE);}catch(e){usePsb=true;}}
-  if(usePsb){archivePath=$psb;snapshot.saveAs(new File($psb),new LargeDocumentFormatSaveOptions(),true,Extension.LOWERCASE);}
-  preview=snapshot.duplicate();
-  preview.flatten();
-  try{if(preview.mode!==DocumentMode.RGB)preview.changeMode(ChangeMode.RGB);}catch(e){}
-  try{preview.bitsPerChannel=BitsPerChannelType.EIGHT;}catch(e){}
-  try{preview.convertProfile('sRGB IEC61966-2.1',Intent.PERCEPTUAL,true,false);}catch(e){}
-  var previewWidth=preview.width.as('px'),previewHeight=preview.height.as('px');
-  var previewScale=Math.min(1,2048/Math.max(previewWidth,previewHeight));
-  if(previewScale<1){preview.resizeImage(UnitValue(Math.max(1,Math.round(previewWidth*previewScale)),'px'),UnitValue(Math.max(1,Math.round(previewHeight*previewScale)),'px'),null,ResampleMethod.BICUBICSHARPER);}
-  preview.saveAs(new File($preview),new PNGSaveOptions(),true,Extension.LOWERCASE);
+  var archivePath='';
+  try{
+    if(original.saved&&original.fullName&&original.fullName.exists){
+      var originalPath=original.fullName.fsName;
+      var originalFormat=String(originalPath).match(/\.(psd|psb)$/i);
+      if(originalFormat){archivePath=originalPath;usePsb=originalFormat[1].toLowerCase()==='psb';}
+    }
+  }catch(sourceError){}
+  if(!archivePath){
+    archivePath=$psd;
+    if(!usePsb){try{original.saveAs(new File($psd),new PhotoshopSaveOptions(),true,Extension.LOWERCASE);}catch(psdError){usePsb=true;}}
+    if(usePsb){archivePath=$psb;original.saveAs(new File($psb),new LargeDocumentFormatSaveOptions(),true,Extension.LOWERCASE);}
+  }
+  var webOptions=new ExportOptionsSaveForWeb();
+  webOptions.format=SaveDocumentType.JPEG;
+  webOptions.quality=86;
+  webOptions.optimized=true;
+  webOptions.includeProfile=false;
+  try{original.exportDocument(new File($preview),ExportType.SAVEFORWEB,webOptions);}catch(previewExportError){
+    var jpegOptions=new JPEGSaveOptions();
+    jpegOptions.quality=9;
+    jpegOptions.embedColorProfile=true;
+    original.saveAs(new File($preview),jpegOptions,true,Extension.LOWERCASE);
+  }
   var width=Math.round(original.width.as('px')),height=Math.round(original.height.as('px'));
   var bitDepth=Number(original.bitsPerChannel.toString().replace(/[^0-9]/g,''))||8;
   resultJson='{'+
@@ -240,9 +252,7 @@ try{
     '"archivePath":'+jsonQuote(archivePath)+','+
     '"previewPath":'+jsonQuote($preview)+'}';
 }finally{
-  if(preview){try{preview.close(SaveOptions.DONOTSAVECHANGES);}catch(previewCloseError){}}
-  if(snapshot){try{snapshot.close(SaveOptions.DONOTSAVECHANGES);}catch(snapshotCloseError){}}
-  try{app.activeDocument=original;}catch(activateError){}
+  try{app.displayDialogs=previousDialogs;}catch(dialogRestoreError){}
 }
 resultJson;
 "@

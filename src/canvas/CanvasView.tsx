@@ -30,7 +30,7 @@ interface CanvasSelectionProps {
   onSelectionChange(ids: string[], source?: 'lasso'): void;
   onLassoSelectionChange(points?: LassoPoint[]): void;
   onGroupSelectionChange(id?: string): void;
-  onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>): void;
+  onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>, snap?: boolean): void;
   onFocusItem(item: ImageItem): void;
 }
 
@@ -170,7 +170,7 @@ export function CanvasView({
       onSelectionChange: (ids, source) => selectionChangeRef.current(ids, source),
       onLassoSelectionChange: (points) => lassoSelectionChangeRef.current(points),
       onGroupSelectionChange: (id) => groupSelectionRef.current(id),
-      onItemsChanged: (changes) => itemsChangedRef.current(changes),
+      onItemsChanged: (changes, snap) => itemsChangedRef.current(changes, snap),
       onGroupMoved: (id, deltaX, deltaY) => groupMovedRef.current(id, deltaX, deltaY),
       onGroupResized: (id, bounds) => groupResizedRef.current(id, bounds),
       onRenameGroup: (id) => renameGroupRef.current(id),

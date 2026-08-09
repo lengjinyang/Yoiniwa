@@ -3,7 +3,8 @@ import type { ImageGroup } from '../../types';
 export type GroupResizeHandle =
   | 'north-west' | 'north' | 'north-east'
   | 'west' | 'east'
-  | 'south-west' | 'south' | 'south-east';
+  | 'south-west' | 'south' | 'south-east'
+  | 'rotate';
 
 export interface GroupFrameBounds {
   x: number;
@@ -21,6 +22,7 @@ function resizeGroupFrame(
   handle: GroupResizeHandle,
   point: { x: number; y: number },
 ): GroupFrameBounds {
+  if (handle === 'rotate') return { x: original.x, y: original.y, width: original.width, height: original.height };
   const right = original.x + original.width;
   const bottom = original.y + original.height;
   const west = handle === 'north-west' || handle === 'south-west';
@@ -44,6 +46,7 @@ export function resizeGroupFrameByDelta(
   handle: GroupResizeHandle,
   delta: { x: number; y: number },
 ): GroupFrameBounds {
+  if (handle === 'rotate') return { x: original.x, y: original.y, width: original.width, height: original.height };
   const west = handle === 'north-west' || handle === 'west' || handle === 'south-west';
   const north = handle === 'north-west' || handle === 'north' || handle === 'north-east';
   return resizeGroupFrame(original, handle, {

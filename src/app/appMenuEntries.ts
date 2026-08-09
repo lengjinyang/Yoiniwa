@@ -130,9 +130,12 @@ export function buildAppMenuEntries({
         { type: 'item', label: '打开…', shortcut: shortcuts.open, action: () => file.open() },
         { type: 'item', label: '合并其他画板…', action: file.importScene },
         {
-          type: 'item', label: '最近打开', disabled: file.recent.length === 0,
-          children: file.recent.length ? file.recent.slice(0, 8).map((item) => ({
-            type: 'item' as const, label: item.name, action: () => file.open(item.path),
+          type: 'item', label: '最近的文件', disabled: file.recent.length === 0,
+          children: file.recent.length ? file.recent.slice(0, 12).map((item) => ({
+            type: 'item' as const,
+            label: item.name,
+            shortcut: new Date(item.openedAt).toLocaleDateString(),
+            action: () => file.open(item.path),
           })) : undefined,
         },
         { type: 'separator' },

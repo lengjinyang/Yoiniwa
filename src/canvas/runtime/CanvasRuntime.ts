@@ -19,6 +19,7 @@ import type { GroupFrameBounds } from '../selection/GroupResizeController';
 import { groupHeaderScreenWidth, groupHeaderWorldY } from '../groups/GroupPresentation';
 import { VisualNotesController, type VisualNotesToolState } from '../interaction/VisualNotesController';
 import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../interactions';
+import { resolveImageChanges } from '../../domain/sceneCommands';
 
 export interface CanvasRuntimeOptions {
   background: string;
@@ -30,7 +31,7 @@ export interface CanvasRuntimeOptions {
   onSelectionChange?(ids: string[], source?: 'lasso'): void;
   onLassoSelectionChange?(points?: LassoPoint[]): void;
   onGroupSelectionChange?(id?: string): void;
-  onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>): void;
+  onItemsChanged?(changes: Array<Partial<ImageItem> & { id: string }>, snap?: boolean): void;
   onGroupMoved?(id: string, deltaX: number, deltaY: number): void;
   onGroupResized?(id: string, bounds: GroupFrameBounds): void;
   onRenameGroup?(id: string): void;
@@ -149,20 +150,23 @@ export class CanvasRuntime {
     this.selectionController = new SelectionController({
       element: this.container, input, camera: this.camera, lifecycle: this.lifecycle,
       scene: () => this.sceneStore,
-      preview: (changes) => {
-        this.sceneStore?.previewImageChanges(changes);
+      preview: (changes, snap = true) => {
+        const current = this.sceneStore?.snapshot();
+        const resolved = current ? resolveImageChanges(current, changes, snap) : changes;
+        this.sceneStore?.previewImageChanges(resolved);
         if (this.sceneStore) this.renderer.setScene(this.sceneStore.renderScene());
         this.selectionController?.refresh();
         this.scheduleRender();
       },
-      commit: (changes) => {
+      commit: (changes, snap = true) => {
         const current = this.sceneStore?.snapshot();
+        const resolved = current ? resolveImageChanges(current, changes, snap) : changes;
         if (current) {
-          const scene = new ImageTransformCommand(current, changes).execute(current);
+          const scene = new ImageTransformCommand(current, resolved).execute(current);
           this.sceneStore?.replace(scene);
           this.renderer.setScene(this.sceneStore?.renderScene() ?? scene);
         }
-        this.options.onItemsChanged?.(changes);
+        this.options.onItemsChanged?.(resolved, snap);
       },
       selectionChanged: (ids, source) => { this.renderer.setSelectedImageCount(ids.length); this.options.onSelectionChange?.(ids, source); },
       lassoSelectionChanged: (points) => this.options.onLassoSelectionChange?.(points),
@@ -186,7 +190,8 @@ export class CanvasRuntime {
       groupHeaderHoverChanged: (id, action) => {
         if (this.renderer.setGroupHeaderHover(id, action)) this.scheduleRender();
       },
-      drawOverlay: (items, scale, box, lasso) => this.renderer.drawSelection(items, scale, box, lasso),
+      transformOverlaysHidden: (hidden) => this.renderer.setTransformOverlaysHidden(hidden),
+      drawOverlay: (items, scale, box, lasso, controlsVisible) => this.renderer.drawSelection(items, scale, box, lasso, controlsVisible),
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
       interactionBlocked: (event) => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked

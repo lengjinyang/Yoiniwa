@@ -22,12 +22,11 @@ export function deleteSceneSelection(scene: Scene, imageIds: readonly string[]) 
   fitAutoGroupsToContents(scene);
 }
 
-export function applyImageChanges(scene: Scene, changes: readonly ImageChange[]) {
-  changes.forEach((rawChange) => {
+export function resolveImageChanges(scene: Scene, changes: readonly ImageChange[], snap = scene.canvas.snap): ImageChange[] {
+  return changes.map((rawChange) => {
     const item = scene.items.find((value) => value.id === rawChange.id);
-    if (!item) return;
     const change = { ...rawChange };
-    if (scene.canvas.snap && changes.length === 1 && change.x !== undefined && change.y !== undefined) {
+    if (item && snap && changes.length === 1 && change.x !== undefined && change.y !== undefined) {
       const width = change.width ?? item.width;
       const height = change.height ?? item.height;
       const threshold = 10 / scene.viewport.scale;
@@ -49,9 +48,18 @@ export function applyImageChanges(scene: Scene, changes: readonly ImageChange[])
       if (Math.abs(bestX) < threshold) change.x += bestX;
       if (Math.abs(bestY) < threshold) change.y += bestY;
     }
+    return change;
+  });
+}
+
+export function applyImageChanges(scene: Scene, changes: readonly ImageChange[], snap = scene.canvas.snap) {
+  const resolved = resolveImageChanges(scene, changes, snap);
+  resolved.forEach((change) => {
+    const item = scene.items.find((value) => value.id === change.id);
+    if (!item) return;
     Object.assign(item, change);
   });
-  changes.forEach((change) => {
+  resolved.forEach((change) => {
     const item = scene.items.find((value) => value.id === change.id);
     if (!item || (change.x === undefined && change.y === undefined && change.width === undefined && change.height === undefined)) return;
     const bounds = memberBounds(scene, { type: 'image', id: item.id });

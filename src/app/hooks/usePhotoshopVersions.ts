@@ -60,6 +60,7 @@ export function usePhotoshopVersions({
     if (!api || documentBlocked) return;
     const name = versionName.trim();
     if (!name) { setStatus('请输入版本名称'); return; }
+    setSaveDialogOpen(false);
     const flushed = flushViewport(liveViewportRef.current);
     const requestId = beginOperation('photoshop', '正在保存 Photoshop 分层版本…');
     try {
@@ -73,7 +74,7 @@ export function usePhotoshopVersions({
         flushed.revision,
         preview,
       );
-      if (result.canceled) { clearOperation(requestId); return; }
+      if (result.canceled) { clearOperation(requestId); setSaveDialogOpen(true); return; }
       if (!result.version || !result.metadata) throw new Error(result.message ?? 'Photoshop 版本保存失败');
       if (result.sessionId) projectSessionIdRef.current = result.sessionId;
       if (result.scene) markSaved(result.scene, result.committedRevision ?? flushed.revision);
@@ -83,6 +84,7 @@ export function usePhotoshopVersions({
       setVersionNote('');
       settleOperation(requestId, 'success', `已保存 Photoshop 版本 ${result.version.name}`);
     } catch (error) {
+      setSaveDialogOpen(true);
       settleOperation(requestId, 'error', `保存 Photoshop 版本失败：${String(error)}`);
     }
   }, [api, beginOperation, clearOperation, documentBlocked, flushViewport, liveViewportRef, markSaved, metadataRef,
