@@ -110,11 +110,6 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     }).catch((error) => setStatus(`恢复快捷键失败：${String(error)}`));
   }, [api, drawingCollaborationModeRef, setStatus]);
 
-  const setPickerShortcut = useCallback((shortcut: ColorPickerShortcut) => {
-    setColorPickerShortcut(shortcut);
-    setStatus(`取色快捷键已设为 ${shortcut === 'alt' ? 'Alt' : 'S'}`);
-  }, [setStatus]);
-
   const beginShortcutCapture = useCallback((id: ShortcutId, label: string) => {
     setShortcutCaptureId(id);
     setStatus(`请按下“${label}”的新快捷键`);
@@ -147,6 +142,18 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     })();
   }, [api, setStatus]);
 
+  const clearCache = useCallback(() => {
+    if (!api) return;
+    void (async () => {
+      setCacheChanging(true);
+      try {
+        setCacheInfo(await api.clearCache());
+        setStatus('预览缓存已清除，需要时将自动重新生成');
+      } catch (error) { setStatus(`清除缓存失败：${String(error)}`); }
+      finally { setCacheChanging(false); }
+    })();
+  }, [api, setStatus]);
+
   const openLogsFolder = useCallback(() => {
     if (!api) return;
     void api.openLogsFolder().then((result) => setStatus(`日志目录：${result.path}`))
@@ -168,10 +175,10 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     setShortcutCaptureId,
     captureShortcut,
     resetShortcuts,
-    setPickerShortcut,
     beginShortcutCapture,
     chooseCacheLocation,
     resetCacheLocation,
+    clearCache,
     openLogsFolder,
     copyDiagnostics,
   };

@@ -241,15 +241,15 @@ async function registerAssetBuffer(name, buffer, sourcePath, sourceType = 'drop'
     const existing = await fs.stat(cachePath);
     if (existing.size !== buffer.length) await fs.writeFile(cachePath, buffer);
   } catch { await fs.writeFile(cachePath, buffer); }
-  let bitmapSize;
+  let metadata;
   let metadataTimer;
   try {
-    const metadata: any = await Promise.race([
+    metadata = await Promise.race([
       sharp(cachePath, { sequentialRead: true }).metadata(),
       new Promise((_, reject) => { metadataTimer = setTimeout(() => reject(new Error('图片尺寸读取超时')), 8000); }),
-    ]);
-    bitmapSize = { width: metadata.width, height: metadata.height };
-    if (!Number.isInteger(bitmapSize.width) || bitmapSize.width < 1 || !Number.isInteger(bitmapSize.height) || bitmapSize.height < 1) {
+    ]) as sharp.Metadata;
+    if (!Number.isInteger(metadata.width) || (metadata.width ?? 0) < 1
+      || !Number.isInteger(metadata.height) || (metadata.height ?? 0) < 1) {
       throw new Error('图片尺寸无效');
     }
   } catch (error) {
@@ -261,12 +261,11 @@ async function registerAssetBuffer(name, buffer, sourcePath, sourceType = 'drop'
     imagePerformanceStats.metadataCount += 1;
     imagePerformanceStats.metadataMs += performance.now() - metadataStartedAt;
   }
-  const metadata = await sharp(cachePath, { sequentialRead: true }).metadata();
   const swapsAxes = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
   const record = {
     ...baseRecord,
-    naturalWidth: swapsAxes ? bitmapSize.height : bitmapSize.width,
-    naturalHeight: swapsAxes ? bitmapSize.width : bitmapSize.height,
+    naturalWidth: swapsAxes ? metadata.height! : metadata.width!,
+    naturalHeight: swapsAxes ? metadata.width! : metadata.height!,
     orientation: metadata.orientation ?? 1,
     hasAlpha: Boolean(metadata.hasAlpha),
   };
@@ -475,7 +474,7 @@ function ensureImageWorker(allowWhilePaused = false) {
   return worker;
 }
 
-async function suspendImageWorkerForCacheMigration() {
+async function suspendImageWorkerForCacheMaintenance(operation: string) {
   imageWorkerPaused = true;
   imageWorkerGeneration.advance();
   imageWorkerAssets.clear();
@@ -491,16 +490,16 @@ async function suspendImageWorkerForCacheMigration() {
         clearTimeout(timer);
         if (error) reject(error); else resolve();
       };
-      const timer = setTimeout(() => finish(new Error('停止后台图像进程超时，缓存位置未更改')), 5000);
+      const timer = setTimeout(() => finish(new Error(`停止后台图像进程超时，${operation}未完成`)), 5000);
       worker.once('exit', () => finish());
       worker.once('error', (error) => finish(error));
-      if (!worker.kill()) finish(new Error('无法停止后台图像进程，缓存位置未更改'));
+      if (!worker.kill()) finish(new Error(`无法停止后台图像进程，${operation}未完成`));
     });
     if (imageWorker === worker) imageWorker = undefined;
   }
   await Promise.race([
     imageJobs.whenIdle(),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('等待后台图像任务结束超时，缓存位置未更改')), 8000)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`等待后台图像任务结束超时，${operation}未完成`)), 8000)),
   ]);
   imageWorkerAssets.clear();
 }
@@ -564,7 +563,7 @@ async function runRegisteredImageWorker(assetKey, buffer, payload, timeoutMs, as
 function resizeThumbnailInWorker(assetKey, size, assetPath, outputPath, signal?: AbortSignal) {
   return runRegisteredImageWorker(assetKey, undefined, {
     type: 'thumbnail', size, outputRelativePath: cacheRelativePath(outputPath),
-  }, size <= 128 ? 8000 : 15000, assetPath, signal);
+  }, size <= 128 ? 8000 : size <= 1024 ? 15000 : 45000, assetPath, signal);
 }
 
 async function readCachedThumbnail(id, size) {
@@ -731,11 +730,13 @@ async function prewarmImages(ids, sender, requestId) {
   let failed = 0;
   const detailFailed = 0;
   let lastFailedName;
-  const previewFailedIds = new Set();
   const prewarmStartedAt = performance.now();
   logInfo('images.prewarm-start', { requestId, count: ids.length });
-  const report = (stage, stageCompleted, stageTotal) => sender.send('images:prewarm-progress', {
-    requestId, completed, total: ids.length, stage, stageCompleted, stageTotal, failed, detailFailed, lastFailedName,
+  const previewBase = IMAGE_IMPORT_STAGE_WEIGHTS.metadata + IMAGE_IMPORT_STAGE_WEIGHTS.hash;
+  const previewWeight = 1 - previewBase - IMAGE_IMPORT_STAGE_WEIGHTS.scene;
+  const report = () => sender.send('images:prewarm-progress', {
+    requestId, completed, total: ids.length, stage: 'preview', stageCompleted: completed, stageTotal: ids.length,
+    fraction: previewBase + completed / ids.length * previewWeight, failed, detailFailed, lastFailedName,
   });
   const finish = () => {
     logInfo('images.prewarm-finish', {
@@ -746,50 +747,27 @@ async function prewarmImages(ids, sender, requestId) {
     if (sessionCachePath) void fs.rm(path.join(sessionCachePath, `prewarm-${requestId}.json`), { force: true }).catch(() => undefined);
     void trimImageCacheForActive(new Set(assetRegistry.keys()));
   };
-  const pixelWeights = new Map(ids.map((id) => {
-    const record = assetRegistry.get(id)?.record;
-    return [id, Math.max(1, (record?.naturalWidth ?? 1) * (record?.naturalHeight ?? 1))];
-  }));
-  const totalPixels = [...pixelWeights.values()].reduce((total, value) => total + value, 0);
-  const progressById = new Map(ids.map((id) => [id, 0]));
-  const reportPyramid = (id, stage, progress) => {
-    const registeredBase = IMAGE_IMPORT_STAGE_WEIGHTS.metadata + IMAGE_IMPORT_STAGE_WEIGHTS.hash;
-    const stageBase = stage === 'decode' ? registeredBase
-      : stage === 'mip' ? registeredBase + IMAGE_IMPORT_STAGE_WEIGHTS.decode
-        : registeredBase + IMAGE_IMPORT_STAGE_WEIGHTS.decode + IMAGE_IMPORT_STAGE_WEIGHTS.mip;
-    const stageWeight = stage === 'decode' ? IMAGE_IMPORT_STAGE_WEIGHTS.decode
-      : stage === 'mip' ? IMAGE_IMPORT_STAGE_WEIGHTS.mip : IMAGE_IMPORT_STAGE_WEIGHTS.commit;
-    progressById.set(id, Math.min(0.95, stageBase + progress * stageWeight));
-    const weighted = ids.reduce((total, assetId) => total
-      + (progressById.get(assetId) ?? 0) * (pixelWeights.get(assetId) ?? 1), 0) / totalPixels;
-    sender.send('images:prewarm-progress', {
-      requestId, completed, total: ids.length, stage, stageCompleted: Math.round(weighted * 1000),
-      stageTotal: 1000, fraction: weighted, failed, detailFailed, lastFailedName,
-    });
-  };
   sender.send('images:prewarm-progress', {
-    requestId, completed: 0, total: ids.length, stage: 'decode',
-    stageCompleted: 150, stageTotal: 1000, fraction: 0.15, failed, detailFailed,
+    requestId, completed: 0, total: ids.length, stage: 'preview',
+    stageCompleted: 0, stageTotal: ids.length, fraction: previewBase, failed, detailFailed,
   });
   try {
     await mapWithConcurrency(ids, async (id) => {
       if (request.canceled) return;
       try {
-        await ensureImagePyramid(id, ({ stage, progress }) => reportPyramid(id, stage, progress));
-        progressById.set(id, 0.95);
+        // Import only blocks on the permanent safety preview. Larger Mips and
+        // visible tiles are generated on demand after the item is interactive.
+        await generateThumbnail(id, 128, 20);
       } catch {
         if (!request.canceled) {
           failed += 1;
-          previewFailedIds.add(id);
           lastFailedName = assetRegistry.get(id)?.record.originalName;
-          await generateThumbnail(id, 128).catch(() => undefined);
         }
       } finally {
         completed += 1;
-        progressById.set(id, 1);
-        report('scene', completed, ids.length);
+        report();
       }
-    }, 1);
+    }, 2);
     if (request.canceled) {
       finish();
       return { canceled: true, completed, total: ids.length, failed, detailFailed };
@@ -881,10 +859,14 @@ async function assetResponse(request) {
         && edge !== Math.max(registered.record.naturalWidth, registered.record.naturalHeight)) {
         return new Response('Invalid mip edge', { status: 400 });
       }
-      // A scene package carries its source assets, but the derived cache is
-      // intentionally machine-local. Reopening on a new machine must rebuild
-      // a missing/corrupt pyramid before answering the renderer request.
+      // A scene package carries its source assets, but derivative caches are
+      // machine-local. Prefer a committed pyramid and otherwise build only the
+      // whole-image level the renderer currently needs.
       const buffer = await readPyramidLevel(id, edge).catch(async () => {
+        // Whole-image canvas Mips top out at 4096px. Building just the requested
+        // level is much faster than blocking first display on every pyramid
+        // level and every large-image tile.
+        if (edge <= 4096) return generateThumbnail(id, edge, 10);
         await ensureImagePyramid(id);
         return readPyramidLevel(id, edge);
       });
@@ -1229,11 +1211,15 @@ async function directorySize(directory) {
 
 function cacheLocationInfo() {
   const root = cacheRootDir();
-  return Promise.all([directorySize(assetCacheDir()), directorySize(path.join(root, 'derived-cache'))]).then(([assetBytes, derivedBytes]) => ({
+  return Promise.all([
+    directorySize(assetCacheDir()),
+    directorySize(path.join(root, 'derived-cache')),
+    directorySize(path.join(root, 'image-cache')),
+  ]).then(([assetBytes, thumbnailBytes, pyramidBytes]) => ({
     root,
     isDefault: !cacheRootOverride,
     assetBytes,
-    derivedBytes,
+    derivedBytes: thumbnailBytes + pyramidBytes,
     warning: cacheRootOverride && /(?:onedrive|dropbox|google drive|\\\\)/i.test(cacheRootOverride)
       ? '此位置可能是同步或网络目录，缓存性能可能不稳定。' : undefined,
   }));
@@ -1274,7 +1260,7 @@ async function setCacheLocation(directory = undefined) {
     throw new Error('新缓存位置不能位于当前缓存目录内部');
   }
   try {
-    await suspendImageWorkerForCacheMigration();
+    await suspendImageWorkerForCacheMaintenance('缓存迁移');
     await fs.mkdir(targetRoot, { recursive: true });
     try {
       await fs.cp(sourceAsset, targetAsset, { recursive: true, force: false, errorOnExist: false });
@@ -1309,6 +1295,38 @@ async function setCacheLocation(directory = undefined) {
     await fs.rm(sourceDerived, { recursive: true, force: true });
     await fs.rm(sourceImage, { recursive: true, force: true });
     return cacheLocationInfo();
+  } finally {
+    imageWorkerPaused = false;
+  }
+}
+
+function verifiedCacheChild(target: string) {
+  const root = path.resolve(cacheRootDir());
+  const resolved = path.resolve(target);
+  const relative = path.relative(root, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('缓存清理路径无效');
+  return resolved;
+}
+
+async function clearRegenerableCache() {
+  const derivedRoot = verifiedCacheChild(path.join(cacheRootDir(), 'derived-cache'));
+  const imageRoot = verifiedCacheChild(path.join(cacheRootDir(), 'image-cache'));
+  const activeAssetPaths = new Set([...assetRegistry.values()].map((entry) => path.resolve(entry.cachePath)));
+  try {
+    await suspendImageWorkerForCacheMaintenance('清除缓存');
+    await derivedCache.flush();
+    await Promise.all([
+      fs.rm(derivedRoot, { recursive: true, force: true }),
+      fs.rm(imageRoot, { recursive: true, force: true }),
+    ]);
+    const assetEntries = await fs.readdir(assetCacheDir(), { withFileTypes: true }).catch(() => []);
+    await Promise.all(assetEntries.filter((entry) => entry.isFile()).map(async (entry) => {
+      const target = path.resolve(assetCacheDir(), entry.name);
+      if (!activeAssetPaths.has(target)) await fs.rm(target, { force: true });
+    }));
+    derivedCache = createAppDerivedCache();
+    logInfo('cache.cleared', { activeAssetsPreserved: activeAssetPaths.size });
+    return await cacheLocationInfo();
   } finally {
     imageWorkerPaused = false;
   }
@@ -2388,14 +2406,25 @@ handleIpc('images:import', async (event, requestId) => {
   if (result.canceled) return [];
   const sizes = await Promise.all(result.filePaths.map(async (filePath) => (await fs.stat(filePath)).size));
   const totalBytes = Math.max(1, sizes.reduce((total, size) => total + size, 0));
-  const hashedBytes = new Array(result.filePaths.length).fill(0);
   const metadataDone = new Array(result.filePaths.length).fill(0);
+  let totalHashedBytes = 0;
+  let metadataCompleted = 0;
+  let lastRegistrationProgressAt = 0;
   const reportRegistration = (index, stage, delta) => {
     if (!requestId) return;
-    if (stage === 'hash') hashedBytes[index] += delta;
-    else metadataDone[index] = delta;
-    const hashFraction = hashedBytes.reduce((total, value) => total + value, 0) / totalBytes;
-    const metadataFraction = metadataDone.reduce((total, value) => total + value, 0) / result.filePaths.length;
+    if (stage === 'hash') {
+      totalHashedBytes += delta;
+      const now = performance.now();
+      // File streams can emit thousands of chunks. Limit progress IPC traffic
+      // so hashing and disk copy remain the dominant work during large imports.
+      if (totalHashedBytes < totalBytes && now - lastRegistrationProgressAt < 50) return;
+      lastRegistrationProgressAt = now;
+    } else {
+      if (!metadataDone[index] && delta) metadataCompleted += 1;
+      metadataDone[index] = delta;
+    }
+    const hashFraction = totalHashedBytes / totalBytes;
+    const metadataFraction = metadataCompleted / result.filePaths.length;
     event.sender.send('images:prewarm-progress', {
       requestId, completed: metadataDone.filter(Boolean).length, total: result.filePaths.length,
       stage, stageCompleted: Math.round((stage === 'hash' ? hashFraction : metadataFraction) * 1000), stageTotal: 1000,
@@ -2409,7 +2438,7 @@ handleIpc('images:import', async (event, requestId) => {
     try {
       return await registerAssetPath(filePath, 'file', (stage, delta) => reportRegistration(index, stage, delta));
     } catch { return undefined; }
-  }, 2)).filter(Boolean);
+  }, 4)).filter(Boolean);
   await trimAssetCache();
   return imported;
 });
@@ -2421,7 +2450,7 @@ handleIpc('images:register-paths', async (_event, paths, sourceType = 'drop') =>
     try {
       return await registerAssetPath(filePath, sourceType);
     } catch { return undefined; }
-  }, 2)).filter(Boolean);
+  }, 4)).filter(Boolean);
   await trimAssetCache();
   return imported;
 });
@@ -2641,6 +2670,7 @@ handleIpc('cache:choose-location', async () => {
   return { canceled: false, info: await setCacheLocation(result.filePaths[0]) };
 });
 handleIpc('cache:reset-location', async () => setCacheLocation());
+handleIpc('cache:clear', async () => clearRegenerableCache());
 handleIpc('project:close', async (_event, sessionId) => {
   dirtyRevisionState = createDirtyRevisionState();
   await projectPersistence.close(sessionId);

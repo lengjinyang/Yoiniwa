@@ -31,6 +31,7 @@ export interface IpcContractMap {
   'cache:info': IpcContract<[], CacheInfo>;
   'cache:choose-location': IpcContract<[], { canceled: boolean; info?: CacheInfo }>;
   'cache:reset-location': IpcContract<[], CacheInfo>;
+  'cache:clear': IpcContract<[], CacheInfo>;
   'image:export': IpcContract<[data: ArrayBuffer, suggestedName: string], { canceled: boolean; path?: string }>;
   'image:copy': IpcContract<[data: ArrayBuffer], void>;
   'image:show-source': IpcContract<[path: string], { ok: boolean; message?: string }>;

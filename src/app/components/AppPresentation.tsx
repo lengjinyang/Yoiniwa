@@ -129,7 +129,6 @@ export function AppWorkspace({
     <PropertiesPanel
       open={panels.propertiesOpen}
       settingsShortcut={preferences.shortcuts.settings}
-      colorPickerShortcut={preferences.colorPickerShortcut}
       shortcuts={preferences.shortcuts}
       shortcutCaptureId={preferences.shortcutCaptureId}
       drawingCollaborationMode={windowController.drawingCollaborationMode}
@@ -137,13 +136,13 @@ export function AppWorkspace({
       cacheChanging={preferences.cacheChanging}
       nativeAvailable={Boolean(api)}
       onClose={() => panels.setPropertiesOpen(false)}
-      onColorPickerShortcutChange={preferences.setPickerShortcut}
       onBeginShortcutCapture={preferences.beginShortcutCapture}
       onCaptureShortcut={preferences.captureShortcut}
       onShortcutCaptureBlur={() => preferences.setShortcutCaptureId(undefined)}
       onResetShortcuts={preferences.resetShortcuts}
       onChooseCacheLocation={preferences.chooseCacheLocation}
       onResetCacheLocation={preferences.resetCacheLocation}
+      onClearCache={preferences.clearCache}
       onOpenLogsFolder={preferences.openLogsFolder}
       onCopyDiagnostics={preferences.copyDiagnostics}
     />

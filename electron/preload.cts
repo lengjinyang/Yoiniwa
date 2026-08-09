@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('refCanvas', {
   getCacheInfo: () => invoke('cache:info'),
   chooseCacheLocation: () => invoke('cache:choose-location'),
   resetCacheLocation: () => invoke('cache:reset-location'),
+  clearCache: () => invoke('cache:clear'),
   getImagePerformanceStats: () => invoke('images:performance-stats'),
   sampleImagePixel: (assetId, x, y) => invoke('images:sample-pixel', assetId, x, y),
   recordManualWheelSession: (payload) => invoke('performance:record-manual-wheel', payload),

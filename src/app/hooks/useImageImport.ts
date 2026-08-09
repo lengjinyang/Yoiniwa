@@ -127,26 +127,27 @@ export function useImageImport({
     const requestId = existingRequestId ?? crypto.randomUUID();
     setProgress((current) => current?.requestId === requestId
       ? current : { requestId, completed: 0, total: sources.length });
-    const decodePreviews = () => Promise.all(sources.map((source) => preloadImagePreview({ assetId: source.assetId })));
+    const decodePreviewsInBackground = () => {
+      void Promise.all(sources.map((source) => preloadImagePreview({ assetId: source.assetId }))).then((previewResults) => {
+        if (new URLSearchParams(window.location.search).get('smoke') === '1') {
+          document.documentElement.dataset.importPreviewPreloads = String(previewResults.filter(Boolean).length);
+        }
+      });
+    };
     try {
       const result = await api.prewarmImages(sources.map((source) => source.assetId), requestId);
       if (result.canceled) {
         setStatus('已取消导入');
         return;
       }
-      // Keep the import overlay visible until Chromium has decoded every generated preview.
-      const previewResults = await decodePreviews();
-      if (new URLSearchParams(window.location.search).get('smoke') === '1') {
-        document.documentElement.dataset.importPreviewPreloads = String(previewResults.filter(Boolean).length);
-      }
-      if (result.failed) setStatus(`${result.failed} 张图片预览生成失败，将使用原图`);
+      // React-side thumbnails warm opportunistically; the Pixi canvas owns its
+      // own bounded decode/upload pipeline and must not wait on duplicate work.
+      decodePreviewsInBackground();
+      if (result.failed) setStatus(`${result.failed} 张图片预览生成失败，将在显示时重试`);
       await addImages(sources, placement);
     } catch {
       // A cache failure must not make a supported image impossible to import.
-      const previewResults = await decodePreviews();
-      if (new URLSearchParams(window.location.search).get('smoke') === '1') {
-        document.documentElement.dataset.importPreviewPreloads = String(previewResults.filter(Boolean).length);
-      }
+      decodePreviewsInBackground();
       await addImages(sources, placement);
     } finally {
       setProgress((current) => current?.requestId === requestId ? undefined : current);

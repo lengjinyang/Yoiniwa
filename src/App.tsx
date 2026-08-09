@@ -22,6 +22,7 @@ import './styles.css';
 import './styles/quiet-tokens.css';
 import './styles/quiet-controls.css';
 import './styles/quiet-surfaces.css';
+import './styles/motion.css';
 export default function App() {
   performanceMonitor.markReactRender();
   const history = useSceneHistory();
