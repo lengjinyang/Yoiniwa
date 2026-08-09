@@ -143,3 +143,5 @@ export function useSceneHistory() {
     },
   };
 }
+
+export type SceneHistoryController = ReturnType<typeof useSceneHistory>;

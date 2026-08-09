@@ -7,12 +7,23 @@ import type { VisualNotesState } from '../types';
 import type { ColorPickerShortcut } from '../interactions';
 import type { LassoPoint } from './selection/SelectionController';
 
-interface CanvasViewProps {
+interface CanvasVisualNotesProps {
+  state: VisualNotesToolState;
+  temporaryHidden: boolean;
+  onChanged(notes: VisualNotesState): void;
+  onSelectionChange(id?: string): void;
+}
+
+interface CanvasSceneProps {
   background: string;
   backgroundOpacity: number;
   scene: Scene;
   viewport: Viewport;
   onViewportCommit?(viewport: Viewport): void;
+  projectEpoch: number;
+}
+
+interface CanvasSelectionProps {
   selectedIds: string[];
   selectedGroupId?: string;
   lassoClearRequest: number;
@@ -20,6 +31,10 @@ interface CanvasViewProps {
   onLassoSelectionChange(points?: LassoPoint[]): void;
   onGroupSelectionChange(id?: string): void;
   onItemsChanged(changes: Array<Partial<ImageItem> & { id: string }>): void;
+  onFocusItem(item: ImageItem): void;
+}
+
+interface CanvasGroupsProps {
   onGroupMoved(id: string, deltaX: number, deltaY: number): void;
   onGroupResized(id: string, bounds: GroupFrameBounds): void;
   onRenameGroup(id: string): void;
@@ -27,47 +42,83 @@ interface CanvasViewProps {
   onExpandGroup(id: string): void;
   groupMenuOpen: boolean;
   onGroupPreviewAnchor(id: string, position: { x: number; y: number }): void;
-  projectEpoch: number;
+}
+
+interface CanvasColorPickerProps {
   colorPickerHeld: boolean;
   colorPickerShortcut: ColorPickerShortcut;
-  drawingCollaborationMode: boolean;
   onColorPicked(color: PickedColor): void;
-  onFocusItem(item: ImageItem): void;
+}
+
+interface CanvasWindowInteractionProps {
+  drawingCollaborationMode: boolean;
   onContextMenu(position: { x: number; y: number }): void;
   onExternalImageDrag?(items: ImageItem[]): (() => void) | undefined;
   windowLocked: boolean;
   onWindowMoveStart(): void;
   onWindowMove(): void;
   onWindowMoveEnd(): void;
-  visualNotesState: VisualNotesToolState;
-  visualNotesTemporaryHidden: boolean;
-  onVisualNotesChanged(notes: VisualNotesState): void;
-  onVisualNoteSelectionChange(id?: string): void;
+}
+
+interface CanvasViewProps {
+  canvas: CanvasSceneProps;
+  selection: CanvasSelectionProps;
+  groups: CanvasGroupsProps;
+  colorPicker: CanvasColorPickerProps;
+  windowInteraction: CanvasWindowInteractionProps;
+  visualNotes: CanvasVisualNotesProps;
 }
 
 export function CanvasView({
-  background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, lassoClearRequest, projectEpoch,
-  onViewportCommit, onSelectionChange, onLassoSelectionChange, onGroupSelectionChange,
-  onItemsChanged, onGroupMoved, onGroupResized,
-  onRenameGroup,
-  onOpenGroupMenu, onExpandGroup, groupMenuOpen, onGroupPreviewAnchor,
-  colorPickerHeld, colorPickerShortcut, onColorPicked, onFocusItem, onContextMenu,
-  onExternalImageDrag,
-  windowLocked, onWindowMoveStart, onWindowMove, onWindowMoveEnd,
-  drawingCollaborationMode,
-  visualNotesState, visualNotesTemporaryHidden, onVisualNotesChanged, onVisualNoteSelectionChange,
+  canvas,
+  selection,
+  groups,
+  colorPicker,
+  windowInteraction,
+  visualNotes,
 }: CanvasViewProps) {
+  const { background, backgroundOpacity, scene, viewport, projectEpoch, onViewportCommit } = canvas;
+  const {
+    selectedIds,
+    selectedGroupId,
+    lassoClearRequest,
+    onSelectionChange,
+    onLassoSelectionChange,
+    onGroupSelectionChange,
+    onItemsChanged,
+    onFocusItem,
+  } = selection;
+  const {
+    onGroupMoved,
+    onGroupResized,
+    onRenameGroup,
+    onOpenGroupMenu,
+    onExpandGroup,
+    groupMenuOpen,
+    onGroupPreviewAnchor,
+  } = groups;
+  const { colorPickerHeld, colorPickerShortcut, onColorPicked } = colorPicker;
+  const {
+    drawingCollaborationMode,
+    onContextMenu,
+    onExternalImageDrag,
+    windowLocked,
+    onWindowMoveStart,
+    onWindowMove,
+    onWindowMoveEnd,
+  } = windowInteraction;
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<CanvasRuntime | undefined>(undefined);
   const [startupError, setStartupError] = useState<string>();
   const [runtimeAttempt, setRuntimeAttempt] = useState(0);
   const initialOptionsRef = useRef({
     background, backgroundOpacity, viewport, selectedIds, selectedGroupId, colorPickerHeld, colorPickerShortcut,
-    windowLocked, drawingCollaborationMode, visualNotesState,
+    windowLocked, drawingCollaborationMode, visualNotesState: visualNotes.state,
   });
   const runtimeStateRef = useRef({
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, visualNotesState, visualNotesTemporaryHidden,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
+    visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   });
   const viewportCommitRef = useRef(onViewportCommit);
   const selectionChangeRef = useRef(onSelectionChange);
@@ -84,8 +135,8 @@ export function CanvasView({
   const focusItemRef = useRef(onFocusItem); const contextMenuRef = useRef(onContextMenu);
   const externalImageDragRef = useRef(onExternalImageDrag);
   const windowMoveStartRef = useRef(onWindowMoveStart); const windowMoveRef = useRef(onWindowMove); const windowMoveEndRef = useRef(onWindowMoveEnd);
-  const visualNotesChangedRef = useRef(onVisualNotesChanged);
-  const visualNoteSelectionRef = useRef(onVisualNoteSelectionChange);
+  const visualNotesChangedRef = useRef(visualNotes.onChanged);
+  const visualNoteSelectionRef = useRef(visualNotes.onSelectionChange);
   viewportCommitRef.current = onViewportCommit;
   selectionChangeRef.current = onSelectionChange;
   lassoSelectionChangeRef.current = onLassoSelectionChange;
@@ -101,11 +152,12 @@ export function CanvasView({
   focusItemRef.current = onFocusItem; contextMenuRef.current = onContextMenu;
   externalImageDragRef.current = onExternalImageDrag;
   windowMoveStartRef.current = onWindowMoveStart; windowMoveRef.current = onWindowMove; windowMoveEndRef.current = onWindowMoveEnd;
-  visualNotesChangedRef.current = onVisualNotesChanged;
-  visualNoteSelectionRef.current = onVisualNoteSelectionChange;
+  visualNotesChangedRef.current = visualNotes.onChanged;
+  visualNoteSelectionRef.current = visualNotes.onSelectionChange;
   runtimeStateRef.current = {
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, visualNotesState, visualNotesTemporaryHidden,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
+    visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   };
 
   useEffect(() => {
@@ -173,8 +225,8 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setColorPickerShortcut(colorPickerShortcut); }, [colorPickerShortcut]);
   useEffect(() => { runtimeRef.current?.setWindowLocked(windowLocked); }, [windowLocked]);
   useEffect(() => { runtimeRef.current?.setDrawingCollaborationMode(drawingCollaborationMode); }, [drawingCollaborationMode]);
-  useEffect(() => { runtimeRef.current?.setVisualNotesState(visualNotesState); }, [visualNotesState]);
-  useEffect(() => { runtimeRef.current?.setVisualNotesTemporaryHidden(visualNotesTemporaryHidden); }, [visualNotesTemporaryHidden]);
+  useEffect(() => { runtimeRef.current?.setVisualNotesState(visualNotes.state); }, [visualNotes.state]);
+  useEffect(() => { runtimeRef.current?.setVisualNotesTemporaryHidden(visualNotes.temporaryHidden); }, [visualNotes.temporaryHidden]);
   useEffect(() => { runtimeRef.current?.setBackground(background, backgroundOpacity); }, [background, backgroundOpacity]);
   useEffect(() => {
     const api = window.refCanvas;
