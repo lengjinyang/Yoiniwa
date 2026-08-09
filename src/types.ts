@@ -345,6 +345,7 @@ interface RefCanvasAPI {
   getCacheInfo(): Promise<CacheInfo>;
   chooseCacheLocation(): Promise<{ canceled: boolean; info?: CacheInfo }>;
   resetCacheLocation(): Promise<CacheInfo>;
+  clearCache(): Promise<CacheInfo>;
   getImagePerformanceStats(): Promise<ImagePipelinePerformanceStats>;
   sampleImagePixel(assetId: string, x: number, y: number): Promise<{ r: number; g: number; b: number; a: number }>;
   recordManualWheelSession(payload: unknown): Promise<{ path: string }>;

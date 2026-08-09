@@ -183,6 +183,36 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .cache-location { border-color: var(--border); border-radius: var(--radius-xs); color: var(--text-secondary); background: var(--surface-0); }
 .cache-notice { color: var(--text-secondary); }
 .cache-warning { color: var(--warning); }
+.property-panel .cache-clear-button {
+  width: 100%;
+  margin-top: 8px;
+  border-color: var(--danger-border);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.property-panel .cache-clear-button:hover:not(:disabled) {
+  border-color: var(--danger-border);
+  color: var(--danger-hover);
+  background: rgba(220, 114, 122, .18);
+}
+.cache-clear-confirm {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 9px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+}
+.cache-clear-confirm > span { color: var(--text-secondary); font-size: 10px; line-height: 1.45; }
+.cache-clear-confirm > div { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.property-panel .cache-clear-confirm button { min-height: 27px; padding: 4px 7px; }
+.property-panel .cache-clear-confirm button.danger {
+  border-color: var(--danger-border);
+  color: var(--danger-hover);
+  background: rgba(220, 114, 122, .16);
+}
+.property-panel .cache-clear-confirm button.danger:hover:not(:disabled) { background: rgba(220, 114, 122, .24); }
 
 .property-panel::-webkit-scrollbar, .outline-tree::-webkit-scrollbar { width: 7px; }
 .property-panel::-webkit-scrollbar-thumb, .outline-tree::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border); }

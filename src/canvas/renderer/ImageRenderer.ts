@@ -90,6 +90,16 @@ export class ImageRenderer {
         return;
       }
       object.lastRelevantAt = options.now;
+      if (object.currentMip === undefined) {
+        // Put a tiny, bounded safety plane on screen before asking for the
+        // final display Mip. This keeps a newly imported image visible while
+        // its sharper level is generated and uploaded in the background.
+        if (!object.pendingSwap) {
+          const previewMip = Math.min(128, Math.max(1, item.naturalWidth, item.naturalHeight));
+          this.requestMip(object, item, previewMip, isVisible ? 120 : 30);
+        }
+        return;
+      }
       const desired = desiredImageMip(item, options.viewport, options.devicePixelRatio);
       const required = requiredImageEdge(item, options.viewport, options.devicePixelRatio);
       const selected = mipWithHysteresis({
@@ -102,7 +112,7 @@ export class ImageRenderer {
       // A direct high-zoom entry starts with a bounded 1024px plane while its
       // complete visible tile set is decoded and uploaded in later frames.
       const wholeMip = tiled
-        ? object.currentMip ?? Math.min(selected.mip, IMAGE_WHOLE_TEXTURE_EDGE)
+        ? Math.max(object.currentMip ?? 0, Math.min(selected.mip, IMAGE_WHOLE_TEXTURE_EDGE))
         : selected.mip;
       this.requestMip(object, item, wholeMip, isVisible ? 100 : 20);
       this.tiles.update(item, required, isVisible ? options.visibleBounds : options.prefetchBounds, isVisible ? 120 : 15);
@@ -111,6 +121,7 @@ export class ImageRenderer {
 
   /** Called immediately before Pixi renders, so a completed upload never swaps mid-frame. */
   commitPendingSwaps() {
+    let swapped = false;
     this.objects.forEach((object, id) => {
       const pending = object.pendingSwap;
       const item = this.items.get(id);
@@ -127,12 +138,14 @@ export class ImageRenderer {
       object.mipState = { displayedMip: pending.mip };
       object.targetKey = undefined;
       updateSprite(object, item);
+      swapped = true;
       if (oldKey && oldKey !== object.textureKey) this.textures.release(oldKey);
     });
     this.tiles.commitPendingSwaps();
     this.objects.forEach((object, id) => {
       if (this.tiles.hasCurrent(id)) object.sprite.renderable = false;
     });
+    if (swapped) this.requestRender();
   }
 
   private syncItem(item: ImageItem) {
