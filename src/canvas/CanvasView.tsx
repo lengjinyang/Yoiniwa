@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ImageItem, PickedColor, Scene, Viewport } from '../types';
 import { CanvasRuntime } from './runtime/CanvasRuntime';
 import type { GroupFrameBounds } from './selection/GroupResizeController';
@@ -59,9 +59,15 @@ export function CanvasView({
 }: CanvasViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<CanvasRuntime | undefined>(undefined);
+  const [startupError, setStartupError] = useState<string>();
+  const [runtimeAttempt, setRuntimeAttempt] = useState(0);
   const initialOptionsRef = useRef({
     background, backgroundOpacity, viewport, selectedIds, selectedGroupId, colorPickerHeld, colorPickerShortcut,
     windowLocked, drawingCollaborationMode, visualNotesState,
+  });
+  const runtimeStateRef = useRef({
+    background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, visualNotesState, visualNotesTemporaryHidden,
   });
   const viewportCommitRef = useRef(onViewportCommit);
   const selectionChangeRef = useRef(onSelectionChange);
@@ -97,10 +103,15 @@ export function CanvasView({
   windowMoveStartRef.current = onWindowMoveStart; windowMoveRef.current = onWindowMove; windowMoveEndRef.current = onWindowMoveEnd;
   visualNotesChangedRef.current = onVisualNotesChanged;
   visualNoteSelectionRef.current = onVisualNoteSelectionChange;
+  runtimeStateRef.current = {
+    background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, visualNotesState, visualNotesTemporaryHidden,
+  };
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return undefined;
+    let active = true;
     const runtime = new CanvasRuntime(container, {
       ...initialOptionsRef.current,
       onViewportCommit: (nextViewport) => viewportCommitRef.current?.(nextViewport),
@@ -123,14 +134,33 @@ export function CanvasView({
       onVisualNoteSelectionChange: (id) => visualNoteSelectionRef.current(id),
     });
     runtimeRef.current = runtime;
-    void runtime.start().catch((error: unknown) => {
+    setStartupError(undefined);
+    void runtime.start().then(() => {
+      if (!active) return;
+      const state = runtimeStateRef.current;
+      runtime.setViewport(state.viewport);
+      runtime.setScene(state.scene);
+      runtime.setSelection(state.selectedIds);
+      runtime.setGroupSelection(state.selectedGroupId);
+      runtime.setGroupMenuOpen(state.groupMenuOpen);
+      runtime.setProjectEpoch(state.projectEpoch);
+      runtime.setColorPickerHeld(state.colorPickerHeld);
+      runtime.setColorPickerShortcut(state.colorPickerShortcut);
+      runtime.setWindowLocked(state.windowLocked);
+      runtime.setDrawingCollaborationMode(state.drawingCollaborationMode);
+      runtime.setVisualNotesState(state.visualNotesState);
+      runtime.setVisualNotesTemporaryHidden(state.visualNotesTemporaryHidden);
+      runtime.setBackground(state.background, state.backgroundOpacity);
+    }).catch((error: unknown) => {
       console.error('Failed to start Pixi canvas runtime', error);
+      if (active) setStartupError('画布渲染初始化失败，请检查显卡驱动或图形加速设置。');
     });
     return () => {
+      active = false;
       runtimeRef.current = undefined;
       runtime.destroy();
     };
-  }, []); // Runtime owns high-frequency state for its complete mounted lifetime.
+  }, [runtimeAttempt]); // Runtime owns high-frequency state for each mounted attempt.
 
   useEffect(() => { runtimeRef.current?.setViewport(viewport); }, [viewport]);
   useEffect(() => { runtimeRef.current?.setScene(scene); }, [scene]);
@@ -192,5 +222,10 @@ export function CanvasView({
     window.addEventListener('refcanvas-stress-viewport', setBenchmarkViewport);
     return () => window.removeEventListener('refcanvas-stress-viewport', setBenchmarkViewport);
   }, []);
-  return <div ref={containerRef} className="canvas-runtime-root" data-canvas-runtime="pixi-v8" />;
+  return <div ref={containerRef} className="canvas-runtime-root" data-canvas-runtime="pixi-v8">
+    {startupError && <div className="canvas-startup-error" role="alert">
+      <p>{startupError}</p>
+      <button type="button" onClick={() => setRuntimeAttempt((attempt) => attempt + 1)}>重试</button>
+    </div>}
+  </div>;
 }

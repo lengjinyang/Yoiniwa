@@ -26,6 +26,10 @@ button:disabled { opacity: .35; cursor: default; }
 .workspace { position: absolute; inset: 0; overflow: hidden; border-radius: 0; box-shadow: none; }
 .canvas-runtime-root { position: absolute; inset: 0; overflow: hidden; border-radius: 0; box-shadow: none; cursor: default; touch-action: none; }
 .canvas-runtime-root > .pixi-canvas { display: block; width: 100%; height: 100%; outline: none; }
+.canvas-startup-error { position: absolute; inset: 0; z-index: 5; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px; color: #d6dee5; background: rgba(15,17,21,.92); text-align: center; pointer-events: auto; }
+.canvas-startup-error p { max-width: 360px; margin: 0; line-height: 1.6; }
+.canvas-startup-error button { min-width: 72px; padding: 6px 14px; border: 1px solid rgba(214,222,229,.3); border-radius: 6px; color: inherit; background: rgba(214,222,229,.1); cursor: pointer; }
+.canvas-startup-error button:hover { background: rgba(214,222,229,.18); }
 .color-picker-hud { position: absolute; z-index: 40; display: flex; align-items: center; gap: 10px; width: 178px; min-height: 54px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: 12px; color: #f5f7fa; background: rgba(24,26,31,.86); box-shadow: 0 10px 32px rgba(0,0,0,.32), inset 0 1px rgba(255,255,255,.08); backdrop-filter: blur(18px) saturate(145%); pointer-events: none; }
 .color-picker-hud[hidden] { display: none; }
 .color-picker-swatch { flex: 0 0 36px; height: 36px; border-radius: 9px; background: var(--picked-color, transparent); box-shadow: inset 0 0 0 1px rgba(255,255,255,.25), 0 2px 6px rgba(0,0,0,.25); }
