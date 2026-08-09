@@ -175,7 +175,7 @@ export function createGroupFrame(scene: Scene, members: GroupMember[], name: str
   return group;
 }
 
-export function removeMemberFromGroups(scene: Scene, member: GroupMember) {
+function removeMemberFromGroups(scene: Scene, member: GroupMember) {
   scene.groups.forEach((group) => { group.members = group.members.filter((value) => !(value.type === member.type && value.id === member.id)); });
   if (member.type === 'group') {
     const child = scene.groups.find((group) => group.id === member.id);

@@ -16,7 +16,7 @@ const MIN_GROUP_WIDTH = 64;
 const MIN_GROUP_HEIGHT = 48;
 
 /** Resize changes the group range only; member transforms remain untouched. */
-export function resizeGroupFrame(
+function resizeGroupFrame(
   original: Pick<ImageGroup, 'x' | 'y' | 'width' | 'height'>,
   handle: GroupResizeHandle,
   point: { x: number; y: number },

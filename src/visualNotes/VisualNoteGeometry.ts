@@ -38,7 +38,7 @@ export function pointToAnchor(point: Point, anchor: VisualNoteAnchor, images: re
   return image ? worldToImageSource(image, point) : point;
 }
 
-export function pointFromAnchor(point: Point, anchor: VisualNoteAnchor, images: readonly ImageItem[]): Point {
+function pointFromAnchor(point: Point, anchor: VisualNoteAnchor, images: readonly ImageItem[]): Point {
   if (anchor.type === 'scene') return point;
   const image = images.find((item) => item.id === anchor.imageId);
   return image ? imageSourceToWorld(image, point) : point;

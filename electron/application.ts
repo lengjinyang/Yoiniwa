@@ -2633,7 +2633,7 @@ handleIpc('project:compact', (_event, sessionId) => projectPersistence.compact(s
 handleIpc('project:stats', (_event, sessionId) => projectPersistence.stats(sessionId));
 handleIpc('project:recover', (_event, sessionId) => projectPersistence.recover(sessionId));
 handleIpc('scene:startup-path', async () => {
-  let result = startupScenePath ?? null;
+  const result = startupScenePath ?? null;
   startupScenePath = undefined;
   return result;
 });

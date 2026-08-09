@@ -87,7 +87,7 @@ export type VisualNoteTool = 'brush' | 'arrow' | 'eraser';
 export type VisualNoteWidth = 'thin' | 'medium' | 'thick';
 export type EraserSize = 'small' | 'medium' | 'large';
 
-export interface VisualNoteStyle {
+interface VisualNoteStyle {
   color: string;
   opacity: number;
   width: VisualNoteWidth;
@@ -118,7 +118,7 @@ export interface ArrowVisualMark extends VisualNoteBase {
   end: VisualNotePoint;
 }
 
-export interface NumberVisualMark extends VisualNoteBase {
+interface NumberVisualMark extends VisualNoteBase {
   kind: 'number';
   point: VisualNotePoint;
   number: number;
@@ -222,7 +222,7 @@ export interface PhotoshopVersionRecord {
 
 export interface PhotoshopProjectMetadata { versions: PhotoshopVersionRecord[] }
 
-export type ProjectCommitReason = 'explicit' | 'autosave' | 'version-add' | 'version-delete';
+type ProjectCommitReason = 'explicit' | 'autosave' | 'version-add' | 'version-delete';
 
 export interface ProjectCommitRequest {
   sessionId?: string;

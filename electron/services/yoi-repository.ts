@@ -8,11 +8,11 @@ import { brotliCompress, brotliDecompress, constants as zlibConstants } from 'no
 import type { FileHandle } from 'node:fs/promises';
 import type { PhotoshopProjectMetadata, Scene } from '../../src/types.js';
 
-export const YOI_STORAGE_VERSION = 4;
-export const YOI_HEADER_SIZE = 8192;
-export const YOI_SUPERBLOCK_SIZE = 256;
-export const YOI_SUPERBLOCK_OFFSETS = [512, 768] as const;
-export const YOI_MAXIMUM_PREVIEW_BYTES = 4 * 1024 * 1024;
+const YOI_STORAGE_VERSION = 4;
+const YOI_HEADER_SIZE = 8192;
+const YOI_SUPERBLOCK_SIZE = 256;
+const YOI_SUPERBLOCK_OFFSETS = [512, 768] as const;
+const YOI_MAXIMUM_PREVIEW_BYTES = 4 * 1024 * 1024;
 const YOI_SEGMENT_HEADER_SIZE = 96;
 const MAXIMUM_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const FILE_MAGIC = Buffer.from('YOINIWA\0', 'ascii');
