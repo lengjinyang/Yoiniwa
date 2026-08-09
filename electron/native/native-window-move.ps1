@@ -360,6 +360,7 @@ public static class RefCanvasNativeWindowMove
 
         var data = (MouseHookData)Marshal.PtrToStructure(lParam, typeof(MouseHookData));
         var message = wParam.ToInt32();
+        var physicalMouse = PointerType(data) == "mouse";
         var window = new IntPtr(Interlocked.Read(ref inputWindowHandle));
         var inside = PointInsideWindow(window, data.Position);
         var alt = IsKeyDown(VK_MENU);
@@ -393,12 +394,17 @@ public static class RefCanvasNativeWindowMove
                     SetInputMode(INPUT_BLOCK);
                 }
                 else EmitPointer("MOVE", data, true, space, 0);
-                return new IntPtr(1);
+                // A mouse reports relative motion through WM_MOUSEMOVE. If the
+                // hook consumes it, the system cursor never advances and the
+                // synthetic collaboration pointer appears stuck and jittery.
+                // Pen input remains suppressed so Windows Ink ownership and
+                // Photoshop's next real tip contact keep their existing path.
+                return physicalMouse ? CallNextHookEx(hookHandle, code, wParam, lParam) : new IntPtr(1);
             }
             if (mode == INPUT_PAN)
             {
                 EmitPointer("MOVE", data, alt, space, 0);
-                return new IntPtr(1);
+                return physicalMouse ? CallNextHookEx(hookHandle, code, wParam, lParam) : new IntPtr(1);
             }
             if (mode == INPUT_BLOCK) return CallNextHookEx(hookHandle, code, wParam, lParam);
             if (inside && alt && !IsKeyDown(VK_LBUTTON)) EmitPointer("HOVER", data, true, space, 0);

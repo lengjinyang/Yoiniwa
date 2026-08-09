@@ -124,6 +124,25 @@
 .photoshop-version-dialog-cancel:hover { border-color: var(--border-strong); color: var(--text-primary); background: var(--surface-hover); }
 .photoshop-version-dialog-submit { border-color: var(--accent-fill-border) !important; color: var(--text-on-accent); background: var(--accent-fill); }
 .photoshop-version-dialog-submit:hover:not(:disabled) { border-color: var(--accent-fill-border-hover) !important; background: var(--accent-fill-hover); }
+.close-confirm-backdrop { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 16px; background: var(--scrim); }
+.close-confirm-dialog { width: min(420px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-panel); color: var(--text-primary); background: var(--surface-1); box-shadow: 0 18px 52px rgba(0, 0, 0, .42); }
+.close-confirm-dialog header { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; gap: 10px; padding: 15px 16px 13px; border-bottom: 1px solid var(--border); }
+.close-confirm-icon { display: grid; width: 38px; height: 38px; place-items: center; border: 1px solid rgba(198, 164, 101, .32); border-radius: var(--radius-sm); color: var(--warning); background: rgba(198, 164, 101, .1); }
+.close-confirm-dialog header > div { display: grid; min-width: 0; gap: 3px; }
+.close-confirm-dialog header strong { font-size: 14px; font-weight: 600; }
+.close-confirm-dialog header span:not(.close-confirm-icon) { overflow: hidden; color: var(--text-secondary); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.close-confirm-copy { display: grid; gap: 5px; padding: 15px 16px; }
+.close-confirm-copy p { margin: 0; color: var(--text-primary); font-size: 12px; line-height: 1.5; }
+.close-confirm-copy small { color: var(--text-muted); font-size: 10.5px; line-height: 1.5; }
+.close-confirm-dialog footer { display: flex; justify-content: flex-end; gap: 7px; padding: 12px 16px 14px; border-top: 1px solid var(--border); background: var(--surface-0); }
+.close-confirm-dialog footer button { display: inline-flex; min-height: 31px; align-items: center; justify-content: center; gap: 6px; padding: 5px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; }
+.close-confirm-cancel { color: var(--text-secondary); background: var(--surface-2); }
+.close-confirm-cancel:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-primary); background: var(--surface-hover); }
+.close-confirm-discard { border-color: var(--danger-border) !important; color: var(--danger); background: var(--danger-soft); }
+.close-confirm-discard:hover:not(:disabled) { color: var(--danger-hover); background: rgba(220, 114, 122, .18); }
+.close-confirm-save { border-color: var(--accent-fill-border) !important; color: var(--text-on-accent); background: var(--accent-fill); }
+.close-confirm-save:hover:not(:disabled) { border-color: var(--accent-fill-border-hover) !important; background: var(--accent-fill-hover); }
+.close-confirm-dialog footer button:disabled { opacity: .55; cursor: default; }
 @keyframes quiet-panel-in {
   from { opacity: 0; transform: translate(4px, -50%); }
   to { opacity: 1; transform: translate(0, -50%); }
@@ -277,7 +296,6 @@
 .empty-recent-copy strong { color: var(--text-primary); font-size: 11px; font-weight: 600; }
 .empty-state .empty-recent-copy small { display: block; margin: 0; color: var(--text-muted); font-size: 9px; }
 .empty-recent-list time { color: var(--text-muted); font-size: 9px; white-space: nowrap; }
-.empty-state > small { margin-top: 16px; }
 .import-progress { display: block; width: min(280px, calc(100vw - 32px)); padding: 11px 12px; border-radius: var(--radius-panel); text-align: center; }
 .import-progress strong { display: block; font-size: 12px; font-weight: 600; letter-spacing: .2px; }
 .import-progress-track { height: 4px; border-radius: 2px; background: var(--surface-hover); }

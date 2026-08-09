@@ -70,6 +70,7 @@ export interface IpcEventMap {
   'images:thumbnail-ready': ImageThumbnailReady;
   'scene:external-open': string;
   'window:move-finished': void;
+  'window:close-requested': void;
   'window:click-through-disabled': void;
   'window:toggle-collaboration-requested': void;
   'window:native-pointer': NativePointerInput;

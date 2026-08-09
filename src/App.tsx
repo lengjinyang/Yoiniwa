@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { PHOTOSHOP_VERSION_PREVIEW_MIME } from './app/components/PhotoshopVersionsPanel';
@@ -17,6 +17,7 @@ import { useAppCommands } from './app/hooks/useAppCommands';
 import { useWindowCollaborationController } from './app/hooks/useWindowCollaborationController';
 import { useColorPickerController } from './app/hooks/useColorPickerController';
 import { useAppShell, useNativeZoom } from './app/hooks/useAppShell';
+import { UnsavedChangesDialog } from './app/components/UnsavedChangesDialog';
 import './styles.css';
 import './styles/quiet-tokens.css';
 import './styles/quiet-controls.css';
@@ -38,6 +39,8 @@ export default function App() {
   const drawingCollaborationModeRef = useRef(false);
   const onWindowLockedRef = useRef<() => void>(() => undefined);
   const api = window.refCanvas;
+  const [closePromptOpen, setClosePromptOpen] = useState(false);
+  const [closeSaving, setCloseSaving] = useState(false);
   const context = useContextMenu();
   const { close: closeContextMenu } = context;
   const preferences = useAppPreferences({ api, drawingCollaborationModeRef, setStatus });
@@ -119,6 +122,31 @@ export default function App() {
     settleOperation: settleCurrentOperation,
     clearOperation: clearCurrentOperation,
   });
+  useEffect(() => api?.onCloseRequested(() => {
+    setCloseSaving(false);
+    setClosePromptOpen(true);
+  }), [api]);
+  const cancelClose = () => {
+    if (closeSaving) return;
+    setClosePromptOpen(false);
+    api?.respondToClose(false);
+  };
+  const discardAndClose = () => {
+    if (closeSaving) return;
+    setClosePromptOpen(false);
+    api?.respondToClose(true);
+  };
+  const saveAndClose = async () => {
+    if (closeSaving) return;
+    setCloseSaving(true);
+    const saved = await project.save(false);
+    if (saved) {
+      setClosePromptOpen(false);
+      api?.respondToClose(true);
+      return;
+    }
+    setCloseSaving(false);
+  };
   const {
     photoshopMetadata,
     setPhotoshopMetadata,
@@ -226,7 +254,6 @@ export default function App() {
       visualNotes={visualNotes}
       project={project}
       windowController={windowController}
-      colorPicker={colorPicker}
       versions={versions}
       imageImport={imageImport}
       context={context}
@@ -235,6 +262,14 @@ export default function App() {
       menuEntries={menuEntries}
       sceneNameVisible={sceneNameVisible}
       photoshopDocumentBlocked={photoshopDocumentBlocked}
+    />
+    <UnsavedChangesDialog
+      open={closePromptOpen}
+      saving={closeSaving}
+      sceneName={project.displaySceneName}
+      onCancel={cancelClose}
+      onDiscard={discardAndClose}
+      onSave={() => { void saveAndClose(); }}
     />
   </main>;
 }

@@ -77,6 +77,12 @@ contextBridge.exposeInMainWorld('refCanvas', {
     return () => ipcRenderer.removeListener('window:move-finished', handler);
   },
   close: () => ipcRenderer.send('window:close'),
+  respondToClose: (shouldClose) => ipcRenderer.send('window:close-response', shouldClose),
+  onCloseRequested: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('window:close-requested', handler);
+    return () => ipcRenderer.removeListener('window:close-requested', handler);
+  },
   setDirty: (dirty, revision) => ipcRenderer.send('window:dirty', { dirty, revision }),
   onClickThroughDisabled: (callback) => {
     const handler = () => callback();

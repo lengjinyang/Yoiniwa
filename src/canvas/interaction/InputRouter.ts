@@ -13,7 +13,7 @@ export class InputRouter {
   private readonly wheel = new Set<WheelHandler>();
   private readonly context = new Set<MouseHandler>();
   private readonly doubleClick = new Set<MouseHandler>();
-  private suppressContextMenuUntil = 0;
+  private suppressContextMenu = false;
 
   constructor(element: HTMLElement, lifecycle: RuntimeLifecycle) {
     const pointerDown = (event: PointerEvent) => this.down.forEach((handler) => handler(event));
@@ -29,8 +29,8 @@ export class InputRouter {
     };
     const contextMenu = (event: MouseEvent) => {
       event.preventDefault();
-      if (performance.now() <= this.suppressContextMenuUntil) {
-        this.suppressContextMenuUntil = 0;
+      if (this.suppressContextMenu) {
+        this.suppressContextMenu = false;
         return;
       }
       this.context.forEach((handler) => handler(event));
@@ -61,5 +61,6 @@ export class InputRouter {
   onWheel(handler: WheelHandler) { this.wheel.add(handler); return () => this.wheel.delete(handler); }
   onContextMenu(handler: MouseHandler) { this.context.add(handler); return () => this.context.delete(handler); }
   onDoubleClick(handler: MouseHandler) { this.doubleClick.add(handler); return () => this.doubleClick.delete(handler); }
-  suppressNextContextMenu(durationMs = 500) { this.suppressContextMenuUntil = performance.now() + durationMs; }
+  suppressNextContextMenu() { this.suppressContextMenu = true; }
+  resetContextMenuSuppression() { this.suppressContextMenu = false; }
 }
