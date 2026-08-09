@@ -5,18 +5,18 @@ import type { ImageGroup } from '../../types';
 export const GROUP_HEADER_SCREEN_HEIGHT = 30;
 export const GROUP_TITLE_SCREEN_FONT_SIZE = 12;
 export const GROUP_TITLE_SCREEN_LINE_HEIGHT = 14;
-export const GROUP_HEADER_VERTICAL_PADDING = 2;
+const GROUP_HEADER_VERTICAL_PADDING = 2;
 // Keep the zoomed-out bar coupled to the title metrics. Changing the large
 // zoom ceiling must never make the compact state thick again.
 export const GROUP_HEADER_MIN_SCREEN_HEIGHT = GROUP_TITLE_SCREEN_LINE_HEIGHT
   + GROUP_HEADER_VERTICAL_PADDING * 2;
-export const GROUP_HEADER_GROWTH_START_SCALE = 1;
-export const GROUP_HEADER_FULL_HEIGHT_SCALE = 1.5;
+const GROUP_HEADER_GROWTH_START_SCALE = 1;
+const GROUP_HEADER_FULL_HEIGHT_SCALE = 1.5;
 export const GROUP_RESIZE_HANDLE_SCREEN_SIZE = 6;
 export const GROUP_HEADER_ACTION_SCREEN_WIDTH = 20;
 export const GROUP_MORE_ICON_RIGHT_INSET = 14;
 
-export function groupTitleScreenWidth(name: string) {
+function groupTitleScreenWidth(name: string) {
   return Array.from(name).reduce((width, character) => width + (/^[\x00-\xff]$/.test(character) ? 6.5 : 11), 0);
 }
 

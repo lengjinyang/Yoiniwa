@@ -7,7 +7,7 @@ import { YoiRepository, isYoiStorageV4, type YoiBlobSource, type YoiCommitResult
 import type { PhotoshopProjectMetadata, PhotoshopVersionRecord, ProjectStorageStats, Scene } from '../../src/types.js';
 import { normalizePhotoshopProjectMetadata } from '../../src/shared/photoshopVersions.js';
 
-export type ProjectCommitReason = 'explicit' | 'autosave' | 'version-add' | 'version-delete';
+type ProjectCommitReason = 'explicit' | 'autosave' | 'version-add' | 'version-delete';
 
 export interface ProjectCommitPayload {
   sessionId?: string;

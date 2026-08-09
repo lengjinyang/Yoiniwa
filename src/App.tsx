@@ -94,7 +94,7 @@ export default function App() {
   const [comparisonSplit, setComparisonSplit] = useState(50);
   const [comparisonOpacity, setComparisonOpacity] = useState(50);
   const [comparisonPreview, setComparisonPreview] = useState<ComparisonPreview>({ state: 'loading' });
-  const comparisonPreviewUrlRef = useRef<string>();
+  const comparisonPreviewUrlRef = useRef<string | undefined>(undefined);
   const comparisonPreviewRequestRef = useRef(0);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [visualNotesEnabled, setVisualNotesEnabled] = useState(false);

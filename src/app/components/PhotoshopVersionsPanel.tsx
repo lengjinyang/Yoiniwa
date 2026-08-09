@@ -1,6 +1,6 @@
 import { imageSource } from '../../imageResources';
 import type { PhotoshopVersionRecord } from '../../types';
-import { Button, formatBytes } from './CommonControls';
+import { formatBytes } from './CommonControls';
 import { UiIcon } from './UiIcon';
 
 export const PHOTOSHOP_VERSION_PREVIEW_MIME = 'application/x-yoiniwa-photoshop-version';
