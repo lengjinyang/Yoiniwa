@@ -212,7 +212,7 @@ impl YoiRepository {
                 let mut limited = source_file.take(source.byte_length);
                 let mut hasher = Sha256::new();
                 let mut copied = 0_u64;
-                let mut buffer = [0_u8; 1024 * 1024];
+                let mut buffer = vec![0_u8; 1024 * 1024];
                 loop {
                     let read = limited.read(&mut buffer)?;
                     if read == 0 { break; }
@@ -759,7 +759,7 @@ fn read_legacy_project(path: &Path, assets: &SharedAssets) -> Result<(Scene, Pho
         let mut output = File::create(&temporary)?;
         let mut hasher = Sha256::new();
         let mut copied = 0_u64;
-        let mut buffer = [0_u8; 1024 * 1024];
+        let mut buffer = vec![0_u8; 1024 * 1024];
         loop {
             let read = entry.read(&mut buffer)?;
             if read == 0 { break; }
@@ -914,7 +914,7 @@ fn extract_legacy_version(path: &Path, version: &crate::types::PhotoshopVersionR
         let mut output = File::create(&temporary)?;
         let mut hasher = Sha256::new();
         let mut copied = 0_u64;
-        let mut buffer = [0_u8; 1024 * 1024];
+        let mut buffer = vec![0_u8; 1024 * 1024];
         loop {
             let read = entry.read(&mut buffer)?;
             if read == 0 { break; }

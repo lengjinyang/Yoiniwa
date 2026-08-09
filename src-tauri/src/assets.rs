@@ -127,7 +127,7 @@ impl AssetService {
         let mut reader = BufReader::new(File::open(path)?);
         let mut writer = File::create(&temporary)?;
         let mut hasher = Sha256::new();
-        let mut buffer = [0_u8; 1024 * 1024];
+        let mut buffer = vec![0_u8; 1024 * 1024];
         loop {
             let read = reader.read(&mut buffer)?;
             if read == 0 { break; }
@@ -501,7 +501,7 @@ fn materialize_package_asset(source: &PackageAssetSource, target: &Path) -> Resu
     let mut output = File::create(&temporary)?;
     let mut hasher = Sha256::new();
     let mut copied = 0_u64;
-    let mut buffer = [0_u8; 1024 * 1024];
+    let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         let read = limited.read(&mut buffer)?;
         if read == 0 { break; }

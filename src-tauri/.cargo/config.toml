@@ -1,2 +1,6 @@
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-L", "native=vendor/libvips"]
+rustflags = [
+  "-L", "native=vendor/libvips",
+  # Windows defaults to 1 MiB; debug Tauri IPC and image IO need more headroom.
+  "-C", "link-arg=/STACK:8388608",
+]
