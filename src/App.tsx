@@ -8,8 +8,7 @@ import { renderItems } from './exportScene';
 import { applyLayout, type LayoutAction } from './layout';
 import { matchesColorPickerShortcut, MAX_ZOOM, MIN_ZOOM, type ColorPickerShortcut } from './interactions';
 import { arrangeImportedItems } from './importPlacement';
-import { imageSource, preloadImagePreview } from './imageResources';
-import { groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from './outline';
+import { preloadImagePreview } from './imageResources';
 import { startOperation, settleOperation, clearOperation, type OperationKind, type OperationState } from './operationState';
 import { addMemberToGroup, createGroupFrame, createScene, detachImageFromGroup, fitAutoGroupsToContents, fitGroupToContents, groupVisibleBounds, itemBounds, memberBounds, moveGroupWithContents, reconcileAllMemberships, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
 import type { GroupFrameBounds } from './canvas/selection/GroupResizeController';
@@ -19,9 +18,13 @@ import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePr
 import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
-import { Button, formatBytes, OutlineThumbnail } from './app/components/CommonControls';
-import { UiIcon, type UiIconName } from './app/components/UiIcon';
+import { Button } from './app/components/CommonControls';
+import { OutlinePanel } from './app/components/OutlinePanel';
+import { UiIcon } from './app/components/UiIcon';
 import { PhotoshopVersionComparePanel, type ComparisonMode, type ComparisonPreviewState } from './app/components/PhotoshopVersionComparePanel';
+import { PhotoshopVersionsPanel, PHOTOSHOP_VERSION_PREVIEW_MIME } from './app/components/PhotoshopVersionsPanel';
+import { PropertiesPanel } from './app/components/PropertiesPanel';
+import { VisualNotesToolbar } from './app/components/VisualNotesToolbar';
 import { appCommand, createAppCommandRegistry } from './app/AppCommand';
 import { ColorControl, type ColorControlHandle } from './ColorControl';
 import './styles.css';
@@ -36,16 +39,6 @@ import { DEFAULT_SHORTCUTS, loadShortcutPreferences, SHORTCUT_LABELS, shortcutCo
 
 const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
-const VISUAL_NOTE_TOOL_OPTIONS: ReadonlyArray<{ tool: VisualNoteTool; label: string; shortcut: string; icon: UiIconName }> = [
-  { tool: 'brush', label: '画笔', shortcut: '1 / B', icon: 'pen' },
-  { tool: 'arrow', label: '箭头', shortcut: '2', icon: 'note-arrow' },
-  { tool: 'eraser', label: '橡皮擦', shortcut: '3 / E', icon: 'eraser' },
-];
-const VISUAL_NOTE_COLOR_OPTIONS = [
-  ['#d5d8dc', '白色'], ['#c97c80', '暖红'], ['#c6a15b', '暖黄'],
-  ['#78a089', '青绿'], ['#7595b8', '冷蓝'], ['#9383ae', '灰紫'],
-] as const;
-const PHOTOSHOP_VERSION_PREVIEW_MIME = 'application/x-yoiniwa-photoshop-version';
 
 interface ComparisonPreview {
   url?: string;
@@ -104,7 +97,6 @@ export default function App() {
   const comparisonPreviewUrlRef = useRef<string>();
   const comparisonPreviewRequestRef = useRef(0);
   const [outlineOpen, setOutlineOpen] = useState(false);
-  const [outlineQuery, setOutlineQuery] = useState('');
   const [visualNotesEnabled, setVisualNotesEnabled] = useState(false);
   const [visualNoteTool, setVisualNoteTool] = useState<VisualNoteTool>('brush');
   const [visualNoteColor, setVisualNoteColor] = useState('#c6a15b');
@@ -114,7 +106,6 @@ export default function App() {
   const [eraserSize, setEraserSize] = useState<EraserSize>('medium');
   const [visualNotesTemporaryHidden, setVisualNotesTemporaryHidden] = useState(false);
   const [selectedVisualMarkId, setSelectedVisualMarkId] = useState<string>();
-  const [outlineCollapsedIds, setOutlineCollapsedIds] = useState<Set<string>>(() => new Set());
   const [sceneNameVisible, setSceneNameVisible] = useState(false);
   const sceneNameVisibleRef = useRef(false);
   const [contextMenu, setContextMenu] = useState<MenuPosition>();
@@ -1385,6 +1376,50 @@ export default function App() {
     }).catch((error) => setStatus(`恢复快捷键失败：${String(error)}`));
   }, [api, drawingCollaborationMode]);
 
+  const setPickerShortcut = useCallback((shortcut: ColorPickerShortcut) => {
+    setColorPickerShortcut(shortcut);
+    setStatus(`取色快捷键已设为 ${shortcut === 'alt' ? 'Alt' : 'S'}`);
+  }, []);
+
+  const beginShortcutCapture = useCallback((id: ShortcutId, label: string) => {
+    setShortcutCaptureId(id);
+    setStatus(`请按下“${label}”的新快捷键`);
+  }, []);
+
+  const chooseCacheLocation = useCallback(() => {
+    if (!api) return;
+    void (async () => {
+      setCacheChanging(true);
+      try {
+        const result = await api.chooseCacheLocation();
+        if (!result.canceled && result.info) { setCacheInfo(result.info); setStatus('缓存已迁移到新位置'); }
+      } catch (error) { setStatus(`迁移缓存失败：${String(error)}`); }
+      finally { setCacheChanging(false); }
+    })();
+  }, [api]);
+
+  const resetCacheLocation = useCallback(() => {
+    if (!api) return;
+    void (async () => {
+      setCacheChanging(true);
+      try { setCacheInfo(await api.resetCacheLocation()); setStatus('缓存已恢复默认位置'); }
+      catch (error) { setStatus(`迁移缓存失败：${String(error)}`); }
+      finally { setCacheChanging(false); }
+    })();
+  }, [api]);
+
+  const openLogsFolder = useCallback(() => {
+    if (!api) return;
+    void api.openLogsFolder().then((result) => setStatus(`日志目录：${result.path}`))
+      .catch((error) => setStatus(`打开日志目录失败：${String(error)}`));
+  }, [api]);
+
+  const copyDiagnostics = useCallback(() => {
+    if (!api) return;
+    void api.copyDiagnostics().then((result) => setStatus(`诊断信息已复制 · 会话 ${result.sessionId.slice(0, 8)}`))
+      .catch((error) => setStatus(`复制诊断信息失败：${String(error)}`));
+  }, [api]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const input = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
@@ -1760,18 +1795,12 @@ export default function App() {
     { type: 'item', label: '删除组框', action: () => deleteGroupById(groupActionTarget.id, false) },
   ] : [];
 
-  const groupedImageIds = new Set(history.scene.groups.flatMap((group) => group.members.filter((member) => member.type === 'image').map((member) => member.id)));
   const displaySceneName = history.scene.name === '未命名画板' ? history.scene.name : `${history.scene.name}.yoi`;
   useEffect(() => {
     const title = `${displaySceneName}${history.dirty ? ' •' : ''} · Yoiniwa`;
     document.title = title;
     void api?.setTitle(title).catch(() => undefined);
   }, [api, displaySceneName, history.dirty]);
-  const normalizedOutlineQuery = outlineQuery.trim().toLocaleLowerCase();
-  const hasOutlineFilter = Boolean(normalizedOutlineQuery);
-  const outlineFilter = useMemo<OutlineFilter>(() => ({
-    query: outlineQuery,
-  }), [outlineQuery]);
   const focusOutlineBounds = (bounds: { x: number; y: number; width: number; height: number }) => {
     if (!focusReturn) setFocusReturn({ ...history.scene.viewport });
     fitBounds(bounds, 72);
@@ -1790,57 +1819,20 @@ export default function App() {
     selectOutlineGroup(group);
     focusOutlineBounds(groupVisibleBounds(group));
   };
-  const toggleOutlineGroup = (id: string) => setOutlineCollapsedIds((current) => {
-    const next = new Set(current);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
   const moveOutlineImageLayer = (id: string, direction: -1 | 1) => {
     const currentOrder = [...history.scene.items].sort((a, b) => a.zIndex - b.zIndex);
     const currentIndex = currentOrder.findIndex((item) => item.id === id);
     if (currentIndex < 0 || currentIndex + direction < 0 || currentIndex + direction >= currentOrder.length) return;
     history.commit((scene) => { moveImageLayer(scene, id, direction); });
   };
-  const imageMatchesOutline = (item: ImageItem) => outlineObjectMatches(item, 'image', outlineFilter);
-  const groupMatchesOutline = (group: ImageGroup) => groupOrDescendantMatches(history.scene, group, outlineFilter);
-  const renderOutlineImage = (item: ImageItem) => imageMatchesOutline(item) ? <li key={`image-${item.id}`}>
-    <div className={`outline-row image${selectedIds.includes(item.id) ? ' selected' : ''}${item.hidden ? ' muted' : ''}`}>
-      <span className="outline-indent" />
-      <OutlineThumbnail item={item} />
-      <button className="outline-name" title={`${item.name} · 双击定位`} onClick={() => selectOutlineImage(item)} onDoubleClick={() => focusOutlineImage(item)}>{item.name}</button>
-      <span className="outline-actions">
-        <button className={`outline-visibility${item.hidden ? ' off' : ''}`} title={item.hidden ? '显示图片' : '隐藏图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.hidden = !value.hidden; })}><UiIcon name={item.hidden ? 'eye-off' : 'eye'} /></button>
-        <button className={`outline-lock${item.locked ? ' locked' : ''}`} title={item.locked ? '解锁图片' : '锁定图片'} onClick={() => history.commit((scene) => { const value = scene.items.find((entry) => entry.id === item.id); if (value) value.locked = !value.locked; })}><UiIcon name={item.locked ? 'lock' : 'unlock'} /></button>
-        <button className="outline-layer down" title="下移一层" onClick={() => moveOutlineImageLayer(item.id, -1)}><UiIcon name="arrow-down" /></button>
-        <button className="outline-layer up" title="上移一层" onClick={() => moveOutlineImageLayer(item.id, 1)}><UiIcon name="arrow-up" /></button>
-      </span>
-    </div>
-  </li> : null;
-  const renderOutlineGroup = (group: ImageGroup, visited = new Set<string>()): React.ReactNode => {
-    if (visited.has(group.id) || !groupMatchesOutline(group)) return null;
-    const nextVisited = new Set(visited).add(group.id);
-    const collapsed = !hasOutlineFilter && outlineCollapsedIds.has(group.id);
-    return <li key={group.id} className="outline-group-node">
-      <div className={`outline-row group${selectedGroupId === group.id ? ' selected' : ''}`}>
-        <button className={`outline-disclosure${collapsed ? ' collapsed' : ''}`} title={collapsed ? '展开层级' : '折叠层级'}
-          onClick={() => toggleOutlineGroup(group.id)}><UiIcon name={collapsed ? 'chevron-right' : 'chevron-down'} /></button>
-        <span className="outline-group-mark" style={{ color: group.color }}><UiIcon name="group" /></span>
-        <button className="outline-name" title={`${group.name} · 双击定位`} onClick={() => selectOutlineGroup(group)} onDoubleClick={() => focusOutlineGroup(group)}>{group.name}</button>
-        <span className="outline-count">{group.members.length}</span>
-      </div>
-      {!collapsed && <ul>{group.members.map((member) => {
-        if (member.type === 'group') {
-          const child = history.scene.groups.find((value) => value.id === member.id);
-          return child ? renderOutlineGroup(child, nextVisited) : null;
-        }
-        if (member.type === 'image') {
-          const item = history.scene.items.find((value) => value.id === member.id);
-          return item ? renderOutlineImage(item) : null;
-        }
-        return null;
-      })}</ul>}
-    </li>;
-  };
+  const toggleOutlineImageVisibility = (id: string) => history.commit((scene) => {
+    const item = scene.items.find((value) => value.id === id);
+    if (item) item.hidden = !item.hidden;
+  });
+  const toggleOutlineImageLock = (id: string) => history.commit((scene) => {
+    const item = scene.items.find((value) => value.id === id);
+    if (item) item.locked = !item.locked;
+  });
 
   return <main className="app-shell">
     <section className="workspace">
@@ -1889,71 +1881,27 @@ export default function App() {
         onViewportCommit={(viewport) => { liveViewportRef.current = viewport; history.updateViewport(viewport); }}
       />
 
-      {propertiesOpen && <aside className="property-panel no-drag">
-        <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title={`关闭设置面板 (${shortcuts.settings})`} onClick={() => setPropertiesOpen(false)}><UiIcon name="close" /></button></div>
-        <section>
-          <h3>交互设置</h3>
-          <div className="selection-summary">Alt 模式适合 Photoshop + 数位板：锁定后 Alt + 笔尖点击取色，并自动返回 Photoshop</div>
-          <div className="button-grid">
-            <Button active={colorPickerShortcut === 's'} onClick={() => { setColorPickerShortcut('s'); setStatus('取色快捷键已设为 S'); }}>S</Button>
-            <Button active={colorPickerShortcut === 'alt'} onClick={() => { setColorPickerShortcut('alt'); setStatus('取色快捷键已设为 Alt'); }}>Alt（PS / 数位板）</Button>
-          </div>
-        </section>
-
-        <section>
-          <h3>快捷键</h3>
-          <div className="shortcut-list">
-            {SHORTCUT_LABELS.map(({ id, label }) => {
-              const capturing = shortcutCaptureId === id;
-              const disabled = id === 'collaboration' && drawingCollaborationMode;
-              return <div className="shortcut-row" key={id}>
-                <span>{label}</span>
-                <button
-                  className={capturing ? 'active shortcut-capture' : 'shortcut-capture'}
-                  title={disabled ? '请先退出协作模式' : '点击后按下快捷键'}
-                  disabled={disabled}
-                  onClick={() => { setShortcutCaptureId(id); setStatus(`请按下“${label}”的新快捷键`); }}
-                  onKeyDown={(event) => captureShortcut(id, event)}
-                  onBlur={() => { if (capturing) setShortcutCaptureId(undefined); }}
-                >{capturing ? '请按键…' : shortcuts[id]}</button>
-              </div>;
-            })}
-          </div>
-          <Button onClick={resetShortcuts}>恢复默认快捷键</Button>
-        </section>
-
-        <section>
-          <h3>性能与缓存</h3>
-          <div className="cache-location" title={cacheInfo?.root ?? '正在读取缓存位置'}>{cacheInfo?.root ?? '正在读取…'}</div>
-          <div className="selection-summary">缓存占用 {cacheInfo ? formatBytes(cacheInfo.assetBytes + cacheInfo.derivedBytes) : '—'} · 原图与预览资源</div>
-          <div className="cache-notice">建议放在 SSD 或其他高速本地硬盘。避免使用 U 盘、移动硬盘、网络磁盘及云同步目录，以免影响导入和缩放性能。</div>
-          {cacheInfo?.warning && <div className="cache-warning">{cacheInfo.warning}</div>}
-          <div className="button-grid" style={{ marginTop: 9 }}>
-            <Button disabled={!api || cacheChanging} onClick={() => { void (async () => {
-              if (!api) return;
-              setCacheChanging(true);
-              try {
-                const result = await api.chooseCacheLocation();
-                if (!result.canceled && result.info) { setCacheInfo(result.info); setStatus('缓存已迁移到新位置'); }
-              } catch (error) { setStatus(`迁移缓存失败：${String(error)}`); }
-              finally { setCacheChanging(false); }
-            })(); }}>{cacheChanging ? '正在迁移…' : '更改位置…'}</Button>
-            <Button disabled={!api || cacheChanging || !cacheInfo || cacheInfo.isDefault} onClick={() => { void (async () => {
-              if (!api) return;
-              setCacheChanging(true);
-              try { setCacheInfo(await api.resetCacheLocation()); setStatus('缓存已恢复默认位置'); }
-              catch (error) { setStatus(`迁移缓存失败：${String(error)}`); }
-              finally { setCacheChanging(false); }
-            })(); }}>恢复默认位置</Button>
-            <Button disabled={!api} onClick={() => { void api?.openLogsFolder()
-              .then((result) => setStatus(`日志目录：${result.path}`))
-              .catch((error) => setStatus(`打开日志目录失败：${String(error)}`)); }}>打开日志文件夹</Button>
-            <Button disabled={!api} onClick={() => { void api?.copyDiagnostics()
-              .then((result) => setStatus(`诊断信息已复制 · 会话 ${result.sessionId.slice(0, 8)}`))
-              .catch((error) => setStatus(`复制诊断信息失败：${String(error)}`)); }}>复制诊断信息</Button>
-          </div>
-        </section>
-      </aside>}
+      <PropertiesPanel
+        open={propertiesOpen}
+        settingsShortcut={shortcuts.settings}
+        colorPickerShortcut={colorPickerShortcut}
+        shortcuts={shortcuts}
+        shortcutCaptureId={shortcutCaptureId}
+        drawingCollaborationMode={drawingCollaborationMode}
+        cacheInfo={cacheInfo}
+        cacheChanging={cacheChanging}
+        nativeAvailable={Boolean(api)}
+        onClose={() => setPropertiesOpen(false)}
+        onColorPickerShortcutChange={setPickerShortcut}
+        onBeginShortcutCapture={beginShortcutCapture}
+        onCaptureShortcut={captureShortcut}
+        onShortcutCaptureBlur={() => setShortcutCaptureId(undefined)}
+        onResetShortcuts={resetShortcuts}
+        onChooseCacheLocation={chooseCacheLocation}
+        onResetCacheLocation={resetCacheLocation}
+        onOpenLogsFolder={openLogsFolder}
+        onCopyDiagnostics={copyDiagnostics}
+      />
     </section>
 
     {comparisonVersion && <PhotoshopVersionComparePanel
@@ -1975,71 +1923,32 @@ export default function App() {
       onClose={closeVersionComparison}
     />}
 
-    {photoshopVersionsOpen && !comparisonVersionId && <aside className="photoshop-version-panel no-drag">
-      <header className="photoshop-version-header">
-        <div><strong>版本视图</strong><span className="outline-count">{photoshopMetadata.versions.length}</span></div>
-        <button title="关闭版本面板" aria-label="关闭版本面板" onClick={() => setPhotoshopVersionsOpen(false)}><UiIcon name="close" /></button>
-      </header>
-      <div className="photoshop-version-toolbar">
-        <div><strong>项目版本库</strong><small>{formatBytes(photoshopMetadata.versions.reduce((sum, version) => sum + version.byteLength, 0))}</small></div>
-        <button className="photoshop-version-save-button" disabled={photoshopDocumentBlocked}
-          onClick={() => { void openPhotoshopVersionSaveDialog(); }}><UiIcon name="plus" size={13} />保存版本</button>
-      </div>
-      <div className="photoshop-version-list">
-        {photoshopMetadata.versions.length === 0 && <div className="photoshop-version-empty"><strong>暂无 Photoshop 版本</strong><span>保存版本后，完整 PSD/PSB 会随 .yoi 画板一起保存。</span></div>}
-        {[...photoshopMetadata.versions].reverse().map((version) => <article className="photoshop-version-card" key={version.id}>
-          <div className="photoshop-version-preview" draggable
-            onDragStart={(event) => {
-              event.dataTransfer.effectAllowed = 'copy';
-              event.dataTransfer.setData(PHOTOSHOP_VERSION_PREVIEW_MIME, version.id);
-            }}
-            onDoubleClick={() => { void placePhotoshopVersionPreview(version); }}>
-            <img src={imageSource({ assetId: version.previewAssetId }, 'original')} alt="" draggable={false} /><span>{version.format.toUpperCase()}</span>
-          </div>
-          <div className="photoshop-version-info"><strong title={version.name}>{version.name}</strong><small title={version.documentName}>{version.documentName}</small>
-            <small>{version.width}×{version.height} · {version.colorMode} · {version.bitDepth} bit</small>
-            <small>{version.layerCount} 层 · {formatBytes(version.byteLength)} · {new Date(version.createdAt).toLocaleString()}</small>
-            {version.note && <p>{version.note}</p>}</div>
-          <div className="photoshop-version-actions">
-            <button disabled={photoshopDocumentBlocked} onClick={() => { void openPhotoshopVersion(version); }}>在 PS 打开</button>
-            <button onClick={() => { void placePhotoshopVersionPreview(version); }}>放入画板</button>
-            <button disabled={photoshopDocumentBlocked} onClick={() => openVersionComparison(version)}><UiIcon name="eye" size={13} />比较</button>
-            <button className="danger" disabled={photoshopDocumentBlocked} onClick={() => { void deletePhotoshopVersion(version); }}><UiIcon name="trash" size={13} />删除</button>
-          </div>
-        </article>)}
-      </div>
-    </aside>}
+    <PhotoshopVersionsPanel
+      open={photoshopVersionsOpen && !comparisonVersionId}
+      versions={photoshopMetadata.versions}
+      documentBlocked={photoshopDocumentBlocked}
+      onClose={() => setPhotoshopVersionsOpen(false)}
+      onSaveVersion={() => { void openPhotoshopVersionSaveDialog(); }}
+      onOpenVersion={(version) => { void openPhotoshopVersion(version); }}
+      onPlacePreview={(version) => { void placePhotoshopVersionPreview(version); }}
+      onCompare={openVersionComparison}
+      onDelete={(version) => { void deletePhotoshopVersion(version); }}
+    />
 
-    {outlineOpen && <aside className="outline-panel no-drag">
-      <header>
-        <div><strong>大纲</strong><span>{history.scene.items.length + history.scene.groups.length}</span></div>
-        <span className="outline-header-actions">
-          <button className="outline-expand-all" title="全部展开" aria-label="全部展开"
-            onClick={() => setOutlineCollapsedIds(new Set())}>
-            <UiIcon name="chevrons-down" />
-          </button>
-          <button className="outline-collapse-all" title="全部折叠" aria-label="全部折叠"
-            onClick={() => setOutlineCollapsedIds(new Set(history.scene.groups.map((group) => group.id)))}>
-            <UiIcon name="chevrons-up" />
-          </button>
-          <button className="outline-close" title="关闭大纲" aria-label="关闭大纲" onClick={() => setOutlineOpen(false)}>
-            <UiIcon name="close" />
-          </button>
-        </span>
-      </header>
-      <div className="outline-search">
-        <span><UiIcon name="search" /></span><input value={outlineQuery} onChange={(event) => setOutlineQuery(event.target.value)} placeholder="搜索名称或标签" />
-        {outlineQuery && <button title="清除搜索" onClick={() => setOutlineQuery('')}><UiIcon name="close" size={14} /></button>}
-      </div>
-      <div className="outline-tree"><ul>
-        {history.scene.groups.filter((group) => !group.parentId).map((group) => renderOutlineGroup(group))}
-        {history.scene.items.filter((item) => !groupedImageIds.has(item.id)).map(renderOutlineImage)}
-      </ul>
-      {hasOutlineFilter && !history.scene.groups.some((group) => groupMatchesOutline(group))
-        && !history.scene.items.some(imageMatchesOutline)
-        && <div className="outline-empty">没有匹配的对象</div>}
-      </div>
-    </aside>}
+    <OutlinePanel
+      open={outlineOpen}
+      scene={history.scene}
+      selectedIds={selectedIds}
+      selectedGroupId={selectedGroupId}
+      onClose={() => setOutlineOpen(false)}
+      onSelectImage={selectOutlineImage}
+      onFocusImage={focusOutlineImage}
+      onSelectGroup={selectOutlineGroup}
+      onFocusGroup={focusOutlineGroup}
+      onToggleImageVisibility={toggleOutlineImageVisibility}
+      onToggleImageLock={toggleOutlineImageLock}
+      onMoveImageLayer={moveOutlineImageLayer}
+    />
 
     <div className={`scene-name-badge no-drag${sceneNameVisible ? ' visible' : ''}`} title={displaySceneName}>{displaySceneName}{history.dirty ? '  •' : ''}</div>
 
@@ -2103,93 +2012,34 @@ export default function App() {
       </div>
     </div>}
 
-    {visualNotesEnabled && <div className="visual-notes-toolbar no-drag" role="toolbar" aria-label="视觉标注工具">
-      <div className="visual-note-tools">
-        {VISUAL_NOTE_TOOL_OPTIONS.map((option) => <button key={option.tool}
-          className={`visual-note-tool${visualNoteTool === option.tool ? ' active' : ''}`}
-          data-tooltip={`${option.label}　${option.shortcut}`} aria-label={`${option.label}，快捷键 ${option.shortcut}`}
-          onClick={() => setVisualNoteTool(option.tool)}><UiIcon name={option.icon} size={17} /></button>)}
-      </div>
-      <span className="visual-note-divider" />
-      <details className="visual-note-fold visual-note-width-fold">
-        <summary data-tooltip={visualNoteTool === 'eraser' ? '橡皮尺寸' : `${visualNoteWidth === 'thin' ? '细线' : visualNoteWidth === 'medium' ? '中线' : '粗线'}`}
-          aria-label={visualNoteTool === 'eraser' ? '选择橡皮尺寸' : '选择线宽'}>
-          <i style={{ width: '16px', height: visualNoteTool === 'eraser'
-            ? `${({ small: 2, medium: 4, large: 6 } as const)[eraserSize]}px`
-            : `${({ thin: 1, medium: 2.5, thick: 5 } as const)[visualNoteWidth]}px` }} />
-          <UiIcon className="visual-note-fold-caret" name="caret-down" size={11} />
-        </summary>
-        <div className="visual-note-fold-panel visual-note-width-list">
-          {visualNoteTool === 'eraser' ? (['small', 'medium', 'large'] as const).map((size, index) => <button key={size}
-            className={eraserSize === size ? 'active' : ''} onClick={(event) => {
-              setEraserSize(size); event.currentTarget.closest('details')?.removeAttribute('open');
-            }}><i style={{ width: `${[10, 16, 22][index]}px`, height: `${[2, 4, 6][index]}px` }} /><span>{['小', '中', '大'][index]}</span></button>)
-            : (['thin', 'medium', 'thick'] as const).map((width, index) => <button key={width}
-              className={visualNoteWidth === width ? 'active' : ''} onClick={(event) => {
-                setVisualNoteWidth(width); updateSelectedVisualMarkStyle({ width }); event.currentTarget.closest('details')?.removeAttribute('open');
-              }}><i style={{ height: `${[1, 2.5, 5][index]}px` }} /><span>{['细线', '中线', '粗线'][index]}</span></button>)}
-        </div>
-      </details>
-      {visualNoteTool !== 'eraser' && <>
-        <span className="visual-note-divider" />
-        <details className="visual-note-fold visual-note-color-fold">
-          <summary data-tooltip="标注颜色" aria-label="选择标注颜色">
-            <i className="visual-note-current-color" style={{ '--note-color': visualNoteColor } as React.CSSProperties} />
-            <UiIcon className="visual-note-fold-caret" name="caret-down" size={11} />
-          </summary>
-          <div className="visual-note-fold-panel visual-note-color-list">
-            {VISUAL_NOTE_COLOR_OPTIONS.map(([color, name]) => <button key={color} className={visualNoteColor === color ? 'active' : ''}
-              onClick={(event) => {
-                setVisualNoteColor(color); updateSelectedVisualMarkStyle({ color }); event.currentTarget.closest('details')?.removeAttribute('open');
-              }}><i style={{ '--note-color': color } as React.CSSProperties} /><span>{name}</span><UiIcon name="check" size={13} /></button>)}
-            <label className="visual-note-color-custom"><UiIcon name="palette" size={16} /><span>更多颜色</span>
-              <input type="color" value={visualNoteColor} onChange={(event) => {
-                setVisualNoteColor(event.target.value); updateSelectedVisualMarkStyle({ color: event.target.value });
-                event.currentTarget.closest('details')?.removeAttribute('open');
-              }} />
-            </label>
-          </div>
-        </details>
-        <span className="visual-note-divider" />
-        <details className="visual-note-fold visual-note-opacity-fold">
-          <summary data-tooltip={`不透明度　${Math.round(visualNoteOpacity * 100)}%`} aria-label={`不透明度 ${Math.round(visualNoteOpacity * 100)}%`}>
-            <UiIcon name="opacity" size={16} />
-          </summary>
-          <div className="visual-note-fold-panel visual-note-opacity-panel">
-            <div className="visual-note-opacity-heading"><span>不透明度</span><output>{Math.round(visualNoteOpacity * 100)}%</output></div>
-            <input aria-label="不透明度" type="range" min="20" max="100" step="5" value={Math.round(visualNoteOpacity * 100)}
-              style={{ '--opacity-progress': `${(visualNoteOpacity - 0.2) / 0.8 * 100}%` } as React.CSSProperties}
-              onPointerDown={() => { if (selectedVisualMarkId) history.beginTransaction(); }}
-              onChange={(event) => {
-                const opacity = Number(event.target.value) / 100; setVisualNoteOpacity(opacity);
-                if (selectedVisualMarkId) history.preview((scene) => {
-                  const mark = scene.visualNotes.marks.find((value) => value.id === selectedVisualMarkId);
-                  if (mark) mark.style.opacity = opacity;
-                });
-              }}
-              onPointerUp={() => { if (selectedVisualMarkId) history.commitTransaction(); }}
-              onPointerCancel={() => { if (selectedVisualMarkId) history.commitTransaction(); }} />
-            <div className="visual-note-opacity-scale"><span>20</span><span>100</span></div>
-          </div>
-        </details>
-      </>}
-      <span className="visual-note-divider" />
-      <div className="visual-note-auxiliary">
-        {visualNoteTool !== 'eraser' && <button className={visualNotePressure ? 'active compact' : 'compact'} data-tooltip="笔迹平滑" aria-label="笔迹平滑"
-          onClick={() => setVisualNotePressure((value) => !value)}><UiIcon name="smooth" /></button>}
-        {selectedVisualMarkId && <button className="compact" data-tooltip="删除选中标注　Delete" aria-label="删除选中标注"
-          onClick={deleteSelectedVisualMark}><UiIcon name="trash" /></button>}
-      </div>
-      <span className="visual-note-divider" />
-      <button className={history.scene.visualNotes.visible ? 'compact' : 'compact active'}
-        data-tooltip={`${history.scene.visualNotes.visible ? '隐藏' : '显示'}标注　H（按住临时隐藏）`}
-        aria-label={history.scene.visualNotes.visible ? '隐藏标注' : '显示标注'}
-        onClick={() => history.commit((scene) => { scene.visualNotes.visible = !scene.visualNotes.visible; })}>
-        <UiIcon name={history.scene.visualNotes.visible ? 'eye' : 'eye-off'} />
-      </button>
-      <button className="compact visual-note-exit" data-tooltip="退出标注模式　Esc" aria-label="退出标注模式"
-        onClick={() => setVisualNotesEnabled(false)}><UiIcon name="close" /></button>
-    </div>}
+    <VisualNotesToolbar
+      enabled={visualNotesEnabled}
+      tool={visualNoteTool}
+      color={visualNoteColor}
+      opacity={visualNoteOpacity}
+      width={visualNoteWidth}
+      pressureEnabled={visualNotePressure}
+      eraserSize={eraserSize}
+      selectedMarkId={selectedVisualMarkId}
+      notesVisible={history.scene.visualNotes.visible}
+      onToolChange={setVisualNoteTool}
+      onEraserSizeChange={setEraserSize}
+      onWidthChange={(width) => { setVisualNoteWidth(width); updateSelectedVisualMarkStyle({ width }); }}
+      onColorChange={(color) => { setVisualNoteColor(color); updateSelectedVisualMarkStyle({ color }); }}
+      onOpacityInteractionStart={() => { if (selectedVisualMarkId) history.beginTransaction(); }}
+      onOpacityChange={(opacity) => {
+        setVisualNoteOpacity(opacity);
+        if (selectedVisualMarkId) history.preview((scene) => {
+          const mark = scene.visualNotes.marks.find((value) => value.id === selectedVisualMarkId);
+          if (mark) mark.style.opacity = opacity;
+        });
+      }}
+      onOpacityInteractionEnd={() => { if (selectedVisualMarkId) history.commitTransaction(); }}
+      onPressureToggle={() => setVisualNotePressure((value) => !value)}
+      onDeleteSelected={deleteSelectedVisualMark}
+      onToggleNotesVisible={() => history.commit((scene) => { scene.visualNotes.visible = !scene.visualNotes.visible; })}
+      onExit={() => setVisualNotesEnabled(false)}
+    />
 
     {!hasContent && <div className="empty-state no-drag">
       <img className="empty-brand-icon" src="./yoiniwa-icon.png" alt="宵庭 Logo" draggable={false} />

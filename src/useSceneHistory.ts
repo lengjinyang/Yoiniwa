@@ -56,7 +56,6 @@ export function useSceneHistory() {
         advanceRevision();
       }
     });
-    setDirty(true);
   }, [advanceRevision]);
 
   const flushViewport = useCallback((viewport: Scene['viewport']) => {
@@ -70,7 +69,6 @@ export function useSceneHistory() {
     const next = { ...current, viewport: { ...viewport } };
     sceneRef.current = next;
     setScene(next);
-    setDirty(true);
     return { scene: next, revision: advanceRevision() };
   }, [advanceRevision]);
 
