@@ -1,6 +1,10 @@
-import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import type { CacheInfo } from '../../types';
-import { SHORTCUT_LABELS, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
+import { SHORTCUT_LABELS, shortcutDisplayName, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
 import { Button, formatBytes } from './CommonControls';
 import { UiIcon } from './UiIcon';
 
@@ -16,6 +20,8 @@ interface PropertiesPanelProps {
   onClose(): void;
   onBeginShortcutCapture(id: ShortcutId, label: string): void;
   onCaptureShortcut(id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>): void;
+  onCapturePanShortcutKeyUp(id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>): void;
+  onCapturePanShortcutMouse(id: ShortcutId, event: ReactMouseEvent<HTMLButtonElement>): void;
   onShortcutCaptureBlur(): void;
   onResetShortcuts(): void;
   onChooseCacheLocation(): void;
@@ -28,7 +34,8 @@ interface PropertiesPanelProps {
 export function PropertiesPanel({
   open, settingsShortcut, shortcuts, shortcutCaptureId, drawingCollaborationMode,
   cacheInfo, cacheChanging, nativeAvailable, onClose, onBeginShortcutCapture,
-  onCaptureShortcut, onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
+  onCaptureShortcut, onCapturePanShortcutKeyUp, onCapturePanShortcutMouse,
+  onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
   onClearCache, onOpenLogsFolder, onCopyDiagnostics,
 }: PropertiesPanelProps) {
   const [confirmingCacheClear, setConfirmingCacheClear] = useState(false);
@@ -47,9 +54,15 @@ export function PropertiesPanel({
           return <div className="shortcut-row" key={id}>
             <span>{label}</span>
             <button className={capturing ? 'active shortcut-capture' : 'shortcut-capture'}
-              title={disabled ? '请先退出协作模式' : '点击后按下快捷键'} disabled={disabled}
+              title={disabled ? '请先退出协作模式' : id === 'panCanvas' ? '点击后按下快捷键或鼠标中键' : '点击后按下快捷键'}
+              disabled={disabled}
               onClick={() => onBeginShortcutCapture(id, label)} onKeyDown={(event) => onCaptureShortcut(id, event)}
-              onBlur={() => { if (capturing) onShortcutCaptureBlur(); }}>{capturing ? '请按键…' : shortcuts[id]}</button>
+              onKeyUp={(event) => onCapturePanShortcutKeyUp(id, event)}
+              onMouseDown={(event) => onCapturePanShortcutMouse(id, event)}
+              onAuxClick={(event) => { if (capturing && id === 'panCanvas') event.preventDefault(); }}
+              onBlur={() => { if (capturing) onShortcutCaptureBlur(); }}>
+              {capturing ? '请按键…' : shortcutDisplayName(shortcuts[id])}
+            </button>
           </div>;
         })}
       </div>

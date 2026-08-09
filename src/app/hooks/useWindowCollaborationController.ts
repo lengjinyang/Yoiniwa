@@ -24,17 +24,24 @@ export function useWindowCollaborationController({
   setStatus,
 }: UseWindowCollaborationControllerOptions) {
   const [mode, setModeState] = useState(initialWindowState);
-  const [drawingCollaborationMode, setDrawingCollaborationMode] = useState(false);
+  const modeRef = useRef(mode);
+  const drawingCollaborationMode = mode.collaborationMode;
   const drawingModeSnapshotRef = useRef<{ locked: boolean; alwaysOnTop: boolean } | undefined>(undefined);
+  const transitioningRef = useRef(false);
+
+  const updateModeState = useCallback((next: WindowState) => {
+    modeRef.current = next;
+    setModeState(next);
+  }, []);
 
   const setMode = useCallback(async (patch: Partial<WindowState>, force = false) => {
     if (!api) return undefined;
-    const protectedPatch = !force && drawingCollaborationMode
+    const protectedPatch = !force && modeRef.current.collaborationMode
       && ('locked' in patch || 'alwaysOnTop' in patch || 'collaborationMode' in patch)
       ? { ...patch, locked: true, alwaysOnTop: true, collaborationMode: true }
       : patch;
     const next = await api.setWindowMode(protectedPatch);
-    setModeState(next);
+    updateModeState(next);
     if (next.locked) {
       onLockedRef.current();
       setStatus(shouldAutoPhotoshopRoundTrip(next)
@@ -44,49 +51,65 @@ export function useWindowCollaborationController({
       setStatus('画板已解锁');
     }
     return next;
-  }, [api, drawingCollaborationMode, onLockedRef, setStatus]);
+  }, [api, onLockedRef, setStatus, updateModeState]);
 
   const toggleDrawingCollaborationMode = useCallback(async () => {
-    if (!api) return;
-    if (drawingCollaborationMode) {
+    if (!api || transitioningRef.current) return;
+    transitioningRef.current = true;
+    const wasDrawingCollaborationMode = modeRef.current.collaborationMode;
+    if (wasDrawingCollaborationMode) {
       const snapshot = drawingModeSnapshotRef.current;
       drawingModeSnapshotRef.current = undefined;
       try {
-        const next = await setMode({
+        let next = await setMode({
           ...(snapshot ?? { locked: false, alwaysOnTop: false }),
           collaborationMode: false,
         }, true);
+        if (next?.collaborationMode) {
+          next = await api.getWindowMode();
+          updateModeState(next);
+        }
         if (next?.collaborationMode) throw new Error('窗口层级仍在恢复中');
-        setDrawingCollaborationMode(false);
         setStatus('已退出协作模式，窗口状态已恢复');
       } catch (error) {
         drawingModeSnapshotRef.current = snapshot;
-        setStatus(`退出协作模式失败：${String(error)}`);
+        setStatus(`退出协作模式失败：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        transitioningRef.current = false;
       }
       return;
     }
-    const snapshot = { locked: mode.locked, alwaysOnTop: mode.alwaysOnTop };
+    const snapshot = { locked: modeRef.current.locked, alwaysOnTop: modeRef.current.alwaysOnTop };
     try {
-      const next = await setMode({ locked: true, alwaysOnTop: true, collaborationMode: true }, true);
+      let next = await setMode({ locked: true, alwaysOnTop: true, collaborationMode: true }, true);
+      if (!next?.collaborationMode) {
+        next = await api.getWindowMode();
+        updateModeState(next);
+      }
       if (!next?.collaborationMode) throw new Error('未能确认任务栏后方的稳定协作窗口层级');
       drawingModeSnapshotRef.current = snapshot;
-      setDrawingCollaborationMode(true);
       setStatus(`协作模式已启用 · Space + 主按钮拖动可平移画布 · ${collaborationShortcut} 退出`);
     } catch (error) {
       drawingModeSnapshotRef.current = undefined;
-      setStatus(`启用协作模式失败：${String(error)}`);
+      setStatus(`启用协作模式失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      transitioningRef.current = false;
     }
-  }, [api, collaborationShortcut, drawingCollaborationMode, mode.alwaysOnTop, mode.locked, setMode, setStatus]);
+  }, [api, collaborationShortcut, setMode, setStatus, updateModeState]);
 
   useEffect(() => {
     if (!api) return undefined;
-    void api.getWindowMode().then(setModeState)
+    void api.getWindowMode().then(updateModeState)
       .catch((error) => setStatus(`读取窗口状态失败：${String(error)}`));
     return api.onClickThroughDisabled(() => {
-      setModeState((value) => ({ ...value, clickThrough: false }));
+      setModeState((value) => {
+        const next = { ...value, clickThrough: false };
+        modeRef.current = next;
+        return next;
+      });
       setStatus('鼠标穿透已通过全局快捷键关闭');
     });
-  }, [api, setStatus]);
+  }, [api, setStatus, updateModeState]);
 
   useEffect(() => {
     if (!api) return undefined;

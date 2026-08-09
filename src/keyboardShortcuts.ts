@@ -1,4 +1,5 @@
 export const SHORTCUT_PREFERENCES_STORAGE_KEY = 'refcanvas.shortcuts';
+export const PAN_MOUSE_MIDDLE_SHORTCUT = 'MouseMiddle';
 
 const SHORTCUT_IDS = [
   'settings',
@@ -10,6 +11,7 @@ const SHORTCUT_IDS = [
   'newScene',
   'fitCanvas',
   'resetZoom',
+  'panCanvas',
   'alwaysOnTop',
   'lockWindow',
   'clickThrough',
@@ -29,6 +31,7 @@ export const DEFAULT_SHORTCUTS: ShortcutPreferences = {
   newScene: 'Ctrl+K',
   fitCanvas: 'Ctrl+Space',
   resetZoom: 'Ctrl+0',
+  panCanvas: 'Alt',
   alwaysOnTop: 'Ctrl+Shift+A',
   lockWindow: 'Ctrl+W',
   clickThrough: 'Ctrl+T',
@@ -45,6 +48,7 @@ export const SHORTCUT_LABELS: ReadonlyArray<{ id: ShortcutId; label: string }> =
   { id: 'newScene', label: '新建画板' },
   { id: 'fitCanvas', label: '显示整个画板' },
   { id: 'resetZoom', label: '重置缩放' },
+  { id: 'panCanvas', label: '拖动画布' },
   { id: 'alwaysOnTop', label: '始终置顶' },
   { id: 'lockWindow', label: '锁定窗口位置' },
   { id: 'clickThrough', label: '鼠标穿透' },
@@ -121,9 +125,69 @@ export function shortcutMatchesEvent(shortcut: string, event: Pick<KeyboardEvent
   return shortcutFromKeyboardEvent(event) === shortcut;
 }
 
+function modifierFromEventKey(key: string) {
+  if (key === 'Control') return 'Ctrl';
+  if (key === 'Alt' || key === 'Shift') return key;
+  return undefined;
+}
+
+export function panShortcutFromKeyboardEvent(event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>) {
+  if (modifierFromEventKey(event.key)) return undefined;
+  return shortcutFromKeyboardEvent(event);
+}
+
+export function panModifierShortcutFromKeyboardEvent(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>,
+) {
+  const modifier = modifierFromEventKey(event.key);
+  if (!modifier) return undefined;
+  return [
+    event.ctrlKey || event.metaKey || modifier === 'Ctrl' ? 'Ctrl' : undefined,
+    event.altKey || modifier === 'Alt' ? 'Alt' : undefined,
+    event.shiftKey || modifier === 'Shift' ? 'Shift' : undefined,
+  ].filter((value): value is string => Boolean(value)).join('+');
+}
+
+export function panShortcutMatchesKeyboardEvent(
+  shortcut: string,
+  event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>,
+) {
+  const modifier = modifierFromEventKey(event.key);
+  const parts = shortcut.split('+');
+  const modifierOnly = parts.every((part) => ['Ctrl', 'Alt', 'Shift'].includes(part));
+  if (modifier && modifierOnly) {
+    return (event.ctrlKey || event.metaKey) === parts.includes('Ctrl')
+      && event.altKey === parts.includes('Alt')
+      && event.shiftKey === parts.includes('Shift');
+  }
+  return shortcutMatchesEvent(shortcut, event);
+}
+
+export function panShortcutReleasedByKeyboardEvent(shortcut: string, event: Pick<KeyboardEvent, 'key' | 'code'>) {
+  const released = modifierFromEventKey(event.key) ?? keyFromEvent(event);
+  return Boolean(released && shortcut.split('+').includes(released));
+}
+
+export function panShortcutMatchesPointerEvent(
+  shortcut: string,
+  event: Pick<PointerEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>,
+  shortcutHeld: boolean,
+) {
+  const parts = shortcut.split('+');
+  const modifierOnly = parts.every((part) => ['Ctrl', 'Alt', 'Shift'].includes(part));
+  return (event.ctrlKey || event.metaKey) === parts.includes('Ctrl')
+    && event.altKey === parts.includes('Alt')
+    && event.shiftKey === parts.includes('Shift')
+    && (modifierOnly || shortcutHeld);
+}
+
+export function shortcutDisplayName(shortcut: string) {
+  return shortcut === PAN_MOUSE_MIDDLE_SHORTCUT ? '鼠标中键' : shortcut;
+}
+
 export function shortcutConflict(preferences: ShortcutPreferences, changedId: ShortcutId, shortcut: string) {
   const reserved = RESERVED_SHORTCUTS.get(shortcut);
-  if (reserved) return `已用于${reserved}`;
+  if (reserved && !(changedId === 'panCanvas' && shortcut === 'Space')) return `已用于${reserved}`;
   const matching = SHORTCUT_IDS.find((id) => id !== changedId && preferences[id] === shortcut);
   if (!matching) return undefined;
   return `已用于${SHORTCUT_LABELS.find((item) => item.id === matching)?.label ?? '其他操作'}`;
@@ -139,13 +203,24 @@ function isValidShortcut(shortcut: string) {
   return /^[A-Z0-9]$|^F(?:[1-9]|1\d|2[0-4])$|^(?:Tab|Space|Delete|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight)$|^(?:-|=)$/.test(key);
 }
 
+function isValidPanShortcut(shortcut: string) {
+  if (shortcut === PAN_MOUSE_MIDDLE_SHORTCUT || isValidShortcut(shortcut)) return true;
+  const parts = shortcut.split('+');
+  return parts.length > 0
+    && new Set(parts).size === parts.length
+    && parts.every((part) => ['Ctrl', 'Alt', 'Shift'].includes(part));
+}
+
 export function loadShortcutPreferences(raw: string | null): ShortcutPreferences {
   if (!raw) return { ...DEFAULT_SHORTCUTS };
   try {
     const parsed = JSON.parse(raw) as Partial<Record<ShortcutId, unknown>>;
     const values = { ...DEFAULT_SHORTCUTS };
     for (const id of SHORTCUT_IDS) {
-      if (typeof parsed[id] === 'string' && isValidShortcut(parsed[id])) values[id] = parsed[id];
+      if (typeof parsed[id] === 'string'
+        && (isValidShortcut(parsed[id]) || (id === 'panCanvas' && isValidPanShortcut(parsed[id])))) {
+        values[id] = parsed[id];
+      }
     }
     return values;
   } catch {

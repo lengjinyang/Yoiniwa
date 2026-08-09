@@ -85,6 +85,7 @@ let nativeKeyRequestId = 0;
 const pendingNativeKeyQueries = new Map<string, { resolve(value: boolean): void; timer: NodeJS.Timeout }>();
 let nativeLayerRequestId = 0;
 let nativeLayerTransition = Promise.resolve();
+let windowModeTransition = Promise.resolve<unknown>(undefined);
 let nativeLayerRepairTimer;
 const pendingNativeLayerRequests = new Map<string, {
   enabled: boolean;
@@ -109,6 +110,12 @@ const imageWorkerAssets = new WorkerAssetRegistrations();
 const imageWorkerGeneration = new WorkerGeneration();
 const assetRegistry = new Map();
 const archiveDirectoryCache = new Map();
+
+function enqueueWindowModeTransition<T>(operation: () => Promise<T>): Promise<T> {
+  const next = windowModeTransition.then(operation);
+  windowModeTransition = next.then(() => undefined, () => undefined);
+  return next;
+}
 const prewarmRequests = new Map();
 const imagePerformanceStats = {
   metadataCount: 0,
@@ -2877,7 +2884,7 @@ handleIpc('photoshop:delete-version', async (_event, sessionId, scene: Scene, ra
   }
 });
 
-handleIpc('window:set-mode', async (_event, patch) => {
+handleIpc('window:set-mode', (_event, patch) => enqueueWindowModeTransition(async () => {
   const previousState = windowState;
   const wasFocusless = process.platform === 'win32' && shouldUseFocuslessPhotoshopPicker(windowState);
   const wasCollaborationMode = windowState.collaborationMode;
@@ -2967,7 +2974,7 @@ handleIpc('window:set-mode', async (_event, patch) => {
     });
   }
   return windowState;
-});
+}));
 handleIpc('window:get-mode', () => windowState);
 handleIpc('window:get-work-area', (_event, point) => {
   const contentBounds = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getContentBounds() : undefined;

@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import type { ColorPickerShortcut } from '../../interactions';
 import {
   DEFAULT_SHORTCUTS,
   loadShortcutPreferences,
+  PAN_MOUSE_MIDDLE_SHORTCUT,
+  panModifierShortcutFromKeyboardEvent,
+  panShortcutFromKeyboardEvent,
   SHORTCUT_LABELS,
   shortcutConflict,
   shortcutFromKeyboardEvent,
@@ -54,12 +63,35 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
       .catch((error) => setStatus(`读取缓存状态失败：${String(error)}`));
   }, [api, setStatus]);
 
+  const commitPanCanvasShortcut = useCallback((next: string) => {
+    if (next === 'Alt' && colorPickerShortcut === 'alt') {
+      setStatus('Alt 当前用于取色，请为拖动画布设置其他快捷键');
+      return;
+    }
+    const conflict = shortcutConflict(shortcuts, 'panCanvas', next);
+    if (conflict) { setStatus(`快捷键 ${next} ${conflict}`); return; }
+    setShortcuts((current) => ({ ...current, panCanvas: next }));
+    setShortcutCaptureId(undefined);
+    setStatus(`拖动画布快捷键已设为 ${next === PAN_MOUSE_MIDDLE_SHORTCUT ? '鼠标中键' : next}`);
+  }, [colorPickerShortcut, setStatus, shortcuts]);
+
   const captureShortcut = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
     if (event.key === 'Escape') {
       setShortcutCaptureId(undefined);
       setStatus('已取消快捷键设置');
+      return;
+    }
+    if (id === 'panCanvas') {
+      const modifier = panModifierShortcutFromKeyboardEvent(event.nativeEvent);
+      if (modifier) {
+        setStatus(`继续按下其他按键可设置组合键，松开将使用 ${modifier}`);
+        return;
+      }
+      const next = panShortcutFromKeyboardEvent(event.nativeEvent);
+      if (!next) { setStatus('请按下一个有效的快捷键组合'); return; }
+      commitPanCanvasShortcut(next);
       return;
     }
     const next = shortcutFromKeyboardEvent(event.nativeEvent);
@@ -92,7 +124,23 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     setShortcuts((current) => ({ ...current, [id]: next }));
     setShortcutCaptureId(undefined);
     setStatus(`${SHORTCUT_LABELS.find((item) => item.id === id)?.label ?? '操作'}快捷键已设为 ${next}`);
-  }, [api, drawingCollaborationModeRef, setStatus, shortcuts]);
+  }, [api, commitPanCanvasShortcut, drawingCollaborationModeRef, setStatus, shortcuts]);
+
+  const capturePanShortcutKeyUp = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (id !== 'panCanvas' || shortcutCaptureId !== id) return;
+    const modifier = panModifierShortcutFromKeyboardEvent(event.nativeEvent);
+    if (!modifier) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitPanCanvasShortcut(modifier);
+  }, [commitPanCanvasShortcut, shortcutCaptureId]);
+
+  const capturePanShortcutMouse = useCallback((id: ShortcutId, event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (id !== 'panCanvas' || shortcutCaptureId !== id || event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitPanCanvasShortcut(PAN_MOUSE_MIDDLE_SHORTCUT);
+  }, [commitPanCanvasShortcut, shortcutCaptureId]);
 
   const resetShortcuts = useCallback(() => {
     if (drawingCollaborationModeRef.current) { setStatus('请先退出协作模式，再恢复快捷键'); return; }
@@ -174,6 +222,8 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     shortcutCaptureId,
     setShortcutCaptureId,
     captureShortcut,
+    capturePanShortcutKeyUp,
+    capturePanShortcutMouse,
     resetShortcuts,
     beginShortcutCapture,
     chooseCacheLocation,

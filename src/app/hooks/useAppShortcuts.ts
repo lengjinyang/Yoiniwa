@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { matchesColorPickerShortcut, type ColorPickerShortcut } from '../../interactions';
-import { shortcutMatchesEvent, type ShortcutPreferences } from '../../keyboardShortcuts';
+import { panShortcutMatchesKeyboardEvent, shortcutMatchesEvent, type ShortcutPreferences } from '../../keyboardShortcuts';
 
 export type AppShortcutCommandId =
   | 'colorPicker.press' | 'colorPicker.release' | 'settings.toggle'
@@ -80,6 +80,10 @@ export function dispatchAppShortcutKeyDown(state: AppShortcutState, event: Keybo
   if (matchesColorPickerShortcut(state.activeColorPickerShortcut, event)) {
     event.preventDefault();
     if (!event.repeat) executeCommand(state.commands, 'colorPicker.press');
+    return;
+  }
+  if (!state.collaborationSpaceActive && panShortcutMatchesKeyboardEvent(state.shortcuts.panCanvas, event)) {
+    event.preventDefault();
     return;
   }
 

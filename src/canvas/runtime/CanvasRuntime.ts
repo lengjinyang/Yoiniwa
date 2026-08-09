@@ -20,6 +20,11 @@ import { groupHeaderScreenWidth, groupHeaderWorldY } from '../groups/GroupPresen
 import { VisualNotesController, type VisualNotesToolState } from '../interaction/VisualNotesController';
 import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../interactions';
 import { resolveImageChanges } from '../../domain/sceneCommands';
+import {
+  panShortcutMatchesKeyboardEvent,
+  panShortcutMatchesPointerEvent,
+  panShortcutReleasedByKeyboardEvent,
+} from '../../keyboardShortcuts';
 
 export interface CanvasRuntimeOptions {
   background: string;
@@ -43,6 +48,7 @@ export interface CanvasRuntimeOptions {
   onExternalImageDrag?(items: ImageItem[]): (() => void) | undefined;
   colorPickerHeld?: boolean;
   colorPickerShortcut?: ColorPickerShortcut;
+  panCanvasShortcut?: string;
   drawingCollaborationMode?: boolean;
   onColorPicked?(color: PickedColor): void;
   windowLocked?: boolean;
@@ -66,6 +72,8 @@ export class CanvasRuntime {
   private cameraChangedAt = 0;
   private colorPickerHeld = false;
   private colorPickerShortcut: ColorPickerShortcut = 'alt';
+  private panCanvasShortcut = 'Alt';
+  private panCanvasShortcutHeld = false;
   private altPointerArmed = false;
   private windowLocked = false;
   private drawingCollaborationMode = false;
@@ -86,6 +94,7 @@ export class CanvasRuntime {
     this.camera = new Camera(options.viewport);
     this.colorPickerHeld = Boolean(options.colorPickerHeld);
     this.colorPickerShortcut = options.colorPickerShortcut ?? 'alt';
+    this.panCanvasShortcut = options.panCanvasShortcut ?? 'Alt';
     this.windowLocked = Boolean(options.windowLocked);
     this.drawingCollaborationMode = Boolean(options.drawingCollaborationMode);
     this.visualNotesState = options.visualNotesState ?? { enabled: false, tool: 'brush', color: '#c6a15b', opacity: 0.82, width: 'medium', pressureEnabled: true, eraserSize: 'medium', selectedMarkId: undefined };
@@ -120,17 +129,31 @@ export class CanvasRuntime {
       this.altPointerArmed = event.type === 'keydown';
       if (event.type === 'keyup') hideAltHover();
     };
+    const updatePanShortcutFromKeyboard = (event: KeyboardEvent) => {
+      if (event.type === 'keydown' && panShortcutMatchesKeyboardEvent(this.panCanvasShortcut, event)) {
+        this.panCanvasShortcutHeld = true;
+      } else if (event.type === 'keyup' && panShortcutReleasedByKeyboardEvent(this.panCanvasShortcut, event)) {
+        this.panCanvasShortcutHeld = false;
+      }
+    };
+    const resetPanShortcut = () => { this.panCanvasShortcutHeld = false; };
     this.container.addEventListener('pointerenter', armAltFromPointer, true);
     this.container.addEventListener('pointermove', armAltFromPointer, true);
     this.container.addEventListener('pointerleave', hideAltHover, true);
     window.addEventListener('keydown', updateAltFromKeyboard, true);
     window.addEventListener('keyup', updateAltFromKeyboard, true);
+    window.addEventListener('keydown', updatePanShortcutFromKeyboard, true);
+    window.addEventListener('keyup', updatePanShortcutFromKeyboard, true);
+    window.addEventListener('blur', resetPanShortcut);
     this.lifecycle.add(() => {
       this.container.removeEventListener('pointerenter', armAltFromPointer, true);
       this.container.removeEventListener('pointermove', armAltFromPointer, true);
       this.container.removeEventListener('pointerleave', hideAltHover, true);
       window.removeEventListener('keydown', updateAltFromKeyboard, true);
       window.removeEventListener('keyup', updateAltFromKeyboard, true);
+      window.removeEventListener('keydown', updatePanShortcutFromKeyboard, true);
+      window.removeEventListener('keyup', updatePanShortcutFromKeyboard, true);
+      window.removeEventListener('blur', resetPanShortcut);
     });
     const input = new InputRouter(this.container, this.lifecycle);
     const cameraController = new CameraController(this.container, input, this.camera, this.lifecycle, (committed) => {
@@ -141,8 +164,8 @@ export class CanvasRuntime {
       this.selectionController?.refresh();
       if (committed) this.options.onViewportCommit?.(this.camera.snapshot());
     }, (event) => this.isColorPickerPointer(event), (event) => {
-      if (!this.drawingCollaborationMode || event.altKey
-        || (event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.isPrimary === false) return undefined;
+      if (!this.drawingCollaborationMode) return this.isNormalPanPointer(event) ? true : undefined;
+      if (event.altKey || (event.pointerType !== 'mouse' && event.pointerType !== 'pen') || event.isPrimary === false) return undefined;
       if ((event as PointerEvent & { spaceKey?: boolean }).spaceKey) return true;
       return window.refCanvas?.isKeyDown('Space').catch(() => false) ?? false;
     });
@@ -195,6 +218,7 @@ export class CanvasRuntime {
       hitHandle: (point) => this.renderer.hitSelectionHandle(point),
       hitGroupHandle: (point) => this.renderer.hitGroupResizeHandle(point),
       interactionBlocked: (event) => this.colorPickerHeld || this.visualNotesState.enabled || this.windowLocked
+        || Boolean(event && this.isNormalPanPointer(event))
         || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0))
         || (this.drawingCollaborationMode && Boolean((event as (PointerEvent & { spaceKey?: boolean }) | undefined)?.spaceKey && event?.button === 0)),
       documentInteractionBlocked: () => this.drawingCollaborationMode || this.windowLocked,
@@ -365,6 +389,10 @@ export class CanvasRuntime {
     if (!held && !this.colorPickerSampling) this.showColorPickerHover();
   }
   setColorPickerShortcut(shortcut: ColorPickerShortcut) { this.colorPickerShortcut = shortcut; }
+  setPanCanvasShortcut(shortcut: string) {
+    this.panCanvasShortcut = shortcut;
+    this.panCanvasShortcutHeld = false;
+  }
   setVisualNotesState(state: VisualNotesToolState) {
     this.visualNotesState = state; this.renderer.setSelectedVisualNote(state.enabled ? state.selectedMarkId : undefined);
     if (!state.enabled) this.visualNotesController?.cancel();
@@ -418,6 +446,13 @@ export class CanvasRuntime {
       this.altPointerArmed = false;
     }
     return enabled;
+  }
+
+  private isNormalPanPointer(event: PointerEvent) {
+    const primaryButton = event.button === 0
+      || (event.pointerType === 'pen' && event.button === -1 && (event.buttons & 1) !== 0);
+    if (this.drawingCollaborationMode || this.windowLocked || !primaryButton || this.isColorPickerPointer(event)) return false;
+    return panShortcutMatchesPointerEvent(this.panCanvasShortcut, event, this.panCanvasShortcutHeld);
   }
 
   private createColorPickerHud() {

@@ -5,7 +5,7 @@ import type { InputRouter } from '../interaction/InputRouter';
 
 export class CameraController {
   private pointerId?: number;
-  private panMode?: 'middle' | 'alt' | 'space' | 'pending-space';
+  private panMode?: 'middle' | 'primary' | 'pending-primary';
   private last = { x: 0, y: 0 };
   private wheelCommitTimer?: ReturnType<typeof setTimeout>;
 
@@ -16,38 +16,36 @@ export class CameraController {
     private readonly lifecycle: RuntimeLifecycle,
     private readonly changed: (committed: boolean) => void,
     private readonly interactionBlocked: (event: PointerEvent) => boolean = () => false,
-    private readonly spacePanEnabled: (event: PointerEvent) => Promise<boolean> | boolean | undefined = () => undefined,
+    private readonly primaryPanEnabled: (event: PointerEvent) => Promise<boolean> | boolean | undefined = () => undefined,
   ) {}
 
   start() {
     const down = (event: PointerEvent) => {
       const primaryButton = event.button === 0
         || (event.pointerType === 'pen' && event.button === -1 && (event.buttons & 1) !== 0);
-      const spaceQuery = primaryButton && !event.altKey ? this.spacePanEnabled(event) : undefined;
-      if (spaceQuery !== undefined) {
+      const primaryPanQuery = primaryButton && !this.interactionBlocked(event) ? this.primaryPanEnabled(event) : undefined;
+      if (primaryPanQuery !== undefined) {
         event.preventDefault();
         this.pointerId = event.pointerId;
-        this.panMode = 'pending-space';
+        this.panMode = 'pending-primary';
         this.last = { x: event.clientX, y: event.clientY };
         try { this.element.setPointerCapture(event.pointerId); } catch { /* Synthetic benchmark events have no native capture target. */ }
-        void Promise.resolve(spaceQuery).then((enabled) => {
-          if (this.pointerId !== event.pointerId || this.panMode !== 'pending-space') return;
-          if (enabled) this.panMode = 'space';
+        void Promise.resolve(primaryPanQuery).then((enabled) => {
+          if (this.pointerId !== event.pointerId || this.panMode !== 'pending-primary') return;
+          if (enabled) this.panMode = 'primary';
           else this.release(event.pointerId, false);
         });
         return;
       }
-      const altPan = event.button === 0 && event.altKey;
-      if (event.button !== 1 && !altPan) return;
-      if (event.button === 0 && this.interactionBlocked(event)) return;
-      this.panMode = event.button === 1 ? 'middle' : 'alt';
+      if (event.button !== 1) return;
+      this.panMode = 'middle';
       this.pointerId = event.pointerId;
       this.last = { x: event.clientX, y: event.clientY };
       try { this.element.setPointerCapture(event.pointerId); } catch { /* Synthetic benchmark events have no native capture target. */ }
     };
     const move = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
-      if (this.panMode === 'pending-space') {
+      if (this.panMode === 'pending-primary') {
         this.last = { x: event.clientX, y: event.clientY };
         return;
       }
@@ -57,11 +55,11 @@ export class CameraController {
     };
     const up = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
-      this.release(event.pointerId, this.panMode !== 'pending-space');
+      this.release(event.pointerId, this.panMode !== 'pending-primary');
     };
     const cancel = (event: PointerEvent) => {
       if (event.pointerId !== this.pointerId) return;
-      this.release(event.pointerId, this.panMode !== 'pending-space');
+      this.release(event.pointerId, this.panMode !== 'pending-primary');
     };
     const wheel = (event: WheelEvent) => {
       event.preventDefault();

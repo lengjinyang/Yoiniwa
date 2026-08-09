@@ -108,6 +108,7 @@ export function AppWorkspace({
       }}
       windowInteraction={{
         drawingCollaborationMode: windowController.drawingCollaborationMode,
+        panCanvasShortcut: preferences.shortcuts.panCanvas,
         onContextMenu: (position) => {
           panels.setPropertiesOpen(false);
           workspace.setGroupActionMenu(undefined);
@@ -138,6 +139,8 @@ export function AppWorkspace({
       onClose={() => panels.setPropertiesOpen(false)}
       onBeginShortcutCapture={preferences.beginShortcutCapture}
       onCaptureShortcut={preferences.captureShortcut}
+      onCapturePanShortcutKeyUp={preferences.capturePanShortcutKeyUp}
+      onCapturePanShortcutMouse={preferences.capturePanShortcutMouse}
       onShortcutCaptureBlur={() => preferences.setShortcutCaptureId(undefined)}
       onResetShortcuts={preferences.resetShortcuts}
       onChooseCacheLocation={preferences.chooseCacheLocation}
