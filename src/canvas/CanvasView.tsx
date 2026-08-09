@@ -53,6 +53,7 @@ interface CanvasColorPickerProps {
 interface CanvasWindowInteractionProps {
   drawingCollaborationMode: boolean;
   panCanvasShortcut: string;
+  boxSelectShortcut: string;
   onContextMenu(position: { x: number; y: number }): void;
   onExternalImageDrag?(items: ImageItem[]): (() => void) | undefined;
   windowLocked: boolean;
@@ -102,6 +103,7 @@ export function CanvasView({
   const {
     drawingCollaborationMode,
     panCanvasShortcut,
+    boxSelectShortcut,
     onContextMenu,
     onExternalImageDrag,
     windowLocked,
@@ -115,11 +117,11 @@ export function CanvasView({
   const [runtimeAttempt, setRuntimeAttempt] = useState(0);
   const initialOptionsRef = useRef({
     background, backgroundOpacity, viewport, selectedIds, selectedGroupId, colorPickerHeld, colorPickerShortcut,
-    windowLocked, drawingCollaborationMode, panCanvasShortcut, visualNotesState: visualNotes.state,
+    windowLocked, drawingCollaborationMode, panCanvasShortcut, boxSelectShortcut, visualNotesState: visualNotes.state,
   });
   const runtimeStateRef = useRef({
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, panCanvasShortcut,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, panCanvasShortcut, boxSelectShortcut,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   });
   const viewportCommitRef = useRef(onViewportCommit);
@@ -158,7 +160,7 @@ export function CanvasView({
   visualNoteSelectionRef.current = visualNotes.onSelectionChange;
   runtimeStateRef.current = {
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, panCanvasShortcut,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, panCanvasShortcut, boxSelectShortcut,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   };
 
@@ -201,6 +203,7 @@ export function CanvasView({
       runtime.setColorPickerHeld(state.colorPickerHeld);
       runtime.setColorPickerShortcut(state.colorPickerShortcut);
       runtime.setPanCanvasShortcut(state.panCanvasShortcut);
+      runtime.setBoxSelectShortcut(state.boxSelectShortcut);
       runtime.setWindowLocked(state.windowLocked);
       runtime.setDrawingCollaborationMode(state.drawingCollaborationMode);
       runtime.setVisualNotesState(state.visualNotesState);
@@ -227,6 +230,7 @@ export function CanvasView({
   useEffect(() => { runtimeRef.current?.setColorPickerHeld(colorPickerHeld); }, [colorPickerHeld]);
   useEffect(() => { runtimeRef.current?.setColorPickerShortcut(colorPickerShortcut); }, [colorPickerShortcut]);
   useEffect(() => { runtimeRef.current?.setPanCanvasShortcut(panCanvasShortcut); }, [panCanvasShortcut]);
+  useEffect(() => { runtimeRef.current?.setBoxSelectShortcut(boxSelectShortcut); }, [boxSelectShortcut]);
   useEffect(() => { runtimeRef.current?.setWindowLocked(windowLocked); }, [windowLocked]);
   useEffect(() => { runtimeRef.current?.setDrawingCollaborationMode(drawingCollaborationMode); }, [drawingCollaborationMode]);
   useEffect(() => { runtimeRef.current?.setVisualNotesState(visualNotes.state); }, [visualNotes.state]);

@@ -187,6 +187,12 @@ export function useAppCommands({
     { id: 'window.maximize', execute: () => api?.toggleMaximize() },
     { id: 'window.minimize', execute: () => api?.minimize() },
     { id: 'window.close', execute: () => api?.close() },
+    { id: 'visualNotes.toggle', execute: visualNotes.toggle },
+    { id: 'visualNotes.hide.press', execute: visualNotes.beginTemporaryHide },
+    { id: 'visualNotes.hide.release', execute: visualNotes.endTemporaryHide },
+    { id: 'visualNotes.brush', execute: visualNotes.selectBrush },
+    { id: 'visualNotes.arrow', execute: visualNotes.selectArrow },
+    { id: 'visualNotes.eraser', execute: visualNotes.selectEraser },
     {
       id: 'ui.escape',
       execute: () => {
@@ -205,9 +211,10 @@ export function useAppCommands({
   ]);
   const shortcutRegistry = useAppShortcutRegistry({
     shortcuts: preferences.shortcuts,
-    activeColorPickerShortcut: windowController.mode.locked ? 'alt' : preferences.colorPickerShortcut,
+    activeColorPickerShortcut: windowController.mode.locked ? 'Alt' : preferences.shortcuts.colorPicker,
     collaborationSpaceActive: windowController.drawingCollaborationMode,
     hasInternalClipboard: workspace.hasClipboard,
+    visualNotesEnabled: visualNotes.enabled,
     commands: shortcutCommands,
   });
   useAppShortcuts(shortcutRegistry);
@@ -268,7 +275,7 @@ export function useAppCommands({
       sendSelected: (mode) => { void delivery.sendSelectedToPhotoshop(mode); },
       saveVersion: () => { void versions.openPhotoshopVersionSaveDialog(); },
     },
-    layout: { targetCount: workspace.targetIds.length, run: workspace.layout },
+    layout: { targetCount: workspace.targetIds.length, run: workspace.layout, packAndFit: workspace.packAndFit },
     view: {
       hasContent: workspace.hasContent,
       focusSelected: workspace.toggleFocus,

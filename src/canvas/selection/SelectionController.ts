@@ -11,6 +11,7 @@ import { boxFromPoints, collapsedGroupInSelectionBox, imagesInSelectionBox } fro
 import { transformImageSelection } from './TransformController';
 import { resizeGroupFrameByDelta, type GroupFrameBounds, type GroupResizeHandle } from './GroupResizeController';
 import { groupHeaderWorldBounds } from '../groups/GroupPresentation';
+import { shortcutMatchesKeyboardEvent, shortcutReleasedByKeyboardEvent } from '../../keyboardShortcuts';
 
 const rotationCursor = (degrees: 0 | 90 | 180 | 270) => `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18' fill='none'%3E%3Cg transform='rotate(${degrees}%209%209)' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 4.5h-7q-3 0-3 3v7M12.1 2.1l2.4 2.4-2.4 2.4M2.1 12.1l2.4 2.4 2.4-2.4' stroke='%23101317' stroke-width='2.8'/%3E%3Cpath d='M14.5 4.5h-7q-3 0-3 3v7M12.1 2.1l2.4 2.4-2.4 2.4M2.1 12.1l2.4 2.4 2.4-2.4' stroke='%23f1f3f8' stroke-width='1.15'/%3E%3C/g%3E%3C/svg%3E") 9 9, crosshair`;
 
@@ -56,6 +57,7 @@ interface SelectionControllerOptions {
   hitGroupHandle(point: { x: number; y: number }): GroupResizeHandle | undefined;
   interactionBlocked(event?: PointerEvent): boolean;
   documentInteractionBlocked(): boolean;
+  boxSelectShortcut(): string;
   externalDrag(items: ImageItem[]): (() => void) | undefined;
   cameraChanged(committed: boolean): void;
 }
@@ -77,13 +79,12 @@ export class SelectionController {
     const move = (event: PointerEvent) => this.pointerMove(event);
     const up = (event: PointerEvent) => this.pointerUp(event);
     const keyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey
-        || (event.key.toLowerCase() !== 'd' && event.code !== 'KeyD')) return;
+      if (event.defaultPrevented || !shortcutMatchesKeyboardEvent(this.options.boxSelectShortcut(), event)) return;
       this.boxSelectHeld = true;
       if (!this.drag && !this.options.documentInteractionBlocked()) this.options.element.style.cursor = 'crosshair';
     };
     const keyUp = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'd' && event.code !== 'KeyD') return;
+      if (!shortcutReleasedByKeyboardEvent(this.options.boxSelectShortcut(), event)) return;
       this.boxSelectHeld = false;
       if (!this.drag) this.options.element.style.cursor = '';
     };

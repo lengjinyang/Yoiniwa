@@ -109,6 +109,7 @@ export function AppWorkspace({
       windowInteraction={{
         drawingCollaborationMode: windowController.drawingCollaborationMode,
         panCanvasShortcut: preferences.shortcuts.panCanvas,
+        boxSelectShortcut: preferences.shortcuts.boxSelect,
         onContextMenu: (position) => {
           panels.setPropertiesOpen(false);
           workspace.setGroupActionMenu(undefined);
@@ -139,7 +140,7 @@ export function AppWorkspace({
       onClose={() => panels.setPropertiesOpen(false)}
       onBeginShortcutCapture={preferences.beginShortcutCapture}
       onCaptureShortcut={preferences.captureShortcut}
-      onCapturePanShortcutKeyUp={preferences.capturePanShortcutKeyUp}
+      onCaptureShortcutKeyUp={preferences.captureShortcutKeyUp}
       onCapturePanShortcutMouse={preferences.capturePanShortcutMouse}
       onShortcutCaptureBlur={() => preferences.setShortcutCaptureId(undefined)}
       onResetShortcuts={preferences.resetShortcuts}
@@ -306,6 +307,7 @@ export function AppOverlays({
     <GroupActionMenu
       menu={workspace.groupActionMenu}
       groups={history.scene.groups}
+      renameShortcut={preferences.shortcuts.renameGroup}
       onOpenColor={(id, anchor) => workspace.setGroupColorEditor({ id, anchor })}
       onRename={workspace.renameGroupById}
       onChange={workspace.changeGroup}
@@ -351,7 +353,7 @@ export function AppOverlays({
       onSubmit={workspace.finishGroupRename}
     />}
 
-    <VisualNotesToolbar {...visualNotes.toolbarProps} />
+    <VisualNotesToolbar {...visualNotes.toolbarProps} shortcuts={preferences.shortcuts} />
 
     {!workspace.hasContent && <div className="empty-state no-drag"
       onPointerDown={startEmptyStateWindowDrag} onPointerMove={moveEmptyStateWindow}

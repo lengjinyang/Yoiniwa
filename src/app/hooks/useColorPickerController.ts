@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ColorPickerShortcut } from '../../interactions';
 import type { PickedColor } from '../../types';
 
 interface UseColorPickerControllerOptions {
   api: Window['refCanvas'];
-  colorPickerShortcut: ColorPickerShortcut;
+  colorPickerShortcut: string;
   autoPhotoshopRoundTrip: boolean;
   drawingCollaborationMode: boolean;
   windowLocked: boolean;
@@ -47,7 +46,7 @@ export function useColorPickerController({
   return {
     held,
     setHeld,
-    activeShortcut: windowLocked ? 'alt' as const : colorPickerShortcut,
+    activeShortcut: windowLocked ? 'Alt' : colorPickerShortcut,
     syncPickedColor,
   };
 }

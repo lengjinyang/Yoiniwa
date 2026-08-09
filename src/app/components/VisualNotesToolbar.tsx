@@ -1,11 +1,12 @@
 import type { CSSProperties } from 'react';
 import type { EraserSize, VisualNoteTool, VisualNoteWidth } from '../../types';
+import { shortcutDisplayName, type ShortcutPreferences } from '../../keyboardShortcuts';
 import { UiIcon, type UiIconName } from './UiIcon';
 
-const TOOL_OPTIONS: ReadonlyArray<{ tool: VisualNoteTool; label: string; shortcut: string; icon: UiIconName }> = [
-  { tool: 'brush', label: '画笔', shortcut: '1 / B', icon: 'pen' },
-  { tool: 'arrow', label: '箭头', shortcut: '2', icon: 'note-arrow' },
-  { tool: 'eraser', label: '橡皮擦', shortcut: '3 / E', icon: 'eraser' },
+const TOOL_OPTIONS: ReadonlyArray<{ tool: VisualNoteTool; label: string; icon: UiIconName }> = [
+  { tool: 'brush', label: '画笔', icon: 'pen' },
+  { tool: 'arrow', label: '箭头', icon: 'note-arrow' },
+  { tool: 'eraser', label: '橡皮擦', icon: 'eraser' },
 ];
 
 const COLOR_OPTIONS = [
@@ -14,6 +15,7 @@ const COLOR_OPTIONS = [
 ] as const;
 
 interface VisualNotesToolbarProps {
+  shortcuts: ShortcutPreferences;
   enabled: boolean;
   tool: VisualNoteTool;
   color: string;
@@ -37,17 +39,25 @@ interface VisualNotesToolbarProps {
 }
 
 export function VisualNotesToolbar({
-  enabled, tool, color, opacity, width, pressureEnabled, eraserSize, selectedMarkId, notesVisible,
+  shortcuts, enabled, tool, color, opacity, width, pressureEnabled, eraserSize, selectedMarkId, notesVisible,
   onToolChange, onColorChange, onOpacityChange, onWidthChange, onEraserSizeChange, onPressureToggle,
   onOpacityInteractionStart, onOpacityInteractionEnd, onDeleteSelected, onToggleNotesVisible, onExit,
 }: VisualNotesToolbarProps) {
   if (!enabled) return null;
   return <div className="visual-notes-toolbar no-drag" role="toolbar" aria-label="视觉标注工具">
     <div className="visual-note-tools">
-      {TOOL_OPTIONS.map((option) => <button key={option.tool}
+      {TOOL_OPTIONS.map((option) => {
+        const optionShortcuts = option.tool === 'brush'
+          ? [shortcuts.visualNotesBrushAlternate, shortcuts.visualNotesBrush]
+          : option.tool === 'arrow'
+            ? [shortcuts.visualNotesArrow]
+            : [shortcuts.visualNotesEraserAlternate, shortcuts.visualNotesEraser];
+        const shortcut = optionShortcuts.map(shortcutDisplayName).join(' / ');
+        return <button key={option.tool}
         className={`visual-note-tool${tool === option.tool ? ' active' : ''}`}
-        data-tooltip={`${option.label}　${option.shortcut}`} aria-label={`${option.label}，快捷键 ${option.shortcut}`}
-        onClick={() => onToolChange(option.tool)}><UiIcon name={option.icon} size={17} /></button>)}
+        data-tooltip={`${option.label}　${shortcut}`} aria-label={`${option.label}，快捷键 ${shortcut}`}
+        onClick={() => onToolChange(option.tool)}><UiIcon name={option.icon} size={17} /></button>;
+      })}
     </div>
     <span className="visual-note-divider" />
     <details className="visual-note-fold visual-note-width-fold">
@@ -109,16 +119,16 @@ export function VisualNotesToolbar({
     <div className="visual-note-auxiliary">
       {tool !== 'eraser' && <button className={pressureEnabled ? 'active compact' : 'compact'} data-tooltip="笔迹平滑" aria-label="笔迹平滑"
         onClick={onPressureToggle}><UiIcon name="smooth" /></button>}
-      {selectedMarkId && <button className="compact" data-tooltip="删除选中标注　Delete" aria-label="删除选中标注"
+      {selectedMarkId && <button className="compact" data-tooltip={`删除选中标注　${shortcutDisplayName(shortcuts.deleteSelection)}`} aria-label="删除选中标注"
         onClick={onDeleteSelected}><UiIcon name="trash" /></button>}
     </div>
     <span className="visual-note-divider" />
     <button className={notesVisible ? 'compact' : 'compact active'}
-      data-tooltip={`${notesVisible ? '隐藏' : '显示'}标注　H（按住临时隐藏）`}
+      data-tooltip={`${notesVisible ? '隐藏' : '显示'}标注　${shortcutDisplayName(shortcuts.visualNotesHide)}（按住临时隐藏）`}
       aria-label={notesVisible ? '隐藏标注' : '显示标注'} onClick={onToggleNotesVisible}>
       <UiIcon name={notesVisible ? 'eye' : 'eye-off'} />
     </button>
-    <button className="compact visual-note-exit" data-tooltip="退出标注模式　Esc" aria-label="退出标注模式"
+    <button className="compact visual-note-exit" data-tooltip={`退出标注模式　${shortcutDisplayName(shortcuts.escape)}`} aria-label="退出标注模式"
       onClick={onExit}><UiIcon name="close" /></button>
   </div>;
 }

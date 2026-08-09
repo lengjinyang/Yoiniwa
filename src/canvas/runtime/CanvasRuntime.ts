@@ -49,6 +49,7 @@ export interface CanvasRuntimeOptions {
   colorPickerHeld?: boolean;
   colorPickerShortcut?: ColorPickerShortcut;
   panCanvasShortcut?: string;
+  boxSelectShortcut?: string;
   drawingCollaborationMode?: boolean;
   onColorPicked?(color: PickedColor): void;
   windowLocked?: boolean;
@@ -74,6 +75,7 @@ export class CanvasRuntime {
   private colorPickerShortcut: ColorPickerShortcut = 'alt';
   private panCanvasShortcut = 'Alt';
   private panCanvasShortcutHeld = false;
+  private boxSelectShortcut = 'D';
   private altPointerArmed = false;
   private windowLocked = false;
   private drawingCollaborationMode = false;
@@ -95,6 +97,7 @@ export class CanvasRuntime {
     this.colorPickerHeld = Boolean(options.colorPickerHeld);
     this.colorPickerShortcut = options.colorPickerShortcut ?? 'alt';
     this.panCanvasShortcut = options.panCanvasShortcut ?? 'Alt';
+    this.boxSelectShortcut = options.boxSelectShortcut ?? 'D';
     this.windowLocked = Boolean(options.windowLocked);
     this.drawingCollaborationMode = Boolean(options.drawingCollaborationMode);
     this.visualNotesState = options.visualNotesState ?? { enabled: false, tool: 'brush', color: '#c6a15b', opacity: 0.82, width: 'medium', pressureEnabled: true, eraserSize: 'medium', selectedMarkId: undefined };
@@ -222,6 +225,7 @@ export class CanvasRuntime {
         || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0))
         || (this.drawingCollaborationMode && Boolean((event as (PointerEvent & { spaceKey?: boolean }) | undefined)?.spaceKey && event?.button === 0)),
       documentInteractionBlocked: () => this.drawingCollaborationMode || this.windowLocked,
+      boxSelectShortcut: () => this.boxSelectShortcut,
       externalDrag: (items) => this.options.onExternalImageDrag?.(items),
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
@@ -393,6 +397,7 @@ export class CanvasRuntime {
     this.panCanvasShortcut = shortcut;
     this.panCanvasShortcutHeld = false;
   }
+  setBoxSelectShortcut(shortcut: string) { this.boxSelectShortcut = shortcut; }
   setVisualNotesState(state: VisualNotesToolState) {
     this.visualNotesState = state; this.renderer.setSelectedVisualNote(state.enabled ? state.selectedMarkId : undefined);
     if (!state.enabled) this.visualNotesController?.cancel();

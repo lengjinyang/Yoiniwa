@@ -360,7 +360,7 @@ export function useSceneWorkspaceController({
     if (!copySelection()) return;
     if (selectedGroup) deleteGroup(true);
     else deleteSelected();
-    setStatus('已剪切，按 Ctrl+V 粘贴');
+    setStatus('已剪切，可使用粘贴快捷键粘贴');
   }, [copySelection, deleteGroup, deleteSelected, selectedGroup, setStatus]);
 
   const pasteClipboard = useCallback(() => {

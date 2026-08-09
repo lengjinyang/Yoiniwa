@@ -46,7 +46,6 @@ export default function App() {
   const { close: closeContextMenu } = context;
   const preferences = useAppPreferences({ api, drawingCollaborationModeRef, setStatus });
   const {
-    colorPickerShortcut,
     shortcuts,
   } = preferences;
   const windowController = useWindowCollaborationController({
@@ -66,7 +65,7 @@ export default function App() {
   drawingCollaborationModeRef.current = drawingCollaborationMode;
   const colorPicker = useColorPickerController({
     api,
-    colorPickerShortcut,
+    colorPickerShortcut: shortcuts.colorPicker,
     autoPhotoshopRoundTrip,
     drawingCollaborationMode,
     windowLocked: windowMode.locked,
