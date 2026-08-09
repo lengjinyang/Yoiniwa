@@ -3,6 +3,7 @@ import type { ImageItem, ImageThumbnailReady } from './types';
 import { performanceMonitor } from './performanceMonitor';
 import { boundedCpuImageBudget } from './shared/imagePipelineConfig';
 import { calculateDesiredMip, rotatedScreenBounds } from './rendering/textureSelection';
+import { assetResourceUrl, isAssetResourceUrl } from './assetResourceUrl';
 
 export type ImageVariant = 'thumb128' | 'thumb256' | 'thumb512' | 'thumb768' | 'thumb1024' | 'original';
 
@@ -103,7 +104,9 @@ export function imageSource(
   revision = 0,
 ) {
   if (item.dataUrl) return item.dataUrl;
-  return `refcanvas-asset://asset/${encodeURIComponent(item.assetId ?? '')}?variant=${variant}${revision > 0 ? `&v=${revision}` : ''}`;
+  const query = new URLSearchParams({ variant });
+  if (revision > 0) query.set('v', String(revision));
+  return assetResourceUrl(item.assetId ?? '', query);
 }
 
 function useSettledVariant(variant: ImageVariant) {
@@ -145,7 +148,7 @@ function trimUnusedCache() {
 }
 
 function canonicalImageResourceKey(src: string) {
-  if (!src.startsWith('refcanvas-asset:')) return src;
+  if (!isAssetResourceUrl(src)) return src;
   const url = new URL(src);
   url.searchParams.delete('priority');
   return url.toString();
@@ -176,7 +179,7 @@ function retainImage(src: string, onReady: (image: HTMLImageElement) => void, on
     const decodeStartedAt = performanceMonitor.enabled ? performance.now() : 0;
     const image = new Image();
     image.decoding = 'async';
-    if (src.startsWith('refcanvas-asset:')) image.crossOrigin = 'anonymous';
+    if (isAssetResourceUrl(src)) image.crossOrigin = 'anonymous';
     entry = { image, refs: 0, bytes: 0, lastUsed: performance.now(), listeners: new Set(), errorListeners: new Set() };
     cache.set(src, entry);
     image.onload = () => {
