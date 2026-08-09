@@ -40,6 +40,7 @@ export interface AppShortcutState {
   shortcuts: ShortcutPreferences;
   activeColorPickerShortcut: ColorPickerShortcut;
   collaborationSpaceActive: boolean;
+  hasInternalClipboard: boolean;
   commands: AppShortcutCommandRegistry;
 }
 
@@ -115,7 +116,12 @@ export function dispatchAppShortcutKeyDown(state: AppShortcutState, event: Keybo
   if (ctrl && alt && !shift && key === 'p') return run('layout.packAndFit');
   if (ctrl && !alt && !shift && key === 'c') return run('edit.copy');
   if (ctrl && !alt && !shift && key === 'x') return run('edit.cut');
-  if (ctrl && !alt && !shift && key === 'v') return run('edit.paste');
+  if (ctrl && !alt && !shift && key === 'v') {
+    // Only intercept when the in-app scene clipboard has content. Otherwise let
+    // the native paste event reach useImageImport for system clipboard images/files.
+    if (state.hasInternalClipboard) return run('edit.paste');
+    return;
+  }
   if (ctrl && !alt && !shift && key === 'i') return run('file.importImages');
   if (ctrl && !alt && shift && key === 'l') return run('file.openLatest');
   if (ctrl && !alt && !shift && key === 'y') return run('edit.redo');

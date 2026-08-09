@@ -16,8 +16,6 @@ import { createLegacyZipProjectReader } from './services/legacy-zip-project-read
 import { ProjectPersistenceService, type ProjectCommitPayload } from './services/project-persistence-service.js';
 import { YoiRepository } from './services/yoi-repository.js';
 import { parseRuntimeFlags } from './runtime/runtime-flags.js';
-import { runPerformanceBenchmark } from './benchmarks/performance-benchmark.js';
-import { runProjectZoomBenchmark } from './benchmarks/project-zoom-benchmark.js';
 import { appendRendererLogs, flushLogs, getLogDirectory, getLogPath, initializeLogger, log, logError, logInfo, logSessionId, logWarn } from './services/logger.js';
 import { createIpcHandlerRegistrar } from './ipc/register-handler.js';
 import { createImageCachePathResolver } from './services/image-cache-paths.js';
@@ -1932,6 +1930,8 @@ function createWindow() {
   }, 500));
   else if (projectZoomBenchmark) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
+      // Dynamic import keeps benchmarks out of the packaged asar (see package.json files exclude).
+      const { runProjectZoomBenchmark } = await import('./benchmarks/project-zoom-benchmark.js');
       await runProjectZoomBenchmark({
         mainWindow, rootDir, app, writeScenePackage, readScenePackage,
         projectPath: process.env.REFCANVAS_PROJECT_BENCH_PATH,
@@ -1946,6 +1946,8 @@ function createWindow() {
   }, 150));
   else if (performanceBenchmark) mainWindow.webContents.once('did-finish-load', () => setTimeout(async () => {
     try {
+      // Dynamic import keeps benchmarks out of the packaged asar (see package.json files exclude).
+      const { runPerformanceBenchmark } = await import('./benchmarks/performance-benchmark.js');
       await runPerformanceBenchmark({
         mainWindow, rootDir, app, writeScenePackage, readScenePackage,
         phase: process.env.REFCANVAS_PERF_PHASE || 'before',

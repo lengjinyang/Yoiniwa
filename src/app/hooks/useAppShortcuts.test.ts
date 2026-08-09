@@ -23,7 +23,7 @@ function keyboardEvent(key: string, code: string, modifiers: Partial<KeyboardEve
   } as unknown as KeyboardEvent;
 }
 
-function shortcutState(commandIds: AppShortcutCommandId[], collaborationSpaceActive = false) {
+function shortcutState(commandIds: AppShortcutCommandId[], collaborationSpaceActive = false, hasInternalClipboard = false) {
   const executed: AppShortcutCommandId[] = [];
   const commands = createAppShortcutCommandRegistry(commandIds.map((id) => ({
     id,
@@ -33,6 +33,7 @@ function shortcutState(commandIds: AppShortcutCommandId[], collaborationSpaceAct
     shortcuts: DEFAULT_SHORTCUTS,
     activeColorPickerShortcut: 's',
     collaborationSpaceActive,
+    hasInternalClipboard,
     commands,
   };
   return { state, executed };
@@ -66,5 +67,21 @@ describe('useAppShortcuts dispatch boundary', () => {
     const { state, executed } = shortcutState(['ui.escape']);
     dispatchAppShortcutKeyDown(state, keyboardEvent('Escape', 'Escape'));
     expect(executed).toEqual(['ui.escape']);
+  });
+
+  it('pastes from the internal clipboard when it has content', () => {
+    const { state, executed } = shortcutState(['edit.paste'], false, true);
+    const event = keyboardEvent('v', 'KeyV', { ctrlKey: true });
+    dispatchAppShortcutKeyDown(state, event);
+    expect(executed).toEqual(['edit.paste']);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it('leaves Ctrl+V alone when the internal clipboard is empty', () => {
+    const { state, executed } = shortcutState(['edit.paste'], false, false);
+    const event = keyboardEvent('v', 'KeyV', { ctrlKey: true });
+    dispatchAppShortcutKeyDown(state, event);
+    expect(executed).toEqual([]);
+    expect(event.preventDefault).not.toHaveBeenCalled();
   });
 });

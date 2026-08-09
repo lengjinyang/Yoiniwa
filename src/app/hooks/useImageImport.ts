@@ -168,6 +168,24 @@ export function useImageImport({
     }
   }, [api, prepareAndAddImages, setStatus]);
 
+  const pasteSystemClipboard = useCallback(async () => {
+    if (!api) return;
+    try {
+      const sources = await api.registerClipboardImage();
+      if (!sources.length) {
+        setStatus('剪贴板中没有可粘贴的图片');
+        return;
+      }
+      await prepareAndAddImages(sources, {
+        screenX: lastPointerRef.current.x,
+        screenY: lastPointerRef.current.y,
+        pack: sources.length > 1,
+      });
+    } catch (error) {
+      setStatus(`粘贴图片失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [api, lastPointerRef, prepareAndAddImages, setStatus]);
+
   useEffect(() => {
     const over = (event: DragEvent) => {
       event.preventDefault();
@@ -216,18 +234,33 @@ export function useImageImport({
       }
     };
     const paste = async (event: ClipboardEvent) => {
+      if (!api) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       const supported = /\.(png|jpe?g|webp|bmp|gif)$/i;
       const files = [...(event.clipboardData?.files ?? [])]
         .filter((file) => file.type.startsWith('image/') || supported.test(file.name));
-      if (files.length && api) try {
-        const localPaths = files.map((file) => api.pathForFile(file));
-        const sources = localPaths.every((value): value is string => Boolean(value))
-          ? await api.registerImagePaths(localPaths, 'clipboard')
-          : await api.registerClipboardImage();
+      try {
+        let sources: ImportedImage[];
+        if (files.length) {
+          event.preventDefault();
+          const localPaths = files.map((file) => api.pathForFile(file));
+          sources = localPaths.every((value): value is string => Boolean(value))
+            ? await api.registerImagePaths(localPaths, 'clipboard')
+            : await api.registerClipboardImage();
+        } else {
+          // Bitmap clipboard (PS / browser / Win+Shift+S) often has no File entries.
+          // Prevent default synchronously so Ctrl+V is not dropped on the floor while we read Electron clipboard.
+          event.preventDefault();
+          sources = await api.registerClipboardImage();
+          if (!sources.length) {
+            setStatus('剪贴板中没有可粘贴的图片');
+            return;
+          }
+        }
         await prepareAndAddImages(sources, {
           screenX: lastPointerRef.current.x,
           screenY: lastPointerRef.current.y,
-          pack: files.length > 1,
+          pack: sources.length > 1,
         });
       } catch (error) {
         setStatus(`粘贴图片失败：${error instanceof Error ? error.message : String(error)}`);
@@ -257,5 +290,5 @@ export function useImageImport({
     return () => window.removeEventListener('refcanvas-smoke-add-paths', addTestPaths);
   }, [api, prepareAndAddImages, setStatus]);
 
-  return { progress, importImages, prepareAndAddImages };
+  return { progress, importImages, prepareAndAddImages, pasteSystemClipboard };
 }

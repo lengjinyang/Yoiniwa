@@ -72,7 +72,10 @@ export function useAppCommands({
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
       execute: workspace.cutSelection,
     },
-    { id: 'edit.paste', enabled: workspace.hasClipboard, execute: workspace.pasteClipboard },
+    { id: 'edit.paste', enabled: true, execute: () => {
+      if (workspace.hasClipboard) workspace.pasteClipboard();
+      else void imageImport.pasteSystemClipboard();
+    } },
     {
       id: 'edit.duplicate',
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
@@ -84,7 +87,7 @@ export function useAppCommands({
       execute: () => workspace.selectedGroup ? workspace.deleteGroup(false) : workspace.deleteSelected(),
     },
     { id: 'group.create', enabled: workspace.selectedIds.length >= 2, execute: workspace.createGroup },
-  ]), [history.canRedo, history.canUndo, history.redo, history.undo, workspace]);
+  ]), [history.canRedo, history.canUndo, history.redo, history.undo, imageImport, workspace]);
 
   const shortcutCommands = createAppShortcutCommandRegistry([
     { id: 'colorPicker.press', execute: () => setColorPickerHeld(true) },
@@ -204,6 +207,7 @@ export function useAppCommands({
     shortcuts: preferences.shortcuts,
     activeColorPickerShortcut: windowController.mode.locked ? 'alt' : preferences.colorPickerShortcut,
     collaborationSpaceActive: windowController.drawingCollaborationMode,
+    hasInternalClipboard: workspace.hasClipboard,
     commands: shortcutCommands,
   });
   useAppShortcuts(shortcutRegistry);
