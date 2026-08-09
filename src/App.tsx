@@ -14,17 +14,20 @@ import { addMemberToGroup, createGroupFrame, createScene, detachImageFromGroup, 
 import type { GroupFrameBounds } from './canvas/selection/GroupResizeController';
 import { captureSceneSelection, pasteScenePayload, type SceneClipboardPayload } from './sceneClipboard';
 import { mergeSceneInto } from './sceneMerge';
-import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, PhotoshopProjectMetadata, PhotoshopVersionRecord, RecentScene, Scene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
+import type { CacheInfo, EraserSize, GroupMember, ImageGroup, ImageItem, ImagePrewarmProgress, ImportedImage, PickedColor, PhotoshopProjectMetadata, RecentScene, Scene, VisualNotesState, VisualNoteTool, VisualNoteWidth, WindowState } from './types';
 import { useSceneHistory } from './useSceneHistory';
 import { performanceMonitor } from './performanceMonitor';
 import { applyImageChanges, deleteSceneSelection, layoutSceneImages, moveImageLayer } from './domain/sceneCommands';
 import { Button } from './app/components/CommonControls';
 import { OutlinePanel } from './app/components/OutlinePanel';
 import { UiIcon } from './app/components/UiIcon';
-import { PhotoshopVersionComparePanel, type ComparisonMode, type ComparisonPreviewState } from './app/components/PhotoshopVersionComparePanel';
+import { PhotoshopVersionComparePanel } from './app/components/PhotoshopVersionComparePanel';
 import { PhotoshopVersionsPanel, PHOTOSHOP_VERSION_PREVIEW_MIME } from './app/components/PhotoshopVersionsPanel';
+import { PhotoshopVersionSaveDialog } from './app/components/PhotoshopVersionSaveDialog';
+import { GroupRenameDialog } from './app/components/GroupRenameDialog';
 import { PropertiesPanel } from './app/components/PropertiesPanel';
 import { VisualNotesToolbar } from './app/components/VisualNotesToolbar';
+import { usePhotoshopVersionController } from './app/hooks/usePhotoshopVersionController';
 import { appCommand, createAppCommandRegistry } from './app/AppCommand';
 import { ColorControl, type ColorControlHandle } from './ColorControl';
 import './styles.css';
@@ -39,14 +42,6 @@ import { DEFAULT_SHORTCUTS, loadShortcutPreferences, SHORTCUT_LABELS, shortcutCo
 
 const initialWindowState: WindowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
-
-interface ComparisonPreview {
-  url?: string;
-  state: ComparisonPreviewState;
-  error?: string;
-  capturedAt?: string;
-  documentName?: string;
-}
 
 async function renderProjectPreview(scene: Scene): Promise<ArrayBuffer | undefined> {
   try {
@@ -81,21 +76,10 @@ export default function App() {
   const operationRequestRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const [propertiesOpen, setPropertiesOpen] = useState(false);
-  const [photoshopVersionsOpen, setPhotoshopVersionsOpen] = useState(false);
   const [photoshopMetadata, setPhotoshopMetadata] = useState<PhotoshopProjectMetadata>(EMPTY_PHOTOSHOP_PROJECT_METADATA);
   const photoshopMetadataRef = useRef(photoshopMetadata);
   const projectSessionIdRef = useRef<string | undefined>(undefined);
   photoshopMetadataRef.current = photoshopMetadata;
-  const [versionSaveDialogOpen, setVersionSaveDialogOpen] = useState(false);
-  const [versionName, setVersionName] = useState('');
-  const [versionNote, setVersionNote] = useState('');
-  const [comparisonVersionId, setComparisonVersionId] = useState<string>();
-  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('ab');
-  const [comparisonSplit, setComparisonSplit] = useState(50);
-  const [comparisonOpacity, setComparisonOpacity] = useState(50);
-  const [comparisonPreview, setComparisonPreview] = useState<ComparisonPreview>({ state: 'loading' });
-  const comparisonPreviewUrlRef = useRef<string | undefined>(undefined);
-  const comparisonPreviewRequestRef = useRef(0);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [visualNotesEnabled, setVisualNotesEnabled] = useState(false);
   const [visualNoteTool, setVisualNoteTool] = useState<VisualNoteTool>('brush');
@@ -126,7 +110,6 @@ export default function App() {
   });
   const [shortcutCaptureId, setShortcutCaptureId] = useState<ShortcutId>();
   const [focusReturn, setFocusReturn] = useState<typeof history.scene.viewport>();
-  const renameComposingRef = useRef(false);
   const colorSyncRequestRef = useRef(0);
   const sceneClipboardRef = useRef<SceneClipboardPayload | undefined>(undefined);
   const drawingModeSnapshotRef = useRef<{ locked: boolean; alwaysOnTop: boolean } | undefined>(undefined);
@@ -135,66 +118,6 @@ export default function App() {
   const autoPhotoshopRoundTrip = shouldAutoPhotoshopRoundTrip(windowMode);
   const photoshopDocumentBlocked = drawingCollaborationMode || (windowMode.locked && windowMode.alwaysOnTop);
   const activeColorPickerShortcut: ColorPickerShortcut = windowMode.locked ? 'alt' : colorPickerShortcut;
-  const revokeComparisonPreview = useCallback(() => {
-    const url = comparisonPreviewUrlRef.current;
-    comparisonPreviewUrlRef.current = undefined;
-    if (url) URL.revokeObjectURL(url);
-  }, []);
-  const resetComparisonPreview = useCallback(() => {
-    comparisonPreviewRequestRef.current += 1;
-    revokeComparisonPreview();
-    setComparisonPreview({ state: 'loading' });
-  }, [revokeComparisonPreview]);
-  const closeVersionComparison = useCallback(() => {
-    resetComparisonPreview();
-    setComparisonVersionId(undefined);
-  }, [resetComparisonPreview]);
-  const captureComparisonPreview = useCallback(async () => {
-    const request = ++comparisonPreviewRequestRef.current;
-    setComparisonPreview((current) => ({ ...current, state: 'loading', error: undefined }));
-    try {
-      const result = await api?.capturePhotoshopPreview();
-      if (!result?.ok || !result.preview) throw new Error(result?.message ?? '无法捕获 Photoshop 当前文档预览');
-      const url = URL.createObjectURL(new Blob([result.preview], { type: 'image/png' }));
-      if (request !== comparisonPreviewRequestRef.current) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      revokeComparisonPreview();
-      comparisonPreviewUrlRef.current = url;
-      setComparisonPreview({ url, state: 'ready', capturedAt: new Date().toISOString(), documentName: result.documentName });
-    } catch (error) {
-      if (request !== comparisonPreviewRequestRef.current) return;
-      setComparisonPreview((current) => ({ ...current, state: 'error', error: String(error) }));
-    }
-  }, [api, revokeComparisonPreview]);
-  const refreshComparisonPreview = useCallback(() => {
-    if (!comparisonVersionId) return;
-    void captureComparisonPreview();
-  }, [captureComparisonPreview, comparisonVersionId]);
-  const openVersionComparison = useCallback((version: PhotoshopVersionRecord) => {
-    if (photoshopDocumentBlocked) return;
-    resetComparisonPreview();
-    setComparisonVersionId(version.id);
-    setComparisonMode('ab');
-    setComparisonSplit(50);
-    setComparisonOpacity(50);
-    setPhotoshopVersionsOpen(false);
-    void captureComparisonPreview();
-  }, [captureComparisonPreview, photoshopDocumentBlocked, resetComparisonPreview]);
-  const comparisonVersions = useMemo(() => [...photoshopMetadata.versions].reverse(), [photoshopMetadata.versions]);
-  const comparisonVersion = comparisonVersionId
-    ? photoshopMetadata.versions.find((version) => version.id === comparisonVersionId) : undefined;
-  useEffect(() => () => {
-    comparisonPreviewRequestRef.current += 1;
-    revokeComparisonPreview();
-  }, [revokeComparisonPreview]);
-  useEffect(() => {
-    if (comparisonVersionId && !comparisonVersion) closeVersionComparison();
-  }, [closeVersionComparison, comparisonVersion, comparisonVersionId]);
-  useEffect(() => {
-    if (drawingCollaborationMode && comparisonVersionId) closeVersionComparison();
-  }, [closeVersionComparison, comparisonVersionId, drawingCollaborationMode]);
   const autosaveExecuteRef = useRef<(scene: typeof history.scene, revision: number) => Promise<void>>(async () => undefined);
   const autosaveCoordinatorRef = useRef<AutosaveCoordinator | undefined>(undefined);
   if (!autosaveCoordinatorRef.current) {
@@ -645,6 +568,54 @@ export default function App() {
       setStatus(`导入失败：${String(error)}`);
     }
   }, [api, prepareAndAddImages]);
+
+  const {
+    versionsOpen: photoshopVersionsOpen,
+    closeVersionsPanel,
+    toggleVersionsPanel,
+    saveDialogOpen: versionSaveDialogOpen,
+    versionName,
+    versionNote,
+    setVersionName,
+    setVersionNote,
+    closeSaveDialog: closeVersionSaveDialog,
+    savePhotoshopVersion,
+    openPhotoshopVersionSaveDialog,
+    openPhotoshopVersion,
+    deletePhotoshopVersion,
+    placePhotoshopVersionPreview,
+    comparisonVersionId,
+    comparisonVersion,
+    comparisonVersions,
+    comparisonMode,
+    comparisonSplit,
+    comparisonOpacity,
+    comparisonPreview,
+    setComparisonMode,
+    setComparisonSplit,
+    setComparisonOpacity,
+    setComparisonVersionId,
+    openVersionComparison,
+    refreshComparisonPreview,
+    closeVersionComparison,
+  } = usePhotoshopVersionController({
+    api,
+    metadata: photoshopMetadata,
+    metadataRef: photoshopMetadataRef,
+    onMetadataChange: setPhotoshopMetadata,
+    projectSessionIdRef,
+    liveViewportRef,
+    drawingCollaborationMode,
+    documentBlocked: photoshopDocumentBlocked,
+    flushViewport: history.flushViewport,
+    markSaved: history.markSaved,
+    prepareAndAddImages,
+    renderProjectPreview,
+    beginOperation,
+    settleOperation: settleCurrentOperation,
+    clearOperation: clearCurrentOperation,
+    setStatus,
+  });
 
   const save = useCallback(async (saveAs = false) => {
     if (!api || saveInFlightRef.current) return;
@@ -1238,62 +1209,6 @@ export default function App() {
     } catch (error) { settleCurrentOperation(requestId, 'error', `发送到 Photoshop 失败：${String(error)}`); }
   }, [api, beginOperation, history.scene.name, lassoPoints, photoshopDocumentBlocked, renderLassoPhotoshopImage, renderSelectedPhotoshopImage, renderSelectedPhotoshopLayers, selectedItems, settleCurrentOperation]);
 
-  const savePhotoshopVersion = useCallback(async () => {
-    if (!api || photoshopDocumentBlocked) return;
-    const name = versionName.trim();
-    if (!name) { setStatus('请输入版本名称'); return; }
-    const flushed = history.flushViewport(liveViewportRef.current);
-    const requestId = beginOperation('photoshop', '正在保存 Photoshop 分层版本…');
-    try {
-      const preview = await renderProjectPreview(flushed.scene);
-      const result = await api.createPhotoshopVersion(projectSessionIdRef.current, serializeProjectScene(flushed.scene), photoshopMetadataRef.current, name, versionNote, flushed.revision, preview);
-      if (result.canceled) { clearCurrentOperation(requestId); return; }
-      if (!result.version || !result.metadata) throw new Error(result.message ?? 'Photoshop 版本保存失败');
-      if (result.sessionId) projectSessionIdRef.current = result.sessionId;
-      if (result.scene) history.markSaved(result.scene, result.committedRevision ?? flushed.revision);
-      setPhotoshopMetadata(result.metadata);
-      setVersionSaveDialogOpen(false); setVersionName(''); setVersionNote('');
-      settleCurrentOperation(requestId, 'success', `已保存 Photoshop 版本 ${result.version.name}`);
-    } catch (error) { settleCurrentOperation(requestId, 'error', `保存 Photoshop 版本失败：${String(error)}`); }
-  }, [api, beginOperation, clearCurrentOperation, history, photoshopDocumentBlocked, settleCurrentOperation, versionName, versionNote]);
-
-  const openPhotoshopVersionSaveDialog = useCallback(async () => {
-    if (!api || photoshopDocumentBlocked) return;
-    const result = await api.getPhotoshopDocumentInfo();
-    if (!result.ok || !result.documentName) {
-      setStatus(result.message ?? '无法读取 Photoshop 当前文档名称');
-      return;
-    }
-    setVersionName(result.documentName);
-    setVersionNote('');
-    setVersionSaveDialogOpen(true);
-  }, [api, photoshopDocumentBlocked]);
-
-  const openPhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
-    if (!api || photoshopDocumentBlocked) return;
-    const result = await api.openPhotoshopVersion(projectSessionIdRef.current, version.id);
-    setStatus(result.ok ? (result.message ?? `已打开 ${version.name}`) : (result.message ?? '无法打开 Photoshop 版本'));
-  }, [api, photoshopDocumentBlocked]);
-
-  const deletePhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
-    if (!api || photoshopDocumentBlocked || !window.confirm(`确定删除版本“${version.name}”？此操作会从 .yoi 中移除完整分层文件。`)) return;
-    const flushed = history.flushViewport(liveViewportRef.current);
-    const preview = await renderProjectPreview(flushed.scene);
-    const result = await api.deletePhotoshopVersion(projectSessionIdRef.current, serializeProjectScene(flushed.scene), photoshopMetadataRef.current, version.id, flushed.revision, preview);
-    if (result.metadata) setPhotoshopMetadata(result.metadata);
-    if (result.sessionId) projectSessionIdRef.current = result.sessionId;
-    if (result.scene) history.markSaved(result.scene, result.committedRevision ?? flushed.revision);
-    setStatus(result.metadata ? `已删除版本 ${version.name}` : (result.message ?? '删除 Photoshop 版本失败'));
-  }, [api, history, photoshopDocumentBlocked]);
-
-  const placePhotoshopVersionPreview = useCallback(async (version: PhotoshopVersionRecord, placement?: { screenX: number; screenY: number }) => {
-    const source: ImportedImage = {
-      name: `${version.name}.png`, assetId: version.previewAssetId, asset: version.previewAsset, sourceType: 'file',
-    };
-    await prepareAndAddImages([source], placement ?? { screenX: window.innerWidth / 2, screenY: window.innerHeight / 2 });
-    setStatus(`已将版本 ${version.name} 的预览放入画板`);
-  }, [prepareAndAddImages]);
-
   const commands = useMemo(() => createAppCommandRegistry([
     { id: 'edit.undo', enabled: history.canUndo, execute: history.undo },
     { id: 'edit.redo', enabled: history.canRedo, execute: history.redo },
@@ -1518,7 +1433,7 @@ export default function App() {
         if (renamingGroupId) setRenamingGroupId(undefined);
         else if (contextMenu) setContextMenu(undefined);
         else if (comparisonVersionId) closeVersionComparison();
-        else if (photoshopVersionsOpen) setPhotoshopVersionsOpen(false);
+        else if (photoshopVersionsOpen) closeVersionsPanel();
         else if (outlineOpen) setOutlineOpen(false);
         else if (propertiesOpen) setPropertiesOpen(false);
         else if (selectedVisualMarkId) setSelectedVisualMarkId(undefined);
@@ -1542,7 +1457,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [activeColorPickerShortcut, api, closeVersionComparison, commands, comparisonVersionId, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, photoshopVersionsOpen, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
+  }, [activeColorPickerShortcut, api, closeVersionComparison, closeVersionsPanel, commands, comparisonVersionId, contextMenu, deleteSelectedVisualMark, detachSelectedImages, drawingCollaborationMode, exportItems, fitCanvas, focusStep, history, importImages, layout, moveLayer, mutateSelected, newScene, open, outlineOpen, packAndFit, photoshopVersionsOpen, propertiesOpen, recent, renameGroup, renamingGroupId, resetZoom, restoreFullImages, save, selectedIds.length, selectedItems, selectedVisualMarkId, setMode, shortcuts, toggleFocus, ungroupSelected, visualNotesEnabled, windowMode, zoomBy]);
 
   useEffect(() => {
     const over = (event: DragEvent) => {
@@ -1643,12 +1558,12 @@ export default function App() {
     { type: 'item', label: `${history.scene.name}${history.dirty ? '  • 未保存' : ''}`, disabled: true },
     { type: 'separator' },
     { type: 'item', label: '大纲视图', checked: outlineOpen, action: () => {
-      if (!outlineOpen) { setPhotoshopVersionsOpen(false); closeVersionComparison(); }
+      if (!outlineOpen) { closeVersionsPanel(); closeVersionComparison(); }
       setOutlineOpen((value) => !value);
     } },
     { type: 'item', label: '版本视图', checked: photoshopVersionsOpen, action: () => {
-      if (!photoshopVersionsOpen) { setOutlineOpen(false); closeVersionComparison(); }
-      setPhotoshopVersionsOpen((value) => !value);
+      if (!photoshopVersionsOpen) setOutlineOpen(false);
+      toggleVersionsPanel();
     } },
     { type: 'separator' },
     {
@@ -1927,7 +1842,7 @@ export default function App() {
       open={photoshopVersionsOpen && !comparisonVersionId}
       versions={photoshopMetadata.versions}
       documentBlocked={photoshopDocumentBlocked}
-      onClose={() => setPhotoshopVersionsOpen(false)}
+      onClose={closeVersionsPanel}
       onSaveVersion={() => { void openPhotoshopVersionSaveDialog(); }}
       onOpenVersion={(version) => { void openPhotoshopVersion(version); }}
       onPlacePreview={(version) => { void placePhotoshopVersionPreview(version); }}
@@ -1987,30 +1902,23 @@ export default function App() {
         })} /> : null;
       })()}
 
-      {versionSaveDialogOpen && <div className="photoshop-version-dialog-backdrop no-drag" onPointerDown={(event) => {
-        if (event.target === event.currentTarget) setVersionSaveDialogOpen(false);
-      }}><form className="photoshop-version-dialog" onSubmit={(event) => { event.preventDefault(); void savePhotoshopVersion(); }}>
-        <header><div><strong>保存 Photoshop 版本</strong><span>完整分层 PSD/PSB 将嵌入当前 .yoi</span></div>
-          <button type="button" title="取消" onClick={() => setVersionSaveDialogOpen(false)}><UiIcon name="close" /></button></header>
-        <label><span>版本名称</span><input autoFocus maxLength={160} value={versionName} onChange={(event) => setVersionName(event.target.value)} /></label>
-        <label><span>备注（可选）</span><textarea maxLength={4000} rows={4} value={versionNote} onChange={(event) => setVersionNote(event.target.value)} /></label>
-        <footer><button type="button" onClick={() => setVersionSaveDialogOpen(false)}>取消</button><button type="submit" disabled={!versionName.trim()}>保存版本</button></footer>
-      </form></div>}
+    <PhotoshopVersionSaveDialog
+      open={versionSaveDialogOpen}
+      name={versionName}
+      note={versionNote}
+      onNameChange={setVersionName}
+      onNoteChange={setVersionNote}
+      onCancel={closeVersionSaveDialog}
+      onSubmit={() => { void savePhotoshopVersion(); }}
+    />
 
-    {renamingGroupId && <div className="group-rename-overlay no-drag" onMouseDown={finishGroupRename}>
-      <div className="group-rename-card" onMouseDown={(event) => event.stopPropagation()}>
-        <span>重命名分组框</span>
-        <input autoFocus value={renameDraft} onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => setRenameDraft(event.target.value)}
-          onCompositionStart={() => { renameComposingRef.current = true; }}
-          onCompositionEnd={() => { window.setTimeout(() => { renameComposingRef.current = false; }, 0); }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !renameComposingRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); finishGroupRename(); }
-            if (event.key === 'Escape') cancelGroupRename();
-          }} />
-        <small>Enter 或点击外部保存 · Esc 取消</small>
-      </div>
-    </div>}
+    {renamingGroupId && <GroupRenameDialog
+      key={renamingGroupId}
+      draft={renameDraft}
+      onDraftChange={setRenameDraft}
+      onCancel={cancelGroupRename}
+      onSubmit={finishGroupRename}
+    />}
 
     <VisualNotesToolbar
       enabled={visualNotesEnabled}
