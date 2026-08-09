@@ -1,0 +1,3 @@
+LIBRARY libvips-42.dll
+EXPORTS
+  g_object_unref

@@ -2,7 +2,7 @@
 
 > 接手开发前请先阅读 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 和 [`docs/DEBUGGING.md`](./docs/DEBUGGING.md)。历史性能证据保存在 [`docs/performance/PERFORMANCE_AUDIT.md`](./docs/performance/PERFORMANCE_AUDIT.md)。
 
-Yoiniwa（宵庭）是一款 Windows 优先、完全离线的参考图画板。项目使用 Electron、React、TypeScript 和 PixiJS 构建；新建或保存工程默认使用 `.yoi` 扩展名，并会在 Windows 资源管理器显示画布缩略图。旧 `.refcanvas` 工程仍可打开，下一次保存会迁移为 `.yoi`。
+Yoiniwa（宵庭）是一款 Windows x64、完全离线的参考图画板。项目使用 Tauri 2、Rust、React、TypeScript 和 PixiJS 构建；新建或保存工程默认使用 `.yoi` 扩展名，并会在 Windows 资源管理器显示画布缩略图。旧 `.refcanvas` 工程仍可打开，下一次保存会迁移为 `.yoi`。
 
 ## 已实现
 
@@ -26,16 +26,16 @@ npm install
 npm run dev
 ```
 
-生产构建和测试：
+编译与打包：
 
 ```powershell
-npm test
-npm run check
-npm run build
-npm run dist
+npm run typecheck
+cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+npm run build:web
+npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
 ```
 
-Windows 安装包输出到 `release` 目录。
+Windows 安装包输出到 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`。`npm run dist` 会先重建 Explorer 缩略图提供程序，只有修改该 C++ 组件时才需要使用。
 
 ## 常用操作
 

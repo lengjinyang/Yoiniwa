@@ -319,7 +319,7 @@ export interface NativePointerInput {
   visibleBounds?: { left: number; top: number; right: number; bottom: number };
 }
 
-interface RefCanvasAPI {
+export interface RefCanvasAPI {
   importImages(requestId?: string): Promise<ImportedImage[]>;
   registerImagePaths(paths: string[], sourceType: ImageItem['sourceType']): Promise<ImportedImage[]>;
   registerImageUrls(urls: string[]): Promise<ImportedImage[]>;
@@ -330,6 +330,7 @@ interface RefCanvasAPI {
   cancelPrewarmImages(requestId: string): void;
   onPrewarmProgress(callback: (progress: ImagePrewarmProgress) => void): () => void;
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
+  onFilesDropped(callback: (drop: { paths: string[]; clientX: number; clientY: number }) => void): () => void;
   pathForFile(file: File): string | undefined;
   openProject(path?: string): Promise<ProjectOpenResult>;
   commitProject(request: ProjectCommitRequest): Promise<ProjectCommitResult>;

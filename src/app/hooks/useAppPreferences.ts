@@ -23,7 +23,7 @@ interface UseAppPreferencesOptions {
 export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus }: UseAppPreferencesOptions) {
   const [cacheInfo, setCacheInfo] = useState<CacheInfo>();
   const [cacheChanging, setCacheChanging] = useState(false);
-  const [colorPickerShortcut, setColorPickerShortcut] = useState<ColorPickerShortcut>(() => {
+  const [colorPickerShortcut] = useState<ColorPickerShortcut>(() => {
     const query = new URLSearchParams(window.location.search);
     if (query.has('smoke') || query.has('stress')) return 's';
     try { return localStorage.getItem(COLOR_PICKER_SHORTCUT_STORAGE_KEY) === 'alt' ? 'alt' : 's'; }

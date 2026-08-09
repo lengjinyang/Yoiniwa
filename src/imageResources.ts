@@ -353,8 +353,8 @@ export function useImageResource(
       failed += 1;
       if (failed < uniqueCandidates.length || canceled) return;
       if (exactVariant === 'thumb128' && item.assetId && !item.dataUrl) {
-        // Some valid WebP/GIF files are decoded by Chromium but not by
-        // Electron's nativeImage fallback. Decode the original once in the
+        // Some valid WebP/GIF files are decoded by Chromium but not by the
+        // native image pipeline. Decode the original once in the
         // renderer and cache only a bounded preview so the object cannot remain
         // selectable-but-blank or consume an original-sized atlas slot.
         void preloadImagePreview(item, targetRevision).then((ready) => {

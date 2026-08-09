@@ -1,0 +1,24 @@
+LIBRARY libvips-42.dll
+EXPORTS
+  vips_init
+  vips_leak_set
+  vips_shutdown
+  vips_concurrency_set
+  vips_error_buffer
+  vips_error_clear
+  vips_image_new_from_file
+  vips_image_new_from_buffer
+  vips_image_get_width
+  vips_image_get_height
+  vips_image_get_bands
+  vips_image_get_orientation
+  vips_image_hasalpha
+  vips_image_write_to_memory
+  vips_thumbnail
+  vips_thumbnail_buffer
+  vips_thumbnail_image
+  vips_pngsave_buffer
+  vips_webpsave_buffer
+  vips_extract_area
+  vips_autorot
+  vips_resize

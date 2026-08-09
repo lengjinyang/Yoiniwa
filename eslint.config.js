@@ -2,13 +2,13 @@ import eslint from '@eslint/js';
 import reactHooks from 'eslint-plugin-react-hooks';
 import tseslint from 'typescript-eslint';
 
-const tsFiles = ['src/**/*.{ts,tsx}', 'electron/**/*.{ts,cts}'];
-const jsFiles = ['electron/**/*.js', 'electron/**/*.cjs', 'scripts/**/*.mjs'];
+const tsFiles = ['src/**/*.{ts,tsx}'];
+const jsFiles = ['scripts/**/*.mjs'];
 
 export default tseslint.config(
   {
     ignores: [
-      'dist/**', 'dist-electron/**', 'release/**', 'node_modules/**', 'performance-results/**',
+      'dist/**', 'release/**', 'src-tauri/target/**', 'node_modules/**', 'performance-results/**',
       '.project-bench-user-data*/**', '.refcanvas-test-session/**',
     ],
   },
@@ -39,9 +39,5 @@ export default tseslint.config(
       'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'no-constant-condition': 'off',
     },
-  },
-  {
-    files: ['electron/**/*.cts'],
-    rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
 );

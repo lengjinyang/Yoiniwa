@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Yoiniwa",
+  "version": "0.1.0",
+  "identifier": "com.yoiniwa.app",
+  "build": {
+    "beforeDevCommand": "vite --strictPort",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build:web",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "未命名画板 · Yoiniwa",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 1,
+        "minHeight": 1,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "visible": false,
+        "resizable": true,
+        "focus": false,
+        "dragDropEnabled": true,
+        "backgroundColor": "#00000000"
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": { "enable": true, "scope": ["$APPDATA/Yoiniwa/**", "$TEMP/**"] }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["../build/yoiniwa.ico"],
+    "resources": {
+      "resources/native-window-move.ps1": "resources/native-window-move.ps1",
+      "resources/photoshop-color-bridge.ps1": "resources/photoshop-color-bridge.ps1",
+      "resources/photoshop-focus-bridge.ps1": "resources/photoshop-focus-bridge.ps1",
+      "resources/photoshop-document-bridge.ps1": "resources/photoshop-document-bridge.ps1",
+      "vendor/libvips/libvips-42.dll": "libvips-42.dll",
+      "../build/thumbnail-provider/YoiniwaThumbnailProvider.dll": "thumbnail-provider/YoiniwaThumbnailProvider.dll"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "nsis": {
+        "installMode": "perMachine",
+        "displayLanguageSelector": true,
+        "languages": ["SimpChinese", "English"],
+        "startMenuFolder": "Yoiniwa",
+        "installerIcon": "../build/yoiniwa.ico",
+        "customLanguageFiles": {},
+        "installerHooks": "../build/tauri-installer-hooks.nsh"
+      }
+    },
+    "fileAssociations": [
+      { "ext": ["yoi"], "name": "Yoiniwa Board", "description": "Yoiniwa reference board", "role": "Editor" },
+      { "ext": ["refcanvas"], "name": "Yoiniwa Legacy Board", "description": "Legacy Yoiniwa reference board", "role": "Editor" }
+    ]
+  }
+}

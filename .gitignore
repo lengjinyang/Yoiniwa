@@ -1,9 +1,10 @@
 node_modules/
 dist/
+src-tauri/target/
+src-tauri/vendor/libvips/*.exp
 release/
 *.log
 .vite/
-dist-electron/
 performance-results/
 .dev-smoke-user-data/
 .project-bench-user-data*/

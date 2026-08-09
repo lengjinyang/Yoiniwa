@@ -5,7 +5,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const source = path.join(root, 'electron', 'thumbnail-provider', 'YoiniwaThumbnailProvider.cpp');
+const source = path.join(root, 'build', 'thumbnail-provider', 'YoiniwaThumbnailProvider.cpp');
 const outputDirectory = path.join(root, 'build', 'thumbnail-provider');
 const output = path.join(outputDirectory, 'YoiniwaThumbnailProvider.dll');
 

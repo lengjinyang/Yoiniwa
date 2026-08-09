@@ -236,10 +236,17 @@ export function useImageImport({
     window.addEventListener('dragover', over);
     window.addEventListener('drop', drop);
     window.addEventListener('paste', paste);
+    const disposeNativeDrop = api?.onFilesDropped(({ paths, clientX, clientY }) => {
+      void api.registerImagePaths(paths, 'drop').then(async (sources) => {
+        if (!sources.length) { setStatus('没有识别到可导入的图片'); return; }
+        await prepareAndAddImages(sources, { screenX: clientX, screenY: clientY, pack: sources.length > 1 });
+      }).catch((error) => setStatus(`拖入图片失败：${error instanceof Error ? error.message : String(error)}`));
+    });
     return () => {
       window.removeEventListener('dragover', over);
       window.removeEventListener('drop', drop);
       window.removeEventListener('paste', paste);
+      disposeNativeDrop?.();
     };
   }, [api, internalDropHandlerRef, internalDropMime, lastPointerRef, prepareAndAddImages, setStatus]);
 
