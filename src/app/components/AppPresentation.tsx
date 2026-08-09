@@ -314,12 +314,23 @@ export function AppOverlays({
       <h1>建立你的参考画板</h1>
       <p>拖入图片、粘贴截图，或从电脑中选择图片。</p>
       <Button onClick={imageImport.importImages}>选择图片</Button>
+      {project.recent.length > 0 && <section className="empty-recent" aria-label="最近的文件">
+        <header><strong>最近的文件</strong><span>{project.recent.length}</span></header>
+        <div className="empty-recent-list">
+          {project.recent.slice(0, 6).map((item) => <button type="button" key={item.path}
+            title={item.path} onClick={() => { void project.open(item.path); }}>
+            <span className="empty-recent-icon"><UiIcon name="file" size={17} /></span>
+            <span className="empty-recent-copy"><strong>{item.name}</strong><small>{item.path}</small></span>
+            <time dateTime={item.openedAt}>{new Date(item.openedAt).toLocaleDateString()}</time>
+          </button>)}
+        </div>
+      </section>}
       <small>右键菜单/拖动窗口 · {colorPicker.activeShortcut === 's'
         ? 'S+左键取色 · Alt+左键或中键平移'
         : 'Alt+笔尖取色 · 中键平移'} · 空格聚焦</small>
     </div>}
 
-    <ImageImportProgress progress={imageImport.progress} onCancel={imageImport.cancelImport} />
-    <StatusToast status={statusOperations.status} operation={statusOperations.operation} />
+    <ImageImportProgress progress={imageImport.progress} />
+    {!imageImport.progress && <StatusToast status={statusOperations.status} operation={statusOperations.operation} />}
   </>;
 }

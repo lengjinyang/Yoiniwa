@@ -256,9 +256,5 @@ export function useImageImport({
     return () => window.removeEventListener('refcanvas-smoke-add-paths', addTestPaths);
   }, [api, prepareAndAddImages, setStatus]);
 
-  const cancelImport = useCallback(() => {
-    if (progress) api?.cancelPrewarmImages(progress.requestId);
-  }, [api, progress]);
-
-  return { progress, importImages, prepareAndAddImages, cancelImport };
+  return { progress, importImages, prepareAndAddImages };
 }

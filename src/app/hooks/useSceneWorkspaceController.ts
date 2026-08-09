@@ -401,8 +401,8 @@ export function useSceneWorkspaceController({
     });
   }, [history, targetIds]);
 
-  const commitItemChanges = useCallback((changes: Array<Partial<ImageItem> & { id: string }>) => {
-    history.commit((scene) => applyImageChanges(scene, changes));
+  const commitItemChanges = useCallback((changes: Array<Partial<ImageItem> & { id: string }>, snap = true) => {
+    history.commit((scene) => applyImageChanges(scene, changes, snap));
   }, [history]);
 
   const fitBounds = useCallback((bounds: { x: number; y: number; width: number; height: number }, margin = 80) => {

@@ -111,6 +111,11 @@ export class PixiRenderer {
     this.groupResize?.setMuted(muted);
     this.requestRender();
   }
+  setTransformOverlaysHidden(hidden: boolean) {
+    this.selection?.setHidden(hidden);
+    this.groupResize?.setHidden(hidden);
+    this.requestRender();
+  }
   setGroupDropTarget(id?: string) { return this.groups?.setDropTarget(id) ?? false; }
   setVisualNotesTemporaryHidden(hidden: boolean) { this.visualNotes?.setTemporaryHidden(hidden); this.requestRender(); }
   setVisualNotePreview(mark?: VisualMark) { this.visualNotes?.setPreview(mark); this.requestRender(); }
@@ -118,8 +123,8 @@ export class PixiRenderer {
     this.visualNotes?.setEraserCursor(point, radiusScreen); this.requestRender();
   }
   setSelectedVisualNote(id?: string) { this.visualNotes?.setSelection(id); this.requestRender(); }
-  drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[]) {
-    this.selection?.draw(items, scale, box, lasso);
+  drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[], controlsVisible = true) {
+    this.selection?.draw(items, scale, box, lasso, controlsVisible);
     this.requestRender();
   }
   hitSelectionHandle(point: { x: number; y: number }): TransformHandle | undefined { return this.selection?.hit(point); }

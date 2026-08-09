@@ -12,6 +12,15 @@ import { transformImageSelection } from './TransformController';
 import { resizeGroupFrameByDelta, type GroupFrameBounds, type GroupResizeHandle } from './GroupResizeController';
 import { groupHeaderWorldBounds } from '../groups/GroupPresentation';
 
+const rotationCursor = (degrees: 0 | 90 | 180 | 270) => `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18' fill='none'%3E%3Cg transform='rotate(${degrees}%209%209)' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 4.5h-7q-3 0-3 3v7M12.1 2.1l2.4 2.4-2.4 2.4M2.1 12.1l2.4 2.4 2.4-2.4' stroke='%23101317' stroke-width='2.8'/%3E%3Cpath d='M14.5 4.5h-7q-3 0-3 3v7M12.1 2.1l2.4 2.4-2.4 2.4M2.1 12.1l2.4 2.4 2.4-2.4' stroke='%23f1f3f8' stroke-width='1.15'/%3E%3C/g%3E%3C/svg%3E") 9 9, crosshair`;
+
+const ROTATE_CURSORS = {
+  'north-west': rotationCursor(0),
+  'north-east': rotationCursor(90),
+  'south-east': rotationCursor(180),
+  'south-west': rotationCursor(270),
+} as const;
+
 type ImageChange = Partial<ImageItem> & { id: string };
 export type LassoPoint = { x: number; y: number };
 type Drag =
@@ -19,6 +28,7 @@ type Drag =
   | { kind: 'box'; start: { x: number; y: number }; additive: string[] }
   | { kind: 'lasso'; additive: string[]; points: LassoPoint[] }
   | { kind: 'transform'; start: { x: number; y: number }; originals: ImageItem[]; bounds: NonNullable<ReturnType<typeof unionImageBounds>>; handle: TransformHandle }
+  | { kind: 'group-rotate'; start: { x: number; y: number }; originals: ImageItem[]; bounds: GroupFrameBounds }
   | { kind: 'group'; start: { x: number; y: number }; last: { x: number; y: number }; id: string }
   | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds };
 
@@ -28,8 +38,8 @@ interface SelectionControllerOptions {
   camera: Camera;
   lifecycle: RuntimeLifecycle;
   scene: () => SceneStore | undefined;
-  preview(changes: ImageChange[]): void;
-  commit(changes: ImageChange[]): void;
+  preview(changes: ImageChange[], snap?: boolean): void;
+  commit(changes: ImageChange[], snap?: boolean): void;
   selectionChanged(ids: string[], source?: 'lasso'): void;
   lassoSelectionChanged(points?: LassoPoint[]): void;
   groupSelectionChanged(id?: string): void;
@@ -40,7 +50,8 @@ interface SelectionControllerOptions {
   openGroupMenu(id: string, position: { x: number; y: number }): void;
   expandGroup(id: string): void;
   groupHeaderHoverChanged(id?: string, action?: ReturnType<typeof groupHeaderActionAtPoint>): void;
-  drawOverlay(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[]): void;
+  transformOverlaysHidden(hidden: boolean): void;
+  drawOverlay(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[], controlsVisible?: boolean): void;
   hitHandle(point: { x: number; y: number }): TransformHandle | undefined;
   hitGroupHandle(point: { x: number; y: number }): GroupResizeHandle | undefined;
   interactionBlocked(event?: PointerEvent): boolean;
@@ -57,6 +68,7 @@ export class SelectionController {
   private selectedGroupId?: string;
   private boxSelectHeld = false;
   private lassoPoints: LassoPoint[] = [];
+  private overlaysHidden = false;
 
   constructor(private readonly options: SelectionControllerOptions) {}
 
@@ -81,6 +93,7 @@ export class SelectionController {
     };
     const disposers = [
       this.options.input.onPointerDown(down), this.options.input.onPointerMove(move), this.options.input.onPointerUp(up),
+      this.options.input.onPointerCancel(up),
     ];
     window.addEventListener('keydown', keyDown, true);
     window.addEventListener('keyup', keyUp, true);
@@ -110,7 +123,7 @@ export class SelectionController {
     const scene = this.options.scene();
     if (!scene) return;
     this.options.drawOverlay(scene.images().filter((item) => this.selection.has(item.id)), this.options.camera.snapshot().scale,
-      undefined, this.lassoPoints);
+      undefined, this.lassoPoints, this.drag?.kind !== 'move');
   }
 
   private local(event: PointerEvent) {
@@ -148,10 +161,21 @@ export class SelectionController {
       return;
     }
     this.clearLasso();
+    if (groupHandle === 'rotate' && selectedGroup && !selectedGroup.collapsed) {
+      const snapshot = scene.snapshot();
+      const originals = imagesInGroup(snapshot.groups, snapshot.items, selectedGroup.id);
+      if (!originals.length) return;
+      this.beginPointer(event);
+      this.drag = { kind: 'group-rotate', start: world, originals,
+        bounds: { x: selectedGroup.x, y: selectedGroup.y, width: selectedGroup.width, height: selectedGroup.height } };
+      this.setTransformOverlaysHidden(true);
+      return;
+    }
     if (groupHandle && selectedGroup && !selectedGroup.collapsed && !selectedGroup.sizeLocked) {
       this.beginPointer(event);
       this.drag = { kind: 'group-resize', start: world, id: selectedGroup.id, original: { ...selectedGroup }, handle: groupHandle,
         bounds: { x: selectedGroup.x, y: selectedGroup.y, width: selectedGroup.width, height: selectedGroup.height } };
+      this.setTransformOverlaysHidden(true);
       return;
     }
     if (headerGroup && headerAction !== 'drag') {
@@ -176,6 +200,7 @@ export class SelectionController {
     this.beginPointer(event);
     if (handle && selected.length && selectionBounds) {
       this.drag = { kind: 'transform', start: world, originals: selected.map((item) => ({ ...item })), bounds: selectionBounds, handle };
+      this.setTransformOverlaysHidden(true);
       return;
     }
     // The title bar is the group's interaction surface. It must win over
@@ -185,6 +210,7 @@ export class SelectionController {
       this.selectedGroupId = headerGroup.id;
       this.options.selectionChanged([]); this.options.groupSelectionChanged(headerGroup.id);
       this.drag = { kind: 'group', start: world, last: world, id: headerGroup.id };
+      this.setTransformOverlaysHidden(true);
       this.options.element.style.cursor = 'grabbing';
       return;
     }
@@ -197,6 +223,7 @@ export class SelectionController {
       this.emitSelection();
       const movable = scene.images().filter((item) => this.selection.has(item.id) && !item.locked);
       this.drag = { kind: 'move', start: world, originals: movable.map((item) => ({ ...item })) };
+      this.setTransformOverlaysHidden(true);
     } else {
       const additive = event.shiftKey || event.ctrlKey || event.metaKey ? this.selection.values() : [];
       if (!additive.length) {
@@ -226,9 +253,26 @@ export class SelectionController {
       const groupHandle = this.options.hitGroupHandle(world);
       if (groupHandle) {
         this.options.groupHeaderHoverChanged();
-        this.options.element.style.cursor = groupHandle === 'north' || groupHandle === 'south' ? 'ns-resize'
+        const selectedGroup = scene?.groups().find((group) => group.id === this.selectedGroupId);
+        const header = selectedGroup ? groupHeaderWorldBounds(selectedGroup, scale) : undefined;
+        const groupBounds = selectedGroup && header
+          ? { x: selectedGroup.x, y: header.y, width: selectedGroup.width,
+            height: selectedGroup.y + selectedGroup.height - header.y }
+          : undefined;
+        this.options.element.style.cursor = groupHandle === 'rotate' && groupBounds
+          ? rotationCursorAtPoint(world, groupBounds)
+          : groupHandle === 'north' || groupHandle === 'south' ? 'ns-resize'
           : groupHandle === 'west' || groupHandle === 'east' ? 'ew-resize'
             : groupHandle === 'north-west' || groupHandle === 'south-east' ? 'nwse-resize' : 'nesw-resize';
+        return;
+      }
+      const imageHandle = this.options.hitHandle(world);
+      if (imageHandle) {
+        this.options.groupHeaderHoverChanged();
+        const selectionBounds = scene ? unionImageBounds(scene.images().filter((item) => this.selection.has(item.id))) : undefined;
+        this.options.element.style.cursor = imageHandle === 'rotate' && selectionBounds
+          ? rotationCursorAtPoint(world, selectionBounds)
+          : imageHandle === 'north-west' || imageHandle === 'south-east' ? 'nwse-resize' : 'nesw-resize';
         return;
       }
       const group = scene ? groupHeaderAtPoint(scene.groups(), world, scale) : undefined;
@@ -241,6 +285,8 @@ export class SelectionController {
     }
     if (!this.pointer.update(event)) return;
     if (this.tryStartExternalDrag(event)) return;
+    if (this.drag.kind === 'move' || this.drag.kind === 'transform' || this.drag.kind === 'group'
+      || this.drag.kind === 'group-resize' || this.drag.kind === 'group-rotate') this.setTransformOverlaysHidden(true);
     if (this.drag.kind === 'box' || this.drag.kind === 'lasso') {
       const local = this.local(event);
       const width = this.options.element.clientWidth; const height = this.options.element.clientHeight;
@@ -255,7 +301,7 @@ export class SelectionController {
       const dx = world.x - this.drag.start.x;
       const dy = world.y - this.drag.start.y;
       this.pendingChanges = this.drag.originals.map((item) => ({ id: item.id, x: item.x + dx, y: item.y + dy }));
-      this.options.preview(this.pendingChanges);
+      this.options.preview(this.pendingChanges, false);
     } else if (this.drag.kind === 'box') {
       const box = boxFromPoints(this.drag.start, world);
       const group = collapsedGroupInSelectionBox(scene.groups(), box, this.options.camera.snapshot().scale);
@@ -278,6 +324,9 @@ export class SelectionController {
     } else if (this.drag.kind === 'transform') {
       this.pendingChanges = transformImageSelection({ ...this.drag, current: world });
       this.options.preview(this.pendingChanges);
+    } else if (this.drag.kind === 'group-rotate') {
+      this.pendingChanges = transformImageSelection({ ...this.drag, current: world, handle: 'rotate' });
+      this.options.preview(this.pendingChanges);
     } else if (this.drag.kind === 'group') {
       this.options.previewGroup(this.drag.id, world.x - this.drag.last.x, world.y - this.drag.last.y);
       this.drag.last = world;
@@ -292,6 +341,7 @@ export class SelectionController {
 
   private pointerUp(event: PointerEvent) {
     if (!this.drag || !this.pointer.end(event)) return;
+    this.setTransformOverlaysHidden(false);
     if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);
     if (this.drag.kind === 'box' || this.drag.kind === 'lasso') this.options.cameraChanged(true);
     if (this.drag.kind === 'box') {
@@ -305,7 +355,7 @@ export class SelectionController {
       this.options.groupSelectionChanged(undefined);
       this.options.lassoSelectionChanged(lasso);
     }
-    if (this.pendingChanges.length) this.options.commit(this.pendingChanges);
+    if (this.pendingChanges.length) this.options.commit(this.pendingChanges, this.drag.kind !== 'move');
     if (this.drag.kind === 'group') this.options.commitGroup(this.drag.id, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
     if (this.drag.kind === 'group-resize') this.options.commitGroupResize(this.drag.id, this.drag.bounds);
     this.pendingChanges = [];
@@ -337,10 +387,11 @@ export class SelectionController {
     const start = this.options.externalDrag(this.drag.originals);
     if (!start) return false;
     if (this.pendingChanges.length) {
-      this.options.preview(this.drag.originals.map((item) => ({ id: item.id, x: item.x, y: item.y })));
+      this.options.preview(this.drag.originals.map((item) => ({ id: item.id, x: item.x, y: item.y })), false);
     }
     if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);
     this.pointer.cancel();
+    this.setTransformOverlaysHidden(false);
     this.pendingChanges = [];
     this.drag = undefined;
     this.options.element.style.cursor = '';
@@ -352,6 +403,12 @@ export class SelectionController {
   private beginPointer(event: PointerEvent) {
     this.pointer.begin(event);
     try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic benchmark events have no native capture target. */ }
+  }
+
+  private setTransformOverlaysHidden(hidden: boolean) {
+    if (this.overlaysHidden === hidden) return;
+    this.overlaysHidden = hidden;
+    this.options.transformOverlaysHidden(hidden);
   }
 }
 
@@ -367,4 +424,30 @@ function isUsableLasso(points: LassoPoint[]) {
   if (points.length < 3) return false;
   const bounds = lassoBounds(points);
   return bounds.width > 1 && bounds.height > 1;
+}
+
+function rotationCursorAtPoint(point: LassoPoint, bounds: GroupFrameBounds) {
+  const vertical = point.y < bounds.y + bounds.height / 2 ? 'north' : 'south';
+  const horizontal = point.x < bounds.x + bounds.width / 2 ? 'west' : 'east';
+  return ROTATE_CURSORS[`${vertical}-${horizontal}` as keyof typeof ROTATE_CURSORS];
+}
+
+function imagesInGroup(groups: ImageGroup[], images: ImageItem[], rootId: string) {
+  const imageById = new Map(images.map((item) => [item.id, item]));
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const imageIds = new Set<string>();
+  const visited = new Set<string>();
+  const collect = (groupId: string) => {
+    if (visited.has(groupId)) return;
+    visited.add(groupId);
+    groupById.get(groupId)?.members.forEach((member) => {
+      if (member.type === 'image') imageIds.add(member.id);
+      else if (member.type === 'group') collect(member.id);
+    });
+  };
+  collect(rootId);
+  return [...imageIds].flatMap((id) => {
+    const item = imageById.get(id);
+    return item ? [{ ...item }] : [];
+  });
 }

@@ -24,6 +24,7 @@
   --accent-soft: rgba(112, 140, 255, .14);
   --accent-pressed: rgba(112, 140, 255, .2);
   --accent-border: rgba(112, 140, 255, .32);
+  --accent-border-hover: rgba(112, 140, 255, .52);
   --accent-fill: #526bd4;
   --accent-fill-hover: #5f78df;
   --accent-fill-border: #657de0;

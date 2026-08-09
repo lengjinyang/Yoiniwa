@@ -1188,6 +1188,21 @@ function photoshopPreviewArrayBuffer(value: Buffer): ArrayBuffer | undefined {
   return new Uint8Array(value).slice().buffer;
 }
 
+async function photoshopVersionPreviewBuffer(sourcePath: string) {
+  const sharpOptions = { sequentialRead: true, limitInputPixels: false } as const;
+  const metadata = await sharp(sourcePath, sharpOptions).metadata();
+  const longestSide = Math.max(metadata.width ?? 0, metadata.height ?? 0);
+  if (metadata.format === 'jpeg' && longestSide > 0 && longestSide <= 2048) {
+    const source = await fs.readFile(sourcePath);
+    if (source.length <= 32 * 1024 * 1024) return source;
+  }
+  return sharp(sourcePath, sharpOptions)
+    .resize({ width: 2048, height: 2048, fit: 'inside', withoutEnlargement: true })
+    .flatten({ background: '#ffffff' })
+    .jpeg({ quality: 86, chromaSubsampling: '4:4:4' })
+    .toBuffer();
+}
+
 async function readState() {
   try { return JSON.parse(await fs.readFile(statePath(), 'utf8')); }
   catch { return { recent: [] }; }
@@ -2730,7 +2745,7 @@ handleIpc('photoshop:create-version', async (_event, sessionId, scene: Scene, ra
   const versionId = randomUUID();
   const psdPath = path.join(temporaryRoot, `${versionId}.psd`);
   const psbPath = path.join(temporaryRoot, `${versionId}.psb`);
-  const previewPath = path.join(temporaryRoot, `${versionId}.png`);
+  const previewPath = path.join(temporaryRoot, `${versionId}.jpg`);
   try {
     const capture = await enqueuePhotoshopOperation(() => {
       if (photoshopDocumentInteractionBlocked()) {
@@ -2746,7 +2761,7 @@ handleIpc('photoshop:create-version', async (_event, sessionId, scene: Scene, ra
     }
     const archivePath = capture.document.archivePath;
     const digest = await fileSha256(archivePath);
-    const preview = await registerAssetBuffer(`${name}.png`, await fs.readFile(previewPath), undefined, 'file');
+    const preview = await registerAssetBuffer(`${name}.jpg`, await photoshopVersionPreviewBuffer(previewPath), undefined, 'file');
     const version: PhotoshopVersionRecord = {
       id: versionId, name, note, createdAt: new Date().toISOString(), documentName: capture.document.documentName,
       width: capture.document.width, height: capture.document.height, colorMode: capture.document.colorMode,
