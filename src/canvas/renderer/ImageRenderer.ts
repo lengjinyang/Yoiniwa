@@ -9,6 +9,7 @@ import { RenderObjectRegistry } from './RenderObjectRegistry';
 import { TileRenderer } from './TileRenderer';
 import type { SceneBounds } from '../scene/SceneNode';
 import { shouldUseTiledImage } from '../textures/TileSelector';
+import { imageGrayscaleContrast } from '../../imageAdjustments';
 
 interface PendingSwap { entry: GpuTextureEntry; mip: number; token: number }
 interface ImageRenderObject {
@@ -43,6 +44,10 @@ function updateSprite(object: ImageRenderObject, item: ImageItem) {
   sprite.rotation = item.rotation * Math.PI / 180;
   sprite.alpha = item.opacity;
   sprite.zIndex = item.zIndex;
+  if (item.grayscale) {
+    object.grayscale.desaturate();
+    object.grayscale.contrast(imageGrayscaleContrast(item) - 1, true);
+  }
   sprite.filters = item.grayscale ? [object.grayscale] : [];
 }
 
@@ -153,7 +158,6 @@ export class ImageRenderer {
     if (!object) {
       const sprite = new Sprite(Texture.EMPTY);
       const grayscale = new ColorMatrixFilter();
-      grayscale.grayscale(1, false);
       const textures = this.textures;
       object = {
         sprite, grayscale, loadToken: 0, mipState: {}, lastRelevantAt: performance.now(),

@@ -41,6 +41,7 @@ export interface ImageItem {
   locked: boolean;
   hidden?: boolean;
   grayscale?: boolean;
+  grayscaleContrast?: number;
   tags?: string[];
   groupId?: string;
   crop: CropRect;

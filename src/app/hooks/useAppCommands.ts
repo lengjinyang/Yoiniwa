@@ -269,6 +269,9 @@ export function useAppCommands({
     },
     images: {
       mutate: workspace.mutateSelected,
+      preview: workspace.previewSelected,
+      beginAdjustment: history.beginTransaction,
+      commitAdjustment: history.commitTransaction,
       resetTransform: () => workspace.mutateSelected(resetImageTransform),
       moveLayer: workspace.moveLayer,
       restoreFull: workspace.restoreFullImages,

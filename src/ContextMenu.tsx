@@ -12,6 +12,8 @@ export type ContextMenuEntry =
       max: number;
       step?: number;
       onChange(value: number): void;
+      onInteractionStart?(): void;
+      onInteractionEnd?(): void;
     }
   | {
       type: 'item';
@@ -131,6 +133,20 @@ const MenuList = ({ entries, onClose, className = '', style, ref, portal, viewpo
         ? <li className="context-range" key={`${entry.label}-${index}`} onClick={(event) => event.stopPropagation()}>
             <div><span>{entry.label}</span><output>{Math.round(entry.value)}%</output></div>
             <input type="range" min={entry.min} max={entry.max} step={entry.step ?? 1} value={entry.value}
+              onPointerDown={entry.onInteractionStart}
+              onPointerUp={entry.onInteractionEnd}
+              onPointerCancel={entry.onInteractionEnd}
+              onKeyDown={(event) => {
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                  entry.onInteractionStart?.();
+                }
+              }}
+              onKeyUp={(event) => {
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                  entry.onInteractionEnd?.();
+                }
+              }}
+              onBlur={entry.onInteractionEnd}
               onChange={(event) => entry.onChange(Number(event.target.value))} />
           </li>
         : <li

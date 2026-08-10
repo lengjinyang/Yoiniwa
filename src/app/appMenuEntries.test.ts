@@ -48,7 +48,10 @@ describe('app export menu', () => {
         create: noop, addImages: noop, detachSelected: noop, renameSelected: noop,
         change: noop, ungroupSelected: noop, deleteSelected: noop,
       },
-      images: { mutate: noop, resetTransform: noop, moveLayer: noop, restoreFull: noop, showSource: noop },
+      images: {
+        mutate: noop, preview: noop, beginAdjustment: noop, commitAdjustment: noop,
+        resetTransform: noop, moveLayer: noop, restoreFull: noop, showSource: noop,
+      },
       photoshop: { blocked: false, sendSelected: noop, saveVersion: noop },
       layout: { targetCount: 1, run: noop, packAndFit: noop },
       view: { hasContent: true, focusSelected: noop, fitCanvas: noop, resetZoom: noop },

@@ -2,6 +2,7 @@ import type { ContextMenuEntry } from '../ContextMenu';
 import type { LayoutAction } from '../layout';
 import type { ImageGroup, ImageItem, RecentScene, Scene, WindowState } from '../types';
 import { shortcutDisplayName, type ShortcutPreferences } from '../keyboardShortcuts';
+import { imageGrayscaleContrast, setImageGrayscaleContrast } from '../imageAdjustments';
 import { appCommand, type AppCommandRegistry } from './AppCommand';
 
 interface BuildAppMenuEntriesOptions {
@@ -41,6 +42,9 @@ interface BuildAppMenuEntriesOptions {
   };
   images: {
     mutate(updater: (item: ImageItem) => void): void;
+    preview(updater: (item: ImageItem) => void): void;
+    beginAdjustment(): void;
+    commitAdjustment(): void;
     resetTransform(): void;
     moveLayer(toFront: boolean): void;
     restoreFull(): void;
@@ -122,6 +126,8 @@ export function buildAppMenuEntries({
   const duplicateCommand = appCommand(commands, 'edit.duplicate');
   const deleteCommand = appCommand(commands, 'edit.delete');
   const createGroupCommand = appCommand(commands, 'group.create');
+  const grayscale = Boolean(selection.primary?.grayscale);
+  const grayscaleContrast = selection.primary ? imageGrayscaleContrast(selection.primary) : 1;
 
   return [
     { type: 'item', label: `${scene.name}${dirty ? '  • 未保存' : ''}`, disabled: true },
@@ -188,7 +194,14 @@ export function buildAppMenuEntries({
         { type: 'item', label: '移到顶层', shortcut: displayShortcut('moveFront'), action: () => images.moveLayer(true) },
         { type: 'item', label: '移到底层', shortcut: displayShortcut('moveBack'), action: () => images.moveLayer(false) },
         { type: 'item', label: '恢复裁剪区域', shortcut: displayShortcut('restoreCrop'), action: images.restoreFull },
-        { type: 'item', label: selection.primary?.grayscale ? '恢复彩色' : '灰度去色', action: () => images.mutate((item) => { item.grayscale = !item.grayscale; }) },
+        { type: 'item', label: grayscale ? '恢复彩色' : '灰度去色',
+          action: () => images.mutate((item) => { item.grayscale = !item.grayscale; }) },
+        ...(grayscale ? [{
+          type: 'range' as const, label: '灰度对比度', min: 0, max: 200, step: 5, value: grayscaleContrast * 100,
+          onInteractionStart: images.beginAdjustment,
+          onChange: (contrast: number) => images.preview((item) => setImageGrayscaleContrast(item, contrast / 100)),
+          onInteractionEnd: images.commitAdjustment,
+        }] : []),
         { type: 'item', label: '打开源文件位置', disabled: !selection.primary?.sourcePath, action: images.showSource },
       ] : undefined,
     },
