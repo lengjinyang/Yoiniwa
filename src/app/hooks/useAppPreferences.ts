@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import type { ColorPickerShortcut } from '../../interactions';
 import {
   DEFAULT_SHORTCUTS,
   loadShortcutPreferences,
+  PAN_MOUSE_MIDDLE_SHORTCUT,
+  panModifierShortcutFromKeyboardEvent,
+  panShortcutFromKeyboardEvent,
   SHORTCUT_LABELS,
   shortcutConflict,
   shortcutFromKeyboardEvent,
@@ -23,22 +32,21 @@ interface UseAppPreferencesOptions {
 export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus }: UseAppPreferencesOptions) {
   const [cacheInfo, setCacheInfo] = useState<CacheInfo>();
   const [cacheChanging, setCacheChanging] = useState(false);
-  const [colorPickerShortcut] = useState<ColorPickerShortcut>(() => {
-    const query = new URLSearchParams(window.location.search);
-    if (query.has('smoke') || query.has('stress')) return 's';
-    try { return localStorage.getItem(COLOR_PICKER_SHORTCUT_STORAGE_KEY) === 'alt' ? 'alt' : 's'; }
-    catch { return 's'; }
-  });
   const [shortcuts, setShortcuts] = useState<ShortcutPreferences>(() => {
-    try { return loadShortcutPreferences(localStorage.getItem(SHORTCUT_PREFERENCES_STORAGE_KEY)); }
+    try {
+      const raw = localStorage.getItem(SHORTCUT_PREFERENCES_STORAGE_KEY);
+      const values = loadShortcutPreferences(raw);
+      const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : undefined;
+      if (typeof parsed?.colorPicker !== 'string'
+        && localStorage.getItem(COLOR_PICKER_SHORTCUT_STORAGE_KEY) === 'alt') values.colorPicker = 'Alt';
+      const query = new URLSearchParams(window.location.search);
+      if (query.has('smoke') || query.has('stress')) values.colorPicker = 'S';
+      return values;
+    }
     catch { return { ...DEFAULT_SHORTCUTS }; }
   });
   const [shortcutCaptureId, setShortcutCaptureId] = useState<ShortcutId>();
-
-  useEffect(() => {
-    try { localStorage.setItem(COLOR_PICKER_SHORTCUT_STORAGE_KEY, colorPickerShortcut); }
-    catch { /* Persistence is optional. */ }
-  }, [colorPickerShortcut]);
+  const colorPickerShortcut: ColorPickerShortcut = shortcuts.colorPicker === 'Alt' ? 'alt' : 's';
 
   useEffect(() => {
     try { localStorage.setItem(SHORTCUT_PREFERENCES_STORAGE_KEY, JSON.stringify(shortcuts)); }
@@ -54,20 +62,7 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
       .catch((error) => setStatus(`读取缓存状态失败：${String(error)}`));
   }, [api, setStatus]);
 
-  const captureShortcut = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === 'Escape') {
-      setShortcutCaptureId(undefined);
-      setStatus('已取消快捷键设置');
-      return;
-    }
-    const next = shortcutFromKeyboardEvent(event.nativeEvent);
-    if (!next) { setStatus('请按下一个有效的快捷键组合'); return; }
-    if (id !== 'collaboration' && next.split('+').includes('Alt')) {
-      setStatus('Alt 组合键保留给取色与画布交互');
-      return;
-    }
+  const commitShortcut = useCallback((id: ShortcutId, next: string) => {
     const conflict = shortcutConflict(shortcuts, id, next);
     if (conflict) { setStatus(`快捷键 ${next} ${conflict}`); return; }
     if (id === 'collaboration') {
@@ -85,14 +80,46 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
         if (!result.ok) { setStatus(result.message ?? '协作快捷键注册失败'); return; }
         setShortcuts((current) => ({ ...current, collaboration: result.shortcut }));
         setShortcutCaptureId(undefined);
-        setStatus(`协作快捷键已设为 ${result.shortcut}`);
+        setStatus(`协作模式快捷键已设为 ${result.shortcut}`);
       }).catch((error) => setStatus(`设置协作快捷键失败：${String(error)}`));
       return;
     }
     setShortcuts((current) => ({ ...current, [id]: next }));
     setShortcutCaptureId(undefined);
-    setStatus(`${SHORTCUT_LABELS.find((item) => item.id === id)?.label ?? '操作'}快捷键已设为 ${next}`);
+    const label = SHORTCUT_LABELS.find((item) => item.id === id)?.label ?? '操作';
+    setStatus(`${label}快捷键已设为 ${next === PAN_MOUSE_MIDDLE_SHORTCUT ? '鼠标中键' : next}`);
   }, [api, drawingCollaborationModeRef, setStatus, shortcuts]);
+
+  const captureShortcut = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const modifier = panModifierShortcutFromKeyboardEvent(event.nativeEvent);
+    if (modifier) {
+      setStatus(`继续按下其他按键可设置组合键，松开将使用 ${modifier}`);
+      return;
+    }
+    const next = id === 'panCanvas'
+      ? panShortcutFromKeyboardEvent(event.nativeEvent)
+      : shortcutFromKeyboardEvent(event.nativeEvent);
+    if (!next) { setStatus('请按下一个有效的快捷键组合'); return; }
+    commitShortcut(id, next);
+  }, [commitShortcut, setStatus]);
+
+  const captureShortcutKeyUp = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (shortcutCaptureId !== id) return;
+    const modifier = panModifierShortcutFromKeyboardEvent(event.nativeEvent);
+    if (!modifier) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitShortcut(id, modifier);
+  }, [commitShortcut, shortcutCaptureId]);
+
+  const capturePanShortcutMouse = useCallback((id: ShortcutId, event: ReactMouseEvent<HTMLButtonElement>) => {
+    if (id !== 'panCanvas' || shortcutCaptureId !== id || event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    commitShortcut(id, PAN_MOUSE_MIDDLE_SHORTCUT);
+  }, [commitShortcut, shortcutCaptureId]);
 
   const resetShortcuts = useCallback(() => {
     if (drawingCollaborationModeRef.current) { setStatus('请先退出协作模式，再恢复快捷键'); return; }
@@ -174,6 +201,8 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     shortcutCaptureId,
     setShortcutCaptureId,
     captureShortcut,
+    captureShortcutKeyUp,
+    capturePanShortcutMouse,
     resetShortcuts,
     beginShortcutCapture,
     chooseCacheLocation,

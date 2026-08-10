@@ -78,7 +78,10 @@ async function render(request: ExportRequest) {
     if (!response.ok) throw new Error(`导出资源读取失败：${item.name}`);
     const bitmap = await createImageBitmap(await response.blob());
     try {
-      context.save(); context.globalAlpha = item.opacity; context.filter = item.grayscale ? 'grayscale(1)' : 'none';
+      context.save(); context.globalAlpha = item.opacity;
+      context.filter = item.grayscale
+        ? `grayscale(1) contrast(${Math.round(Math.max(0, Math.min(2, item.grayscaleContrast ?? 1)) * 100)}%)`
+        : 'none';
       context.translate(item.x + item.width / 2, item.y + item.height / 2);
       context.rotate(item.rotation * Math.PI / 180); context.scale(item.flipX ? -1 : 1, item.flipY ? -1 : 1);
       context.drawImage(bitmap, item.crop.x, item.crop.y, item.crop.width, item.crop.height,

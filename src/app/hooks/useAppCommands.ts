@@ -145,8 +145,6 @@ export function useAppCommands({
     { id: 'layout.alignRight', execute: () => workspace.layout('align-right') },
     { id: 'layout.alignTop', execute: () => workspace.layout('align-top') },
     { id: 'layout.alignBottom', execute: () => workspace.layout('align-bottom') },
-    { id: 'layout.distributeHorizontal', execute: () => workspace.layout('distribute-horizontal') },
-    { id: 'layout.distributeVertical', execute: () => workspace.layout('distribute-vertical') },
     { id: 'layout.normalizeWidth', execute: () => workspace.layout('normalize-width') },
     { id: 'layout.normalizeHeight', execute: () => workspace.layout('normalize-height') },
     { id: 'layout.normalizeSize', execute: () => workspace.layout('normalize-size') },
@@ -184,6 +182,12 @@ export function useAppCommands({
     { id: 'window.maximize', execute: () => api?.toggleMaximize() },
     { id: 'window.minimize', execute: () => api?.minimize() },
     { id: 'window.close', execute: () => api?.close() },
+    { id: 'visualNotes.toggle', execute: visualNotes.toggle },
+    { id: 'visualNotes.hide.press', execute: visualNotes.beginTemporaryHide },
+    { id: 'visualNotes.hide.release', execute: visualNotes.endTemporaryHide },
+    { id: 'visualNotes.brush', execute: visualNotes.selectBrush },
+    { id: 'visualNotes.arrow', execute: visualNotes.selectArrow },
+    { id: 'visualNotes.eraser', execute: visualNotes.selectEraser },
     {
       id: 'ui.escape',
       execute: () => {
@@ -202,8 +206,10 @@ export function useAppCommands({
   ]);
   const shortcutRegistry = useAppShortcutRegistry({
     shortcuts: preferences.shortcuts,
-    activeColorPickerShortcut: windowController.mode.locked ? 'alt' : preferences.colorPickerShortcut,
+    activeColorPickerShortcut: windowController.mode.locked ? 'Alt' : preferences.shortcuts.colorPicker,
     collaborationSpaceActive: windowController.drawingCollaborationMode,
+    hasInternalClipboard: workspace.hasClipboard,
+    visualNotesEnabled: visualNotes.enabled,
     commands: shortcutCommands,
   });
   useAppShortcuts(shortcutRegistry);
@@ -254,6 +260,9 @@ export function useAppCommands({
     },
     images: {
       mutate: workspace.mutateSelected,
+      preview: workspace.previewSelected,
+      beginAdjustment: workspace.beginSelectedAdjustment,
+      commitAdjustment: workspace.commitSelectedAdjustment,
       resetTransform: () => workspace.mutateSelected(resetImageTransform),
       moveLayer: workspace.moveLayer,
       restoreFull: workspace.restoreFullImages,
@@ -264,7 +273,7 @@ export function useAppCommands({
       sendSelected: (mode) => { void delivery.sendSelectedToPhotoshop(mode); },
       saveVersion: () => { void versions.openPhotoshopVersionSaveDialog(); },
     },
-    layout: { targetCount: workspace.targetIds.length, run: workspace.layout },
+    layout: { targetCount: workspace.targetIds.length, run: workspace.layout, packAndFit: workspace.packAndFit },
     view: {
       hasContent: workspace.hasContent,
       focusSelected: workspace.toggleFocus,
@@ -281,6 +290,8 @@ export function useAppCommands({
     },
     export: {
       render: (onlySelected, copy, format) => { void delivery.exportItems(onlySelected, copy, format); },
+      originals: () => { void delivery.exportOriginalItems(); },
+      copyOriginal: () => { void delivery.copyPrimaryOriginal(); },
     },
     application: { newScene: project.newScene, close: () => api?.close() },
   });

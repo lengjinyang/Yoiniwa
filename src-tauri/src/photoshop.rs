@@ -265,16 +265,30 @@ impl PhotoshopService {
 
 fn run_document_process(script: &Path, request: &Value, timeout: Duration) -> Result<PhotoshopDocumentResult> {
     let encoded = BASE64.encode(serde_json::to_vec(request)?);
+    let runnable = ensure_powershell_script(script)?;
     let mut command = Command::new("powershell.exe");
     command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
-        .arg(script).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        .arg(&runnable).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)] command.creation_flags(CREATE_NO_WINDOW.0);
-    let mut child = command.spawn()?;
+    let mut child = command.spawn().with_context(|| format!("无法启动 {}", runnable.display()))?;
     child.stdin.take().ok_or_else(|| anyhow!("Photoshop 文档桥 stdin 不可用"))?.write_all(encoded.as_bytes())?;
-    if child.wait_timeout(timeout)?.is_none() { let _ = child.kill(); return Err(anyhow!("Photoshop 文档操作超时")); }
-    let mut output = String::new(); child.stdout.take().ok_or_else(|| anyhow!("Photoshop 文档桥 stdout 不可用"))?.read_to_string(&mut output)?;
-    let line = output.lines().filter(|line| !line.trim().is_empty()).next_back().ok_or_else(|| anyhow!("Photoshop 文档桥没有返回结果"))?;
-    let raw: RawDocumentResponse = serde_json::from_str(line).context("Photoshop 文档桥返回了无效结果")?;
+    if child.wait_timeout(timeout)?.is_none() {
+        let _ = child.kill();
+        cleanup_temp_script(script, &runnable);
+        return Err(anyhow!("Photoshop 文档操作超时"));
+    }
+    let mut output = String::new();
+    let mut stderr = String::new();
+    if let Some(mut stdout) = child.stdout.take() { stdout.read_to_string(&mut output)?; }
+    if let Some(mut err) = child.stderr.take() { err.read_to_string(&mut stderr)?; }
+    cleanup_temp_script(script, &runnable);
+    let line = output.lines().filter(|line| !line.trim().is_empty()).next_back();
+    let Some(line) = line else {
+        let detail = stderr.lines().find(|line| !line.trim().is_empty()).unwrap_or("Photoshop 文档桥没有返回结果");
+        return Err(anyhow!("Photoshop 文档桥失败: {}", detail.chars().take(400).collect::<String>()));
+    };
+    let raw: RawDocumentResponse = serde_json::from_str(line)
+        .with_context(|| format!("Photoshop 文档桥返回了无效结果: {}{}", line.chars().take(200).collect::<String>(), if stderr.trim().is_empty() { String::new() } else { format!(" / stderr: {}", stderr.chars().take(200).collect::<String>()) }))?;
     let details = raw.document.or(raw.preview).or(raw.document_info).unwrap_or_default();
     let preview = details.preview_path.as_ref().and_then(|path| fs::read(path).ok());
     Ok(PhotoshopDocumentResult {
@@ -283,6 +297,30 @@ fn run_document_process(script: &Path, request: &Value, timeout: Duration) -> Re
         layer_count: details.layer_count, format: details.format, archive_path: details.archive_path,
         preview_path: details.preview_path, preview,
     })
+}
+
+/// Windows PowerShell 5.1 `-File` mis-parses UTF-8 scripts that contain non-ASCII
+/// unless a UTF-8 BOM is present. Electron avoids this via `-Command`; we keep
+/// `-File` but materialize a BOM copy when needed.
+fn ensure_powershell_script(script: &Path) -> Result<PathBuf> {
+    let bytes = fs::read(script).with_context(|| format!("无法读取 {}", script.display()))?;
+    let has_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+    let ascii_only = bytes.iter().all(|byte| *byte < 0x80);
+    if has_bom || ascii_only {
+        return Ok(script.to_path_buf());
+    }
+    let temporary = std::env::temp_dir().join(format!("yoiniwa-ps-bridge-{}.ps1", uuid::Uuid::new_v4()));
+    let mut with_bom = Vec::with_capacity(bytes.len() + 3);
+    with_bom.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    with_bom.extend_from_slice(&bytes);
+    fs::write(&temporary, with_bom)?;
+    Ok(temporary)
+}
+
+fn cleanup_temp_script(original: &Path, runnable: &Path) {
+    if runnable != original {
+        let _ = fs::remove_file(runnable);
+    }
 }
 
 #[derive(Default, Deserialize)]

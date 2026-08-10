@@ -138,6 +138,8 @@ export function AppWorkspace({
       onClose={() => panels.setPropertiesOpen(false)}
       onBeginShortcutCapture={preferences.beginShortcutCapture}
       onCaptureShortcut={preferences.captureShortcut}
+      onCaptureShortcutKeyUp={preferences.captureShortcutKeyUp}
+      onCapturePanShortcutMouse={preferences.capturePanShortcutMouse}
       onShortcutCaptureBlur={() => preferences.setShortcutCaptureId(undefined)}
       onResetShortcuts={preferences.resetShortcuts}
       onChooseCacheLocation={preferences.chooseCacheLocation}

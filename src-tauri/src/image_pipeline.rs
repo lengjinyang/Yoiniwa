@@ -17,7 +17,6 @@ struct VipsImageOpaque { _private: [u8; 0] }
 #[link(name = "vips")]
 extern "C" {
     fn vips_init(argv0: *const c_char) -> c_int;
-    fn vips_shutdown();
     fn vips_concurrency_set(concurrency: c_int);
     fn vips_error_buffer() -> *const c_char;
     fn vips_error_clear();
@@ -202,5 +201,35 @@ pub fn decode_rgba(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
     Ok((output, width as u32, height as u32))
 }
 
-#[allow(dead_code)]
-pub fn shutdown() { if VIPS_READY.get().is_some() { unsafe { vips_shutdown() }; } }
+pub fn file_rgba(path: &Path) -> Result<(Vec<u8>, u32, u32)> {
+    let _guard = VIPS_LOCK.lock();
+    let image = autorot(&load(path)?)?;
+    let (width, height) = dimensions(&image);
+    let band_count = bands(&image);
+    let input = memory(&image)?;
+    let pixels = width as usize * height as usize;
+    let mut output = Vec::with_capacity(pixels * 4);
+    for index in 0..pixels {
+        let offset = index * band_count;
+        match band_count {
+            1 => output.extend_from_slice(&[input[offset], input[offset], input[offset], 255]),
+            2 => output.extend_from_slice(&[input[offset], input[offset], input[offset], input[offset + 1]]),
+            3 => output.extend_from_slice(&[input[offset], input[offset + 1], input[offset + 2], 255]),
+            _ => output.extend_from_slice(&input[offset..offset + 4]),
+        }
+    }
+    Ok((output, width as u32, height as u32))
+}
+
+/// Last-resort bounded PNG when the normal thumbnail path fails.
+pub fn emergency_thumbnail_png(path: &Path, edge: u32) -> Result<Vec<u8>> {
+    let _guard = VIPS_LOCK.lock();
+    let source = autorot(&load(path)?)?;
+    let (width, height) = dimensions(&source);
+    if width <= 0 || height <= 0 { return Err(anyhow!("应急缩略图源尺寸无效")); }
+    drop(source);
+    let scale = (edge as f64 / width.max(height) as f64).min(1.0);
+    let target_w = ((width as f64) * scale).round().max(1.0) as i32;
+    let target_h = ((height as f64) * scale).round().max(1.0) as i32;
+    png(&thumbnail_file(path, target_w, target_h, false)?)
+}

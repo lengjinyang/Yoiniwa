@@ -79,8 +79,14 @@ function renderedLayersFrame(images: Array<{ data: ArrayBuffer; name: string }>)
 export function installTauriRefCanvasApi() {
   if (window.refCanvas || !('__TAURI_INTERNALS__' in window)) return;
   const photoshopSyncQueue = createPhotoshopSyncQueue((request) => command('photoshop_set_foreground', {
-    color: request.color,
-    returnFocus: request.returnFocus,
+    color: {
+      r: request.color.r,
+      g: request.color.g,
+      b: request.color.b,
+      a: request.color.a ?? 1,
+      hex: request.color.hex,
+    },
+    returnFocus: request.returnFocus ?? false,
   }));
   const api: RefCanvasAPI = {
     importImages: (requestId) => command('images_import', { requestId }),
@@ -123,9 +129,14 @@ export function installTauriRefCanvasApi() {
     copyDiagnostics: () => command('logs_copy_diagnostics'),
     recentLogProblems: (limit) => command('logs_recent_problems', { limit }),
     exportImage: (data, suggestedName) => rawCommand('image_export', data, { 'x-yoiniwa-name': encodedHeader(suggestedName) }),
+    exportOriginalImages: (items) => command('image_export_originals', { items }),
     copyImage: (data) => rawCommand('image_copy', data),
+    copyOriginalImage: (assetId) => command('image_copy_original', { assetId }),
     showSourceInFolder: (path) => command('image_show_source', { path }),
-    syncPhotoshopForeground: (color, returnFocus) => photoshopSyncQueue.enqueue({ color, returnFocus }),
+    syncPhotoshopForeground: (color, returnFocus) => photoshopSyncQueue.enqueue({
+      color,
+      returnFocus: returnFocus ?? false,
+    }),
     placeRenderedInPhotoshop: (data, name) => rawCommand('photoshop_place_rendered', data, { 'x-yoiniwa-name': encodedHeader(name) }),
     placeRenderedLayersInPhotoshop: (images) => rawCommand('photoshop_place_rendered_layers', renderedLayersFrame(images)),
     openRenderedInPhotoshop: (data, name) => rawCommand('photoshop_open_rendered', data, { 'x-yoiniwa-name': encodedHeader(name) }),

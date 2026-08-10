@@ -69,6 +69,39 @@ export function useSceneDelivery({
     }
   }, [api, beginOperation, clearOperation, getVisualNotesForRender, scene, selectedItems, setStatus, settleOperation]);
 
+  const exportOriginalItems = useCallback(async () => {
+    if (!api) return;
+    if (!selectedItems.length) { setStatus('请先选择要导出的图片'); return; }
+    if (selectedItems.some((item) => !item.assetId)) { setStatus('选中内容包含没有原图资源的图片'); return; }
+    const requestId = beginOperation('export', '正在导出原图…');
+    try {
+      const result = await api.exportOriginalImages(selectedItems.map((item) => ({
+        assetId: item.assetId!, suggestedName: item.name,
+      })));
+      if (result.canceled) clearOperation(requestId);
+      else settleOperation(requestId, 'success', selectedItems.length === 1
+        ? `已导出原图至 ${result.path}`
+        : `已导出 ${result.count ?? selectedItems.length} 张原图至 ${result.path}`);
+    } catch (error) {
+      settleOperation(requestId, 'error', `导出原图失败：${String(error)}`);
+    }
+  }, [api, beginOperation, clearOperation, selectedItems, setStatus, settleOperation]);
+
+  const copyPrimaryOriginal = useCallback(async () => {
+    if (!api) return;
+    if (selectedItems.length !== 1 || !selectedItems[0].assetId) {
+      setStatus('请选择一张有原图资源的图片');
+      return;
+    }
+    const requestId = beginOperation('export', '正在复制原图…');
+    try {
+      await api.copyOriginalImage(selectedItems[0].assetId);
+      settleOperation(requestId, 'success', '已将原图复制到剪贴板');
+    } catch (error) {
+      settleOperation(requestId, 'error', `复制原图失败：${String(error)}`);
+    }
+  }, [api, beginOperation, selectedItems, settleOperation, setStatus]);
+
   const renderSelectedPhotoshopImage = useCallback(async () => {
     if (!selectedItems.length) throw new Error('请先选择要发送到 Photoshop 的图片');
     const selectedImageIds = new Set(selectedItems.map((item) => item.id));
@@ -139,5 +172,5 @@ export function useSceneDelivery({
   }, [api, beginOperation, clearLasso, lassoPoints, photoshopDocumentBlocked, renderLassoPhotoshopImage,
     renderSelectedPhotoshopImage, renderSelectedPhotoshopLayers, scene.name, selectedItems, settleOperation]);
 
-  return { exportItems, sendSelectedToPhotoshop };
+  return { exportItems, exportOriginalItems, copyPrimaryOriginal, sendSelectedToPhotoshop };
 }

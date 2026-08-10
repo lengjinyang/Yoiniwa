@@ -28,20 +28,12 @@ public static class RefCanvasNativeWindowMove
     private const int WM_MOUSEWHEEL = 0x020A;
     private const int WM_MOUSEHWHEEL = 0x020E;
     private const uint SWP_NOSIZE = 0x0001;
-    private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_NOACTIVATE = 0x0010;
-    private const uint SWP_FRAMECHANGED = 0x0020;
-    private const uint GW_HWNDNEXT = 2;
-    private const uint MONITOR_DEFAULTTONEAREST = 2;
-    private const int GWL_EXSTYLE = -20;
-    private const long WS_EX_APPWINDOW = 0x00040000L;
-    private const long WS_EX_NOACTIVATE = 0x08000000L;
     private const int DWMWA_NCRENDERING_POLICY = 2;
     private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMNCRP_DISABLED = 1;
     private const int DWMWCP_DONOTROUND = 1;
-    private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
     private static readonly IntPtr DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = new IntPtr(-4);
 
     private const int INPUT_NONE = 0;
@@ -99,12 +91,13 @@ public static class RefCanvasNativeWindowMove
     private static IntPtr hookHandle = IntPtr.Zero;
     private static IntPtr keyboardHookHandle = IntPtr.Zero;
     private static int hookPhysicalCoordinatesReady;
+    private static int hookThreadId;
     private static long inputWindowHandle;
     private static int inputEnabled;
     private static int collaborationZoomEnabled;
     private static int inputMode;
     private static int inputStartedAt;
-    private static int inputEndedAt;
+    private const uint WM_QUIT = 0x0012;
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
@@ -117,6 +110,9 @@ public static class RefCanvasNativeWindowMove
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr window);
 
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
@@ -142,26 +138,20 @@ public static class RefCanvasNativeWindowMove
     [DllImport("user32.dll")]
     private static extern IntPtr DispatchMessage(ref Message message);
 
+    [DllImport("user32.dll")]
+    private static extern bool PostThreadMessage(int threadId, uint message, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll")]
+    private static extern int GetCurrentThreadId();
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr GetModuleHandle(string moduleName);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindow(string className, string windowName);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string className, string windowName);
-
     [DllImport("user32.dll")]
-    private static extern IntPtr GetWindow(IntPtr window, uint command);
+    private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
-    private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
-    private static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
+    private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+    private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
 
     [DllImport("dwmapi.dll")]
     private static extern int DwmFlush();
@@ -227,94 +217,6 @@ public static class RefCanvasNativeWindowMove
         return renderingResult >= 0 && cornerResult >= 0;
     }
 
-    public static bool SetNoActivate(long rawHandle, bool enabled)
-    {
-        var window = new IntPtr(rawHandle);
-        if (window == IntPtr.Zero) return false;
-        var current = GetWindowLongPtr(window, GWL_EXSTYLE).ToInt64();
-        // WS_EX_NOACTIVATE normally suppresses a taskbar button.  Pair it
-        // with WS_EX_APPWINDOW so Yoiniwa remains directly reachable from the
-        // taskbar while Photoshop keeps foreground ownership during picking.
-        var next = current | WS_EX_APPWINDOW;
-        if (enabled) next |= WS_EX_NOACTIVATE;
-        else next &= ~WS_EX_NOACTIVATE;
-        if (next == current) return true;
-        SetWindowLongPtr(window, GWL_EXSTYLE, new IntPtr(next));
-        return SetWindowPos(window, IntPtr.Zero, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-    }
-
-    private static IntPtr TaskbarForWindow(IntPtr window)
-    {
-        var monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
-        var primaryTaskbar = FindWindow("Shell_TrayWnd", null);
-        if (primaryTaskbar == IntPtr.Zero) return IntPtr.Zero;
-        var taskbar = MonitorFromWindow(primaryTaskbar, MONITOR_DEFAULTTONEAREST) == monitor
-            ? primaryTaskbar : IntPtr.Zero;
-        if (taskbar == IntPtr.Zero)
-        {
-            var secondary = IntPtr.Zero;
-            while ((secondary = FindWindowEx(IntPtr.Zero, secondary, "Shell_SecondaryTrayWnd", null)) != IntPtr.Zero)
-            {
-                if (MonitorFromWindow(secondary, MONITOR_DEFAULTTONEAREST) == monitor)
-                {
-                    taskbar = secondary;
-                    break;
-                }
-            }
-        }
-        return taskbar;
-    }
-
-    private static bool IsBehindTaskbar(IntPtr window, IntPtr taskbar)
-    {
-        var current = GetWindow(taskbar, GW_HWNDNEXT);
-        for (var index = 0; current != IntPtr.Zero && index < 2048; index += 1)
-        {
-            if (current == window) return true;
-            current = GetWindow(current, GW_HWNDNEXT);
-        }
-        return false;
-    }
-
-    public static bool PlaceBelowTaskbar(long rawHandle)
-    {
-        var window = new IntPtr(rawHandle);
-        if (window == IntPtr.Zero) return false;
-        var taskbar = TaskbarForWindow(window);
-        if (taskbar == IntPtr.Zero) return false;
-        if (IsBehindTaskbar(window, taskbar)) return true;
-        var placed = SetWindowPos(window, taskbar, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        if (placed) DwmFlush();
-        return placed;
-    }
-
-    public static bool PlaceAboveTaskbar(long rawHandle)
-    {
-        var window = new IntPtr(rawHandle);
-        if (window == IntPtr.Zero) return false;
-        var placed = SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        if (placed) DwmFlush();
-        return placed;
-    }
-
-    public static bool SetCollaborationLayer(long rawHandle, bool enabled, bool aboveTaskbar)
-    {
-        var window = new IntPtr(rawHandle);
-        if (window == IntPtr.Zero || !SetNoActivate(rawHandle, enabled)) return false;
-        // Do not reorder the collaboration window while a pick/pan gesture is
-        // active or while the release is still being committed to Photoshop.
-        // The existing topmost state remains in force; a later repair can move
-        // it above the taskbar when input is idle.
-        var endedAt = Volatile.Read(ref inputEndedAt);
-        var recentlyEnded = endedAt != 0
-            && unchecked(Environment.TickCount - endedAt) < 500;
-        if (enabled && (Volatile.Read(ref inputMode) != INPUT_NONE || recentlyEnded)) return true;
-        return !enabled || (aboveTaskbar ? PlaceAboveTaskbar(rawHandle) : PlaceBelowTaskbar(rawHandle));
-    }
-
     private static void Emit(string line)
     {
         lock (OutputLock)
@@ -326,8 +228,11 @@ public static class RefCanvasNativeWindowMove
 
     private static bool PointInsideWindow(IntPtr window, Point point)
     {
+        // Destroyed HWNDs can be reused by unrelated windows. Never treat a
+        // stale handle as "inside" or the LL hook will swallow system clicks.
+        if (window == IntPtr.Zero || !IsWindow(window)) return false;
         Rect bounds;
-        return window != IntPtr.Zero && GetWindowRect(window, out bounds)
+        return GetWindowRect(window, out bounds)
             && point.X >= bounds.Left && point.X < bounds.Right
             && point.Y >= bounds.Top && point.Y < bounds.Bottom;
     }
@@ -347,10 +252,8 @@ public static class RefCanvasNativeWindowMove
 
     private static void SetInputMode(int mode)
     {
-        var previous = Interlocked.Exchange(ref inputMode, mode);
+        Interlocked.Exchange(ref inputMode, mode);
         Interlocked.Exchange(ref inputStartedAt, mode == INPUT_NONE ? 0 : Environment.TickCount);
-        if (mode == INPUT_NONE && previous != INPUT_NONE)
-            Interlocked.Exchange(ref inputEndedAt, Environment.TickCount);
     }
 
     private static IntPtr InputHook(int code, IntPtr wParam, IntPtr lParam)
@@ -362,6 +265,14 @@ public static class RefCanvasNativeWindowMove
         var message = wParam.ToInt32();
         var physicalMouse = PointerType(data) == "mouse";
         var window = new IntPtr(Interlocked.Read(ref inputWindowHandle));
+        // Stale HWND after Yoiniwa exit/HWND reuse must never eat buttons.
+        if (window == IntPtr.Zero || !IsWindow(window))
+        {
+            Volatile.Write(ref inputEnabled, 0);
+            SetInputMode(INPUT_NONE);
+            Interlocked.Exchange(ref inputWindowHandle, 0);
+            return CallNextHookEx(hookHandle, code, wParam, lParam);
+        }
         var inside = PointInsideWindow(window, data.Position);
         var alt = IsKeyDown(VK_MENU);
         var space = IsKeyDown(VK_SPACE);
@@ -423,8 +334,15 @@ public static class RefCanvasNativeWindowMove
                 SetInputMode(INPUT_PAN);
                 EmitPointer("DOWN", data, false, true, 0);
             }
-            else SetInputMode(INPUT_BLOCK);
-            return new IntPtr(1);
+            else if (!physicalMouse)
+            {
+                // Pen tip over Yoiniwa: track block mode for MOVE suppress only.
+                // Never eat DOWN/UP — a leaked swallow bricks desktop LBUTTON.
+                SetInputMode(INPUT_BLOCK);
+            }
+            // ALWAYS pass buttons through. Collaboration uses ignore_cursor +
+            // POINTER emits; swallowing LBUTTON is what left the OS stuck.
+            return CallNextHookEx(hookHandle, code, wParam, lParam);
         }
 
         if (message == WM_LBUTTONUP && mode != INPUT_NONE)
@@ -433,17 +351,19 @@ public static class RefCanvasNativeWindowMove
                 EmitPointer(alt ? "UP" : "CANCEL", data, alt, space, 0);
             else if (mode == INPUT_PAN) EmitPointer("UP", data, alt, space, 0);
             SetInputMode(INPUT_NONE);
-            return new IntPtr(1);
+            return CallNextHookEx(hookHandle, code, wParam, lParam);
         }
 
-        if ((message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) && (inside || mode != INPUT_NONE))
-            return new IntPtr(1);
+        // Never swallow right button either (same stuck-button failure mode).
+        if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)
+            return CallNextHookEx(hookHandle, code, wParam, lParam);
 
         if ((message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL) && inside)
         {
             var delta = unchecked((short)((data.MouseData >> 16) & 0xFFFF));
             EmitPointer(message == WM_MOUSEHWHEEL ? "HWHEEL" : "WHEEL", data, alt, space, delta);
-            return new IntPtr(1);
+            // Never swallow wheel — emit only. Swallowing is unnecessary with click-through.
+            return CallNextHookEx(hookHandle, code, wParam, lParam);
         }
 
         return CallNextHookEx(hookHandle, code, wParam, lParam);
@@ -485,6 +405,7 @@ public static class RefCanvasNativeWindowMove
         Volatile.Write(ref hookPhysicalCoordinatesReady, physicalCoordinates ? 1 : 0);
         hookProcedure = InputHook;
         keyboardHookProcedure = KeyboardInputHook;
+        Volatile.Write(ref hookThreadId, GetCurrentThreadId());
         hookHandle = physicalCoordinates
             ? SetWindowsHookEx(WH_MOUSE_LL, hookProcedure, GetModuleHandle(null), 0)
             : IntPtr.Zero;
@@ -492,45 +413,114 @@ public static class RefCanvasNativeWindowMove
             ? SetWindowsHookEx(WH_KEYBOARD_LL, keyboardHookProcedure, GetModuleHandle(null), 0)
             : IntPtr.Zero;
         HookStarted.Set();
-        if (hookHandle == IntPtr.Zero) return;
-        Message message;
-        while (GetMessage(out message, IntPtr.Zero, 0, 0) > 0)
+        if (hookHandle == IntPtr.Zero)
         {
-            TranslateMessage(ref message);
-            DispatchMessage(ref message);
+            Volatile.Write(ref hookThreadId, 0);
+            return;
         }
-        UnhookWindowsHookEx(hookHandle);
-        if (keyboardHookHandle != IntPtr.Zero) UnhookWindowsHookEx(keyboardHookHandle);
-        hookHandle = IntPtr.Zero;
-        keyboardHookHandle = IntPtr.Zero;
+        try
+        {
+            Message message;
+            while (GetMessage(out message, IntPtr.Zero, 0, 0) > 0)
+            {
+                TranslateMessage(ref message);
+                DispatchMessage(ref message);
+            }
+        }
+        finally
+        {
+            UninstallHooks();
+            Volatile.Write(ref hookThreadId, 0);
+        }
+    }
+
+    private static void UninstallHooks()
+    {
+        lock (HookLock)
+        {
+            if (hookHandle != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(hookHandle);
+                hookHandle = IntPtr.Zero;
+            }
+            if (keyboardHookHandle != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(keyboardHookHandle);
+                keyboardHookHandle = IntPtr.Zero;
+            }
+        }
+    }
+
+    private static void ReleaseStuckButtons()
+    {
+        // If a prior hook ate LEFTDOWN and died before UP, the desktop can keep
+        // a stuck press. Force-up is exit-only recovery (not used during pick).
+        try
+        {
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+        }
+        catch { }
+    }
+
+    // Must run before the helper process dies. Killing PowerShell while WH_MOUSE_LL
+    // is installed can leave LBUTTON swallowed (especially after HWND reuse).
+    public static void ShutdownInputHooks()
+    {
+        Volatile.Write(ref inputEnabled, 0);
+        Interlocked.Exchange(ref inputWindowHandle, 0);
+        SetInputMode(INPUT_NONE);
+        // Quit the hook thread first so Unhook runs on the installing thread
+        // (InputHookLoop finally). Unhooking from stdin then killing races.
+        var threadId = Volatile.Read(ref hookThreadId);
+        if (threadId != 0) PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+        lock (HookLock)
+        {
+            var thread = hookThread;
+            hookThread = null;
+            if (thread != null && thread.IsAlive)
+            {
+                if (!thread.Join(1500))
+                {
+                    try { thread.Interrupt(); } catch { }
+                }
+            }
+        }
+        UninstallHooks();
+        ReleaseStuckButtons();
+        Volatile.Write(ref hookPhysicalCoordinatesReady, 0);
+        HookStarted.Reset();
+        try { Emit("INPUT_SHUTDOWN"); } catch { }
     }
 
     public static bool ConfigureInput(long rawHandle, bool enabled, bool enableCollaborationZoom)
     {
-        if (enabled)
+        if (!enabled)
         {
-            lock (HookLock)
-            {
-                if (hookThread == null)
-                {
-                    HookStarted.Reset();
-                    hookThread = new Thread(InputHookLoop);
-                    hookThread.IsBackground = true;
-                    hookThread.Name = "Yoiniwa collaboration input";
-                    hookThread.Start();
-                }
-            }
-            if (!HookStarted.Wait(1500) || hookHandle == IntPtr.Zero
-                || Volatile.Read(ref hookPhysicalCoordinatesReady) == 0) return false;
+            ShutdownInputHooks();
+            return true;
         }
-        var alreadyConfigured = enabled && Volatile.Read(ref inputEnabled) != 0
+        lock (HookLock)
+        {
+            if (hookThread == null || !hookThread.IsAlive)
+            {
+                HookStarted.Reset();
+                hookThread = new Thread(InputHookLoop);
+                hookThread.IsBackground = true;
+                hookThread.Name = "Yoiniwa collaboration input";
+                hookThread.Start();
+            }
+        }
+        if (!HookStarted.Wait(1500) || hookHandle == IntPtr.Zero
+            || Volatile.Read(ref hookPhysicalCoordinatesReady) == 0) return false;
+        var alreadyConfigured = Volatile.Read(ref inputEnabled) != 0
             && Interlocked.Read(ref inputWindowHandle) == rawHandle
             && Volatile.Read(ref collaborationZoomEnabled) == (enableCollaborationZoom ? 1 : 0);
         if (alreadyConfigured) return true;
         SetInputMode(INPUT_NONE);
         Interlocked.Exchange(ref inputWindowHandle, rawHandle);
-        Volatile.Write(ref collaborationZoomEnabled, enabled && enableCollaborationZoom ? 1 : 0);
-        Volatile.Write(ref inputEnabled, enabled ? 1 : 0);
+        Volatile.Write(ref collaborationZoomEnabled, enableCollaborationZoom ? 1 : 0);
+        Volatile.Write(ref inputEnabled, 1);
         return true;
     }
 
@@ -540,14 +530,21 @@ public static class RefCanvasNativeWindowMove
 [Console]::Out.WriteLine('READY')
 [Console]::Out.Flush()
 
+try {
+    AppDomain.CurrentDomain.add_ProcessExit({
+        try { [RefCanvasNativeWindowMove]::ShutdownInputHooks() } catch { }
+    })
+} catch { }
+
+try {
 while (($line = [Console]::In.ReadLine()) -ne $null) {
     try {
         $parts = $line.Split('|')
-        if (($parts.Length -eq 4 -or $parts.Length -eq 5) -and $parts[0] -eq 'LAYER') {
-            $enabled = $parts[3] -eq '1'
-            $aboveTaskbar = $parts.Length -eq 5 -and $parts[4] -eq '1'
-            $applied = [RefCanvasNativeWindowMove]::SetCollaborationLayer([long]::Parse($parts[2]), $enabled, $aboveTaskbar)
-            [Console]::Out.WriteLine('LAYER|' + $parts[1] + '|' + $(if ($applied) { 'READY' } else { 'FAILED' }))
+        if ($parts[0] -eq 'SHUTDOWN') {
+            [RefCanvasNativeWindowMove]::ShutdownInputHooks()
+            [Console]::Out.WriteLine('SHUTDOWN_ACK')
+            [Console]::Out.Flush()
+            break
         } elseif (($parts.Length -eq 4 -or $parts.Length -eq 5) -and $parts[0] -eq 'INPUT') {
             $enabled = $parts[3] -eq '1'
             $enableCollaborationZoom = $parts.Length -eq 5 -and $parts[4] -eq '1'
@@ -568,4 +565,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         [Console]::Out.WriteLine("ERROR $($_.Exception.Message)")
     }
     [Console]::Out.Flush()
+}
+} finally {
+    try { [RefCanvasNativeWindowMove]::ShutdownInputHooks() } catch { }
 }

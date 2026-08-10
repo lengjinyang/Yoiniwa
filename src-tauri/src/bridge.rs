@@ -3,6 +3,7 @@ use std::{borrow::Cow, collections::HashSet, fs, path::{Path, PathBuf}, process:
 use anyhow::{anyhow, Result};
 use arboard::{Clipboard, ImageData};
 use percent_encoding::percent_decode_str;
+use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{ipc::{InvokeBody, Request, Response}, AppHandle, Manager, State, WebviewWindow};
@@ -193,6 +194,98 @@ pub fn image_show_source(path: String) -> Value {
     if !path.is_absolute() || !path.exists() { return serde_json::json!({ "ok": false, "message": "源文件已经移动或不存在" }); }
     let status = Command::new("explorer.exe").arg(format!("/select,{}", path.display())).status();
     if status.is_ok() { serde_json::json!({ "ok": true }) } else { serde_json::json!({ "ok": false, "message": "无法打开资源管理器" }) }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginalExportItem {
+    asset_id: String,
+    suggested_name: String,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn image_export_originals(state: State<'_, AppState>, items: Vec<OriginalExportItem>) -> CommandResult<Value> {
+    command_result((|| {
+        if items.is_empty() || items.len() > 256 { return Err(anyhow!("请选择 1 至 256 张图片导出")); }
+        let prepared = items.into_iter().map(|item| {
+            if !is_asset_id(&item.asset_id) { return Err(anyhow!("导出原图请求无效")); }
+            let path = state.assets.ensure_file(&item.asset_id)?;
+            let name = original_export_name(&path, &item.suggested_name);
+            Ok((path, name))
+        }).collect::<Result<Vec<_>>>()?;
+        if prepared.len() == 1 {
+            let (source, name) = &prepared[0];
+            let extension = Path::new(name).extension().and_then(|value| value.to_str()).unwrap_or("bin");
+            let Some(target) = rfd::FileDialog::new().set_file_name(name).add_filter("原始图片", &[extension]).save_file() else {
+                return Ok(serde_json::json!({ "canceled": true }));
+            };
+            if source.canonicalize().ok() != target.canonicalize().ok() {
+                fs::copy(source, &target)?;
+            }
+            return Ok(serde_json::json!({ "canceled": false, "path": target, "count": 1 }));
+        }
+        let Some(directory) = rfd::FileDialog::new().set_title(&format!("选择保存 {} 张原图的文件夹", prepared.len())).pick_folder() else {
+            return Ok(serde_json::json!({ "canceled": true }));
+        };
+        let mut reserved = std::collections::HashSet::new();
+        for (source, name) in &prepared {
+            let target = available_export_path(&directory, name, &mut reserved);
+            fs::copy(source, &target)?;
+        }
+        Ok(serde_json::json!({ "canceled": false, "path": directory, "count": prepared.len() }))
+    })())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn image_copy_original(state: State<'_, AppState>, asset_id: String) -> CommandResult<()> {
+    command_result((|| {
+        if !is_asset_id(&asset_id) { return Err(anyhow!("复制原图请求无效")); }
+        let path = state.assets.ensure_file(&asset_id)?;
+        let (pixels, width, height) = image_pipeline::file_rgba(&path)?;
+        if !clipboard_image_dimensions_allowed(width, height) {
+            return Err(anyhow!("原图尺寸过大，无法安全复制到系统剪贴板"));
+        }
+        Clipboard::new()?.set_image(ImageData { width: width as usize, height: height as usize, bytes: Cow::Owned(pixels) })?;
+        Ok(())
+    })())
+}
+
+fn is_asset_id(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn clipboard_image_dimensions_allowed(width: u32, height: u32) -> bool {
+    const MAX_EDGE: u32 = 16384;
+    const MAX_PIXELS: u64 = 100_000_000;
+    width > 0 && height > 0 && width <= MAX_EDGE && height <= MAX_EDGE
+        && (width as u64).saturating_mul(height as u64) <= MAX_PIXELS
+}
+
+fn original_export_name(source: &Path, suggested: &str) -> String {
+    let suggested = suggested.trim();
+    let fallback = source.file_name().and_then(|value| value.to_str()).unwrap_or("image.bin");
+    if suggested.is_empty() { return fallback.to_string(); }
+    let has_ext = Path::new(suggested).extension().is_some();
+    if has_ext { suggested.to_string() } else {
+        match source.extension().and_then(|value| value.to_str()) {
+            Some(ext) => format!("{suggested}.{ext}"),
+            None => suggested.to_string(),
+        }
+    }
+}
+
+fn available_export_path(directory: &Path, name: &str, reserved: &mut std::collections::HashSet<String>) -> PathBuf {
+    let stem = Path::new(name).file_stem().and_then(|value| value.to_str()).unwrap_or("image");
+    let extension = Path::new(name).extension().and_then(|value| value.to_str()).unwrap_or("bin");
+    for index in 0..10_000 {
+        let candidate_name = if index == 0 { format!("{stem}.{extension}") } else { format!("{stem}-{index}.{extension}") };
+        let key = candidate_name.to_ascii_lowercase();
+        let path = directory.join(&candidate_name);
+        if reserved.contains(&key) || path.exists() { continue; }
+        reserved.insert(key);
+        return path;
+    }
+    directory.join(format!("{stem}-{}.{}", Uuid::new_v4(), extension))
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -1,8 +1,8 @@
 import type { PhotoshopColorSyncResult, PickedColor } from '../types';
 
 export interface PhotoshopSyncRequest {
-  color: PickedColor;
-  returnFocus: boolean;
+  color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'> & { a?: number };
+  returnFocus?: boolean;
 }
 
 interface QueueEntry extends PhotoshopSyncRequest {

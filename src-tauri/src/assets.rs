@@ -430,9 +430,15 @@ impl AssetService {
         if let Some(bytes) = self.read_thumbnail(id, edge) { return Ok(bytes); }
         let source = self.ensure_file(id)?;
         let path = self.image_asset_root(id).join(format!("thumb-{edge}.png"));
-        let bytes = image_pipeline::thumbnail_png(&source, edge, &self.stats).inspect_err(|_| {
-            self.stats.lock().thumbnail_failures += 1;
-        })?;
+        let bytes = match image_pipeline::thumbnail_png(&source, edge, &self.stats) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                self.stats.lock().thumbnail_failures += 1;
+                image_pipeline::emergency_thumbnail_png(&source, edge).inspect_err(|_| {
+                    self.stats.lock().thumbnail_failures += 1;
+                })?
+            }
+        };
         atomic_write(&path, &bytes)?;
         self.emit_thumbnail_ready(id, edge);
         Ok(bytes)
@@ -496,7 +502,15 @@ impl AssetService {
                 emit_thumbnail_ready_app(app.as_ref(), &asset_id, edge);
                 return Ok(bytes);
             }
-            let bytes = image_pipeline::thumbnail_png(&source, edge, &stats).map_err(|error| error.to_string())?;
+            let bytes = match image_pipeline::thumbnail_png(&source, edge, &stats) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    stats.lock().thumbnail_failures += 1;
+                    image_pipeline::emergency_thumbnail_png(&source, edge).map_err(|fallback| {
+                        format!("thumbnail failed: {error}; emergency: {fallback}")
+                    })?
+                }
+            };
             atomic_write(&out, &bytes).map_err(|error| error.to_string())?;
             emit_thumbnail_ready_app(app.as_ref(), &asset_id, edge);
             Ok(bytes)

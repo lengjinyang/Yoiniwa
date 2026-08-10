@@ -1,6 +1,7 @@
-import { Container, Graphics, Sprite } from 'pixi.js';
+import { ColorMatrixFilter, Container, Graphics, Sprite } from 'pixi.js';
 import { IMAGE_TILE_GUTTER, IMAGE_TILE_SIZE } from '../../shared/imagePipelineConfig';
 import type { ImageItem, Scene } from '../../types';
+import { imageGrayscaleContrast } from '../../imageAdjustments';
 import { resolveCanvasTileUrl } from '../assets/AssetPathResolver';
 import type { SceneBounds } from '../scene/SceneNode';
 import type { GpuTextureEntry } from '../textures/GpuTextureCache';
@@ -8,7 +9,7 @@ import { selectVisibleTiles, shouldUseTiledImage, type TileAddress } from '../te
 import type { TextureManager } from '../textures/TextureManager';
 import { RenderObjectRegistry } from './RenderObjectRegistry';
 
-interface TileSet { signature: string; container: Container; textureKeys: string[] }
+interface TileSet { signature: string; container: Container; grayscale: ColorMatrixFilter; textureKeys: string[] }
 interface PendingTileSet {
   signature: string; token: number; item: ImageItem; levelWidth: number; levelHeight: number;
   tiles: TileAddress[]; entries: GpuTextureEntry[];
@@ -32,7 +33,7 @@ export class TileRenderer {
     this.objects.retain(new Set(scene.items.map((item) => item.id)));
     scene.items.forEach((item) => {
       const object = this.objects.get(item.id);
-      if (object?.current) this.updateContainer(object.current.container, item);
+      if (object?.current) this.updateTileSet(object.current, item);
     });
   }
 
@@ -50,6 +51,7 @@ export class TileRenderer {
           this.token += 1;
           this.current?.textureKeys.forEach((key) => textures.release(key));
           this.current?.container.destroy({ children: true });
+          this.current?.grayscale.destroy();
           this.pending?.entries.forEach((entry) => textures.release(entry.key));
         },
       };
@@ -61,7 +63,7 @@ export class TileRenderer {
     const token = ++object.token;
     object.targetSignature = signature;
     const requests = selection.tiles.map((tile) => {
-      const url = resolveCanvasTileUrl(item, tile.level, tile.column, tile.row, priority);
+      const url = resolveCanvasTileUrl(item, tile.level, tile.column, tile.row);
       if (!url) throw new Error('Tile asset URL is unavailable');
       return this.textures.request({
         assetId: item.assetId as string, mip: tile.level, tileX: tile.column, tileY: tile.row, url, priority,
@@ -93,13 +95,15 @@ export class TileRenderer {
     this.objects.forEach((object) => {
       const pending = object.pending;
       if (!pending || pending.token !== object.token) return;
-      const container = this.createContainer(pending);
+      const item = this.scene?.items.find((value) => value.id === pending.item.id) ?? pending.item;
+      const tileSet = this.createTileSet(pending, item);
       object.current?.textureKeys.forEach((key) => this.textures.release(key));
       object.current?.container.destroy({ children: true });
-      object.current = { signature: pending.signature, container, textureKeys: pending.entries.map((entry) => entry.key) };
+      object.current?.grayscale.destroy();
+      object.current = tileSet;
       object.pending = undefined;
       object.targetSignature = undefined;
-      this.layer.addChild(container);
+      this.layer.addChild(tileSet.container);
     });
   }
 
@@ -112,6 +116,7 @@ export class TileRenderer {
     object.pending = undefined;
     object.current?.textureKeys.forEach((key) => this.textures.release(key));
     object.current?.container.destroy({ children: true });
+    object.current?.grayscale.destroy();
     object.current = undefined;
   }
 
@@ -119,8 +124,9 @@ export class TileRenderer {
   invalidateAll() { this.objects.forEach((_object, id) => this.release(id)); }
   hasCurrent(id: string) { return Boolean(this.objects.get(id)?.current); }
 
-  private createContainer(pending: PendingTileSet) {
+  private createTileSet(pending: PendingTileSet, item: ImageItem): TileSet {
     const container = new Container();
+    const grayscale = new ColorMatrixFilter();
     container.sortableChildren = true;
     pending.tiles.forEach((tile, index) => {
       const entry = pending.entries[index];
@@ -142,16 +148,24 @@ export class TileRenderer {
     const mask = new Graphics().rect(-pending.item.width / 2, -pending.item.height / 2, pending.item.width, pending.item.height).fill(0xffffff);
     container.addChild(mask);
     container.mask = mask;
-    this.updateContainer(container, pending.item);
-    return container;
+    const tileSet = { signature: pending.signature, container, grayscale,
+      textureKeys: pending.entries.map((entry) => entry.key) };
+    this.updateTileSet(tileSet, item);
+    return tileSet;
   }
 
-  private updateContainer(container: Container, item: ImageItem) {
+  private updateTileSet(tileSet: TileSet, item: ImageItem) {
+    const { container, grayscale } = tileSet;
     container.position.set(item.x + item.width / 2, item.y + item.height / 2);
     container.rotation = item.rotation * Math.PI / 180;
     container.scale.set(item.flipX ? -1 : 1, item.flipY ? -1 : 1);
     container.alpha = item.opacity;
     container.visible = !item.hidden;
     container.zIndex = item.zIndex + 0.5;
+    if (item.grayscale) {
+      grayscale.desaturate();
+      grayscale.contrast(imageGrayscaleContrast(item) - 1, true);
+    }
+    container.filters = item.grayscale ? [grayscale] : [];
   }
 }

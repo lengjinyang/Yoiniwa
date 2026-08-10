@@ -124,6 +124,22 @@ export function useSceneWorkspaceController({
     });
   }, [history, selectedIds]);
 
+  const previewSelected = useCallback((updater: (item: ImageItem) => void) => {
+    if (!selectedIds.length) return;
+    const selected = new Set(selectedIds);
+    history.preview((scene) => {
+      scene.items.forEach((item) => { if (selected.has(item.id)) updater(item); });
+    });
+  }, [history, selectedIds]);
+
+  const beginSelectedAdjustment = useCallback(() => {
+    if (selectedIds.length) history.beginTransaction();
+  }, [history, selectedIds.length]);
+
+  const commitSelectedAdjustment = useCallback(() => {
+    if (selectedIds.length) history.commitTransaction();
+  }, [history, selectedIds.length]);
+
   const restoreFullImages = useCallback(() => {
     const cropped = selectedItems.filter((item) => item.crop.x !== 0 || item.crop.y !== 0
       || item.crop.width !== item.naturalWidth || item.crop.height !== item.naturalHeight);
@@ -565,6 +581,9 @@ export function useSceneWorkspaceController({
     onSelectionChange,
     onGroupSelectionChange,
     mutateSelected,
+    previewSelected,
+    beginSelectedAdjustment,
+    commitSelectedAdjustment,
     restoreFullImages,
     deleteSelected,
     duplicate,

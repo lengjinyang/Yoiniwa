@@ -41,6 +41,7 @@ export interface ImageItem {
   locked: boolean;
   hidden?: boolean;
   grayscale?: boolean;
+  grayscaleContrast?: number;
   tags?: string[];
   groupId?: string;
   crop: CropRect;
@@ -365,7 +366,11 @@ export interface RefCanvasAPI {
   copyDiagnostics(): Promise<{ sessionId: string; path?: string; mirrorPath?: string; problemCount?: number }>;
   recentLogProblems?(limit?: number): Promise<{ sessionId: string; path: string; mirrorPath?: string; problems: unknown[] }>;
   exportImage(data: ArrayBuffer, suggestedName: string): Promise<{ canceled: boolean; path?: string }>;
+  exportOriginalImages(items: Array<{ assetId: string; suggestedName: string }>): Promise<{
+    canceled: boolean; path?: string; count?: number;
+  }>;
   copyImage(data: ArrayBuffer): Promise<void>;
+  copyOriginalImage(assetId: string): Promise<void>;
   showSourceInFolder(path: string): Promise<{ ok: boolean; message?: string }>;
   syncPhotoshopForeground(
     color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,

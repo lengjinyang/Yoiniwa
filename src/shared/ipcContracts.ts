@@ -33,7 +33,11 @@ export interface IpcContractMap {
   'cache:reset-location': IpcContract<[], CacheInfo>;
   'cache:clear': IpcContract<[], CacheInfo>;
   'image:export': IpcContract<[data: ArrayBuffer, suggestedName: string], { canceled: boolean; path?: string }>;
+  'image:export-originals': IpcContract<[
+    items: Array<{ assetId: string; suggestedName: string }>,
+  ], { canceled: boolean; path?: string; count?: number }>;
   'image:copy': IpcContract<[data: ArrayBuffer], void>;
+  'image:copy-original': IpcContract<[assetId: string], void>;
   'image:show-source': IpcContract<[path: string], { ok: boolean; message?: string }>;
   'photoshop:set-foreground': IpcContract<[
     color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,

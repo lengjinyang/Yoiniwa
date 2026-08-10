@@ -52,47 +52,6 @@ export function useVisualNotes({
     return () => window.removeEventListener('pointerdown', closeFolds, true);
   }, [enabled]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const input = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-      if (input) return;
-      const ctrl = event.ctrlKey || event.metaKey;
-      if (ctrl || event.altKey || event.shiftKey) return;
-      const key = event.key.toLowerCase();
-      if (key === 'q') {
-        event.preventDefault();
-        setEnabled((value) => !value);
-        return;
-      }
-      if (!enabled) return;
-      if (key === 'h') {
-        event.preventDefault();
-        if (!event.repeat) setTemporaryHidden(true);
-      } else if (key === '1' || key === 'b') {
-        event.preventDefault();
-        setTool('brush');
-      } else if (key === '2') {
-        event.preventDefault();
-        setTool('arrow');
-      } else if (key === '3' || key === 'e') {
-        event.preventDefault();
-        setTool('eraser');
-      }
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === 'h') setTemporaryHidden(false);
-    };
-    const onBlur = () => setTemporaryHidden(false);
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', onBlur);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      window.removeEventListener('blur', onBlur);
-    };
-  }, [enabled]);
-
   const toolState = useMemo<VisualNotesToolState>(() => ({
     enabled,
     tool,
@@ -152,6 +111,12 @@ export function useVisualNotes({
 
   const clearSelection = useCallback(() => setSelectedMarkId(undefined), []);
   const exit = useCallback(() => setEnabled(false), []);
+  const toggle = useCallback(() => setEnabled((value) => !value), []);
+  const beginTemporaryHide = useCallback(() => setTemporaryHidden(true), []);
+  const endTemporaryHide = useCallback(() => setTemporaryHidden(false), []);
+  const selectBrush = useCallback(() => setTool('brush'), []);
+  const selectArrow = useCallback(() => setTool('arrow'), []);
+  const selectEraser = useCallback(() => setTool('eraser'), []);
   const changeWidth = useCallback((nextWidth: VisualNoteWidth) => {
     setWidth(nextWidth);
     updateSelectedMarkStyle({ width: nextWidth });
@@ -219,5 +184,11 @@ export function useVisualNotes({
     deleteSelectedMark,
     clearSelection,
     exit,
+    toggle,
+    beginTemporaryHide,
+    endTemporaryHide,
+    selectBrush,
+    selectArrow,
+    selectEraser,
   };
 }

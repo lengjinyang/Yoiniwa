@@ -10,6 +10,8 @@ import { TileRenderer } from './TileRenderer';
 import type { SceneBounds } from '../scene/SceneNode';
 import { shouldUseTiledImage } from '../textures/TileSelector';
 
+import { imageGrayscaleContrast } from '../../imageAdjustments';
+
 interface PendingSwap { entry: GpuTextureEntry; mip: number; token: number }
 interface ImageRenderObject {
   sprite: Sprite;
@@ -43,6 +45,10 @@ function updateSprite(object: ImageRenderObject, item: ImageItem) {
   sprite.rotation = item.rotation * Math.PI / 180;
   sprite.alpha = item.opacity;
   sprite.zIndex = item.zIndex;
+  if (item.grayscale) {
+    object.grayscale.desaturate();
+    object.grayscale.contrast(imageGrayscaleContrast(item) - 1, true);
+  }
   sprite.filters = item.grayscale ? [object.grayscale] : [];
 }
 

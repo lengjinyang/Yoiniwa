@@ -65,7 +65,7 @@ pub fn run() {
             bridge::project_close, bridge::project_compact, bridge::project_stats, bridge::project_recover,
             bridge::scene_startup_path, bridge::scene_recent, bridge::scene_import,
             bridge::cache_info, bridge::cache_choose_location, bridge::cache_reset_location, bridge::cache_clear,
-            bridge::image_export, bridge::image_copy, bridge::image_show_source,
+            bridge::image_export, bridge::image_export_originals, bridge::image_copy, bridge::image_copy_original, bridge::image_show_source,
             bridge::photoshop_set_foreground, bridge::photoshop_place_rendered, bridge::photoshop_place_rendered_layers,
             bridge::photoshop_open_rendered, bridge::photoshop_get_document_info, bridge::photoshop_capture_preview,
             bridge::photoshop_take_preview,
@@ -83,7 +83,10 @@ pub fn run() {
     let app = builder.build(tauri::generate_context!()).expect("Yoiniwa Tauri initialization failed");
     app.run(|app, event| {
         if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
-            if let Some(state) = app.try_state::<AppState>() { let _ = state.project.lock().close(None); }
+            if let Some(state) = app.try_state::<AppState>() {
+                state.native.shutdown();
+                let _ = state.project.lock().close(None);
+            }
         }
     });
 }
@@ -97,6 +100,9 @@ fn handle_window_event(app: &tauri::AppHandle, event: &WindowEvent) {
         WindowEvent::Focused(false) => {
             let native = state.native.clone();
             thread::spawn(move || { thread::sleep(Duration::from_millis(80)); native.repair_after_blur(); });
+        }
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            state.native.sync_pen_windows();
         }
         _ => {}
     }

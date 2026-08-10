@@ -1,6 +1,11 @@
-import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import {
+  Fragment,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import type { CacheInfo } from '../../types';
-import { SHORTCUT_LABELS, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
+import { SHORTCUT_LABELS, shortcutDisplayName, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
 import { Button, formatBytes } from './CommonControls';
 import { UiIcon } from './UiIcon';
 
@@ -16,6 +21,8 @@ interface PropertiesPanelProps {
   onClose(): void;
   onBeginShortcutCapture(id: ShortcutId, label: string): void;
   onCaptureShortcut(id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>): void;
+  onCaptureShortcutKeyUp(id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>): void;
+  onCapturePanShortcutMouse(id: ShortcutId, event: ReactMouseEvent<HTMLButtonElement>): void;
   onShortcutCaptureBlur(): void;
   onResetShortcuts(): void;
   onChooseCacheLocation(): void;
@@ -28,29 +35,39 @@ interface PropertiesPanelProps {
 export function PropertiesPanel({
   open, settingsShortcut, shortcuts, shortcutCaptureId, drawingCollaborationMode,
   cacheInfo, cacheChanging, nativeAvailable, onClose, onBeginShortcutCapture,
-  onCaptureShortcut, onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
+  onCaptureShortcut, onCaptureShortcutKeyUp, onCapturePanShortcutMouse,
+  onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
   onClearCache, onOpenLogsFolder, onCopyDiagnostics,
 }: PropertiesPanelProps) {
   const [confirmingCacheClear, setConfirmingCacheClear] = useState(false);
   if (!open) return null;
   return <aside className="property-panel no-drag">
-    <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title={`关闭设置面板 (${settingsShortcut})`} onClick={() => {
+    <div className="property-header"><div><strong>设置</strong><span>应用</span></div><button title={`关闭设置面板 (${shortcutDisplayName(settingsShortcut)})`} onClick={() => {
       setConfirmingCacheClear(false);
       onClose();
     }}><UiIcon name="close" /></button></div>
     <section>
       <h3>快捷键</h3>
       <div className="shortcut-list">
-        {SHORTCUT_LABELS.map(({ id, label }) => {
+        {SHORTCUT_LABELS.map(({ id, label, group }, index) => {
           const capturing = shortcutCaptureId === id;
           const disabled = id === 'collaboration' && drawingCollaborationMode;
-          return <div className="shortcut-row" key={id}>
-            <span>{label}</span>
-            <button className={capturing ? 'active shortcut-capture' : 'shortcut-capture'}
-              title={disabled ? '请先退出协作模式' : '点击后按下快捷键'} disabled={disabled}
-              onClick={() => onBeginShortcutCapture(id, label)} onKeyDown={(event) => onCaptureShortcut(id, event)}
-              onBlur={() => { if (capturing) onShortcutCaptureBlur(); }}>{capturing ? '请按键…' : shortcuts[id]}</button>
-          </div>;
+          return <Fragment key={id}>
+            {(index === 0 || SHORTCUT_LABELS[index - 1].group !== group) && <div className="shortcut-category">{group}</div>}
+            <div className="shortcut-row">
+              <span>{label}</span>
+              <button className={capturing ? 'active shortcut-capture' : 'shortcut-capture'}
+                title={disabled ? '请先退出协作模式' : id === 'panCanvas' ? '点击后按下快捷键或鼠标中键' : '点击后按下快捷键'}
+                disabled={disabled}
+                onClick={() => onBeginShortcutCapture(id, label)} onKeyDown={(event) => onCaptureShortcut(id, event)}
+                onKeyUp={(event) => onCaptureShortcutKeyUp(id, event)}
+                onMouseDown={(event) => onCapturePanShortcutMouse(id, event)}
+                onAuxClick={(event) => { if (capturing && id === 'panCanvas') event.preventDefault(); }}
+                onBlur={() => { if (capturing) onShortcutCaptureBlur(); }}>
+                {capturing ? '请按键…' : shortcutDisplayName(shortcuts[id])}
+              </button>
+            </div>
+          </Fragment>;
         })}
       </div>
       <Button onClick={onResetShortcuts}>恢复默认快捷键</Button>

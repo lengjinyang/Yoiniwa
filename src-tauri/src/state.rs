@@ -115,7 +115,18 @@ impl AppState {
 }
 
 fn resolve_resource_dir(app: &AppHandle) -> PathBuf {
-    let packaged = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    let packaged = normalize_fs_path(app.path().resource_dir().unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR"))));
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if packaged.join("resources/native-window-move.ps1").exists() { packaged }
-    else { PathBuf::from(env!("CARGO_MANIFEST_DIR")) }
+    else if manifest.join("resources/native-window-move.ps1").exists() { manifest }
+    else { packaged }
+}
+
+fn normalize_fs_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path
+    }
 }
