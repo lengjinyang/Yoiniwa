@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "electron/main.ts",
+    "electron/workers/image-worker.ts",
+    "electron/benchmarks/performance-benchmark.ts",
+    "electron/benchmarks/project-zoom-benchmark.ts",
+    "scripts/*.mjs",
+    "tools/benchmarks/*.mjs",
+    "src/**/*.test.ts",
+    "electron/**/*.test.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}", "electron/**/*.{ts,cts}", "scripts/**/*.mjs", "tools/**/*.mjs"],
+  "ignore": ["electron/preload.cts", "electron/taskbar-input-preload.cts"],
+  "ignoreBinaries": ["attrib.exe"]
+}

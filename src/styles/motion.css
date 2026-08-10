@@ -1,0 +1,256 @@
+/*
+ * Shared motion language for renderer UI. Keep this file presentation-only:
+ * canvas input, window activation and Photoshop collaboration deliberately stay
+ * outside these selectors so visual polish cannot change pen or focus timing.
+ */
+
+@keyframes motion-panel-centered-in {
+  from { opacity: 0; transform: translate(10px, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}
+
+@keyframes motion-panel-left-in {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes motion-surface-in {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes motion-popover-in {
+  from { opacity: 0; transform: translateY(-4px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes motion-popover-up-in {
+  from { opacity: 0; transform: translateY(5px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes motion-popover-centered-up-in {
+  from { opacity: 0; transform: translate(-50%, 5px) scale(.98); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+@keyframes motion-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes motion-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes motion-toolbar-in {
+  from { opacity: 0; transform: translate(-50%, 8px) scale(.985); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+@keyframes motion-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px) scale(.98); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+@keyframes motion-empty-state-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 10px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@keyframes motion-content-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Continuous feedback for interactive controls. */
+button:not(:disabled) {
+  transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: var(--duration-fast);
+  transition-timing-function: var(--ease-standard);
+}
+
+button:not(:disabled):active {
+  transform: translateY(1px) scale(.985);
+  transition-duration: var(--duration-instant);
+}
+
+input, textarea, select {
+  transition: color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.ui-icon,
+.group-list-swatch,
+.outline-thumb,
+.color-control-checker,
+.group-color-presets i,
+.visual-note-current-color,
+.visual-note-color-list button > i {
+  transition: color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+button:not(:disabled):hover > .ui-icon { transform: scale(1.045); }
+button:not(:disabled):active > .ui-icon { transform: scale(.96); }
+
+/* Main panels use directional motion that matches where they live. */
+.property-panel {
+  animation: motion-panel-centered-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.outline-panel,
+.photoshop-version-panel {
+  animation: motion-panel-left-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.version-compare-panel {
+  transform-origin: center;
+  animation: motion-surface-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.performance-panel {
+  transform-origin: top right;
+  animation: motion-surface-in var(--duration-normal) var(--ease-emphasized) both;
+}
+
+/* Menus and compact floating surfaces. */
+.context-menu-list,
+.color-control-popover {
+  transform-origin: top left;
+  animation: motion-popover-in var(--duration-normal) var(--ease-emphasized) both;
+}
+
+.color-control:not(.floating) .color-control-popover { transform-origin: top right; }
+
+.visual-note-fold[open] > .visual-note-fold-panel:not(.visual-note-opacity-panel) {
+  transform-origin: bottom left;
+  animation: motion-popover-up-in var(--duration-normal) var(--ease-emphasized) both;
+}
+
+.visual-note-opacity-fold[open] > .visual-note-opacity-panel {
+  transform-origin: bottom center;
+  animation: motion-popover-centered-up-in var(--duration-normal) var(--ease-emphasized) both;
+}
+
+.window-control-zone {
+  transition: height var(--duration-normal) var(--ease-standard);
+}
+
+.window-floating-controls {
+  transition: opacity var(--duration-normal) var(--ease-standard),
+    transform var(--duration-normal) var(--ease-emphasized),
+    box-shadow var(--duration-normal) var(--ease-standard);
+}
+
+.scene-name-badge {
+  transition: opacity var(--duration-normal) var(--ease-standard),
+    background-color var(--duration-normal) var(--ease-standard),
+    transform var(--duration-normal) var(--ease-emphasized);
+}
+
+.scene-name-badge:not(.visible) { transform: translateY(-3px); }
+.scene-name-badge.visible { transform: translateY(0); }
+
+/* Modal layers fade independently from their dialog surface. */
+.group-rename-overlay,
+.photoshop-version-dialog-backdrop,
+.close-confirm-backdrop {
+  animation: motion-backdrop-in var(--duration-normal) var(--ease-standard) both;
+}
+
+.group-rename-card,
+.photoshop-version-dialog,
+.close-confirm-dialog {
+  transform-origin: center;
+  animation: motion-dialog-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.visual-notes-toolbar {
+  transform-origin: bottom center;
+  animation: motion-toolbar-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.status-toast {
+  transform-origin: bottom center;
+  animation: motion-toast-in var(--duration-normal) var(--ease-emphasized) both;
+}
+
+.import-progress {
+  transform-origin: bottom center;
+  animation: motion-toast-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.empty-state {
+  animation: motion-empty-state-in 320ms var(--ease-emphasized) both;
+}
+
+.canvas-startup-error { animation: motion-content-in var(--duration-slow) var(--ease-standard) both; }
+.cache-clear-confirm { animation: motion-surface-in var(--duration-normal) var(--ease-emphasized) both; }
+
+/* Content changes remain subtle so large boards do not feel busy. */
+.photoshop-version-card,
+.empty-recent-list > button,
+.group-list > button,
+.outline-row,
+.version-compare-state,
+.group-inspector-summary {
+  transition: color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.photoshop-version-card:hover,
+.empty-recent-list > button:hover,
+.group-inspector-summary:hover {
+  transform: translateY(-1px);
+}
+
+.photoshop-version-list > .photoshop-version-card,
+.empty-recent-list > button {
+  animation: motion-surface-in var(--duration-slow) var(--ease-emphasized) both;
+}
+
+.photoshop-version-list > .photoshop-version-card:nth-child(2),
+.empty-recent-list > button:nth-child(2) { animation-delay: 24ms; }
+.photoshop-version-list > .photoshop-version-card:nth-child(3),
+.empty-recent-list > button:nth-child(3) { animation-delay: 48ms; }
+.photoshop-version-list > .photoshop-version-card:nth-child(4),
+.empty-recent-list > button:nth-child(4) { animation-delay: 72ms; }
+
+.version-compare-side-by-side,
+.version-compare-wipe-current,
+.version-compare-overlay-history,
+.version-compare-state {
+  animation: motion-content-in var(--duration-normal) var(--ease-standard) both;
+}
+
+.import-progress-track i {
+  transition: width var(--duration-normal) var(--ease-standard);
+}
+
+.outline-disclosure .ui-icon,
+.visual-note-fold-caret {
+  transition: color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-normal) var(--ease-emphasized);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within { scroll-behavior: auto; }
+  button:not(:disabled):active,
+  button:not(:disabled):hover > .ui-icon,
+  button:not(:disabled):active > .ui-icon,
+  .photoshop-version-card:hover,
+  .empty-recent-list > button:hover,
+  .group-inspector-summary:hover,
+  .scene-name-badge { transform: none; }
+}
