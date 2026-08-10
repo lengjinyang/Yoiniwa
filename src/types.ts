@@ -333,7 +333,8 @@ interface RefCanvasAPI {
   pathForFile(file: File): string | undefined;
   openProject(path?: string): Promise<ProjectOpenResult>;
   commitProject(request: ProjectCommitRequest): Promise<ProjectCommitResult>;
-  saveProjectAs(request: ProjectCommitRequest): Promise<ProjectCommitResult>;
+  chooseProjectSavePath(suggestedName: string): Promise<{ canceled: boolean; token?: string }>;
+  saveProjectAs(request: ProjectCommitRequest, pathToken: string): Promise<ProjectCommitResult>;
   closeProject(sessionId?: string): Promise<void>;
   compactProject(sessionId?: string): Promise<ProjectStorageStats | { skipped: true; message?: string }>;
   projectStats(sessionId?: string): Promise<ProjectStorageStats>;
@@ -353,7 +354,11 @@ interface RefCanvasAPI {
   openLogsFolder(): Promise<{ path: string }>;
   copyDiagnostics(): Promise<{ sessionId: string; path?: string }>;
   exportImage(data: ArrayBuffer, suggestedName: string): Promise<{ canceled: boolean; path?: string }>;
+  exportOriginalImages(items: Array<{ assetId: string; suggestedName: string }>): Promise<{
+    canceled: boolean; path?: string; count?: number;
+  }>;
   copyImage(data: ArrayBuffer): Promise<void>;
+  copyOriginalImage(assetId: string): Promise<void>;
   showSourceInFolder(path: string): Promise<{ ok: boolean; message?: string }>;
   syncPhotoshopForeground(
     color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,

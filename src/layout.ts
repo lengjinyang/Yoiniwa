@@ -3,7 +3,6 @@ import { itemBounds } from './scene';
 
 export type LayoutAction =
   | 'pack' | 'align-left' | 'align-right' | 'align-top' | 'align-bottom'
-  | 'distribute-horizontal' | 'distribute-vertical'
   | 'normalize-width' | 'normalize-height' | 'normalize-size';
 
 function moveVisualBounds(item: ImageItem, x?: number, y?: number) {
@@ -21,25 +20,59 @@ function resizeAroundCenter(item: ImageItem, width: number, height: number) {
   item.y = centerY - height / 2;
 }
 
-function boundsOverlap(a: ReturnType<typeof itemBounds>, b: ReturnType<typeof itemBounds>) {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+interface PackedValue {
+  item: ImageItem;
+  bounds: ReturnType<typeof itemBounds>;
 }
 
-function separateIfOverlapping(items: ImageItem[], padding: number) {
-  const values = items.map((item) => ({ item, bounds: itemBounds(item) }));
-  const overlaps = values.some((left, index) => values.slice(index + 1).some((right) => boundsOverlap(left.bounds, right.bounds)));
-  if (!overlaps) return;
-  const left = Math.min(...values.map((value) => value.bounds.x));
-  const right = Math.max(...values.map((value) => value.bounds.x + value.bounds.width));
-  const top = Math.min(...values.map((value) => value.bounds.y));
-  const bottom = Math.max(...values.map((value) => value.bounds.y + value.bounds.height));
-  const horizontal = right - left >= bottom - top;
-  const sorted = [...values].sort((a, b) => horizontal ? a.bounds.x - b.bounds.x : a.bounds.y - b.bounds.y);
-  let cursor = horizontal ? left : top;
-  sorted.forEach((value) => {
-    moveVisualBounds(value.item, horizontal ? cursor : undefined, horizontal ? undefined : cursor);
-    cursor += (horizontal ? value.bounds.width : value.bounds.height) + padding;
+interface PackedRow {
+  values: PackedValue[];
+  width: number;
+  height: number;
+}
+
+function shelfRows(values: PackedValue[], targetWidth: number) {
+  const rows: PackedRow[] = [];
+  let row: PackedRow = { values: [], width: 0, height: 0 };
+  values.forEach((value) => {
+    if (row.values.length && row.width + value.bounds.width > targetWidth + 0.001) {
+      rows.push(row);
+      row = { values: [], width: 0, height: 0 };
+    }
+    row.values.push(value);
+    row.width += value.bounds.width;
+    row.height = Math.max(row.height, value.bounds.height);
   });
+  if (row.values.length) rows.push(row);
+  return rows;
+}
+
+function compactShelf(values: PackedValue[], targetAspect: number) {
+  const sorted = [...values].sort((a, b) => b.bounds.height - a.bounds.height
+    || b.bounds.width - a.bounds.width || a.item.zIndex - b.item.zIndex);
+  const totalArea = sorted.reduce((sum, value) => sum + value.bounds.width * value.bounds.height, 0);
+  const maximumWidth = Math.max(...sorted.map((value) => value.bounds.width));
+  const candidateWidths = new Set<number>([maximumWidth, Math.sqrt(totalArea * targetAspect)]);
+  const candidateStep = Math.max(1, Math.floor(sorted.length / 512));
+  let cumulativeWidth = 0;
+  sorted.forEach((value, index) => {
+    cumulativeWidth += value.bounds.width;
+    if ((index + 1) % candidateStep === 0 || index === sorted.length - 1) candidateWidths.add(cumulativeWidth);
+  });
+  let best: { rows: PackedRow[]; width: number; height: number; score: number } | undefined;
+  candidateWidths.forEach((candidateWidth) => {
+    const rows = shelfRows(sorted, Math.max(maximumWidth, candidateWidth));
+    const width = Math.max(...rows.map((row) => row.width));
+    const height = rows.reduce((sum, row) => sum + row.height, 0);
+    const aspectError = Math.abs(Math.log((width / Math.max(1, height)) / targetAspect));
+    const unusedRatio = Math.max(0, 1 - totalArea / Math.max(1, width * height));
+    const score = aspectError + unusedRatio * 0.2;
+    if (!best || score < best.score - 0.0001
+      || (Math.abs(score - best.score) <= 0.0001 && width * height <= best.width * best.height)) {
+      best = { rows, width, height, score };
+    }
+  });
+  return best!;
 }
 
 export function applyLayout(items: ImageItem[], action: LayoutAction, padding: number, targetAspect = 1.6): ImageItem[] {
@@ -48,23 +81,17 @@ export function applyLayout(items: ImageItem[], action: LayoutAction, padding: n
   const gapSize = Math.max(0, padding);
   if (action === 'pack') {
     const visual = result.map((item) => ({ item, bounds: itemBounds(item) }));
-    const packGap = 0;
-    const totalArea = visual.reduce((sum, value) => sum + value.bounds.width * value.bounds.height, 0);
-    const targetWidth = Math.max(...visual.map((value) => value.bounds.width), Math.sqrt(totalArea * Math.max(0.25, targetAspect)));
-    let x = Math.min(...visual.map((value) => value.bounds.x));
+    const startX = Math.min(...visual.map((value) => value.bounds.x));
     let y = Math.min(...visual.map((value) => value.bounds.y));
-    const startX = x;
-    let rowHeight = 0;
-    for (const value of [...visual].sort((a, b) => b.bounds.height - a.bounds.height || b.bounds.width - a.bounds.width)) {
-      if (x > startX && x + value.bounds.width > startX + targetWidth) {
-        x = startX;
-        y += rowHeight + packGap;
-        rowHeight = 0;
-      }
-      moveVisualBounds(value.item, x, y);
-      x += value.bounds.width + packGap;
-      rowHeight = Math.max(rowHeight, value.bounds.height);
-    }
+    const packed = compactShelf(visual, Math.max(0.25, targetAspect));
+    packed.rows.forEach((row) => {
+      let x = startX;
+      row.values.forEach((value) => {
+        moveVisualBounds(value.item, x, y);
+        x += value.bounds.width;
+      });
+      y += row.height;
+    });
     return result;
   }
 
@@ -90,33 +117,22 @@ export function applyLayout(items: ImageItem[], action: LayoutAction, padding: n
     });
   }
 
-  if (action === 'distribute-horizontal' && result.length > 1) {
-    const sorted = [...bounds].sort((a, b) => a.bounds.x - b.bounds.x);
-    let cursor = left;
-    sorted.forEach((value) => { moveVisualBounds(value.item, cursor); cursor += value.bounds.width + gapSize; });
-  }
-  if (action === 'distribute-vertical' && result.length > 1) {
-    const sorted = [...bounds].sort((a, b) => a.bounds.y - b.bounds.y);
-    let cursor = top;
-    sorted.forEach((value) => { moveVisualBounds(value.item, undefined, cursor); cursor += value.bounds.height + gapSize; });
-  }
-
   if (action.startsWith('normalize')) {
     const first = result[0];
+    const referenceBounds = itemBounds(first);
     result.forEach((item) => {
       if (action === 'normalize-width') {
-        const ratio = first.width / item.width;
-        resizeAroundCenter(item, first.width, item.height * ratio);
+        const ratio = referenceBounds.width / Math.max(1, itemBounds(item).width);
+        resizeAroundCenter(item, item.width * ratio, item.height * ratio);
       } else if (action === 'normalize-height') {
-        const ratio = first.height / item.height;
-        resizeAroundCenter(item, item.width * ratio, first.height);
+        const ratio = referenceBounds.height / Math.max(1, itemBounds(item).height);
+        resizeAroundCenter(item, item.width * ratio, item.height * ratio);
       } else {
         const target = Math.max(first.width, first.height);
-        const ratio = target / Math.max(item.width, item.height);
+        const ratio = target / Math.max(1, item.width, item.height);
         resizeAroundCenter(item, item.width * ratio, item.height * ratio);
       }
     });
-    separateIfOverlapping(result, gapSize);
   }
   return result;
 }

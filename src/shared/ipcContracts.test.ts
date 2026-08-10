@@ -10,10 +10,12 @@ const contractAssertions: [
 
 const invokeChannels = [
   'images:import', 'images:register-paths', 'images:register-urls', 'images:register-clipboard', 'images:prewarm',
-  'images:performance-stats', 'images:sample-pixel', 'project:open', 'project:commit', 'project:save-as',
+  'images:performance-stats', 'images:sample-pixel', 'project:open', 'project:commit',
+  'project:choose-save-path', 'project:save-as',
   'project:close', 'project:compact', 'project:stats', 'project:recover', 'scene:import', 'scene:recent',
   'scene:startup-path', 'cache:info', 'cache:choose-location', 'cache:reset-location', 'image:export',
-  'image:copy', 'image:show-source', 'photoshop:set-foreground', 'window:set-mode', 'window:get-mode',
+  'image:export-originals', 'image:copy', 'image:copy-original', 'image:show-source',
+  'photoshop:set-foreground', 'window:set-mode', 'window:get-mode',
   'window:set-collaboration-shortcut', 'window:get-collaboration-shortcut',
   'logs:write', 'logs:open-folder', 'logs:copy-diagnostics', 'performance:record-manual-wheel',
 ] as const satisfies readonly IpcChannel[];

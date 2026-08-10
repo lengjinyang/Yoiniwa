@@ -1,6 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+import {
+  CLIPBOARD_IMAGE_MAX_PIXELS,
+  clipboardImageDimensionsAllowed,
+} from '../../src/shared/imagePipelineConfig.js';
 import { buildImagePyramidCache } from './mip-generator.js';
 
 // Derivative preparation must yield CPU time to the renderer. libvips otherwise
@@ -124,6 +128,18 @@ async function writeOutput(outputRelativePath, buffer, requestId) {
 }
 
 async function processWithSharp(input, job) {
+  if (job.type === 'clipboardPng') {
+    // Metadata parsing does not decode the image. Validate oriented dimensions
+    // before allowing libvips to allocate the full clipboard bitmap.
+    const metadata = await sharp(input, { sequentialRead: true, limitInputPixels: false }).metadata();
+    const swapsAxes = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
+    const width = swapsAxes ? metadata.height ?? 0 : metadata.width ?? 0;
+    const height = swapsAxes ? metadata.width ?? 0 : metadata.height ?? 0;
+    if (!clipboardImageDimensionsAllowed(width, height)) {
+      throw new Error('原图尺寸过大，无法安全复制到系统剪贴板');
+    }
+    return png(sharp(input, { sequentialRead: true, limitInputPixels: CLIPBOARD_IMAGE_MAX_PIXELS }).rotate());
+  }
   if (job.type === 'thumbnail' && Number.isFinite(job.size)) {
     return png(sharp(input, { sequentialRead: true }).resize({
       width: job.size, height: job.size, fit: 'inside', withoutEnlargement: false,

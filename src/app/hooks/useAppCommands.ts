@@ -65,12 +65,18 @@ export function useAppCommands({
     {
       id: 'edit.copy',
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
-      execute: workspace.copySelection,
+      execute: () => {
+        const payload = workspace.copySelection();
+        if (payload) void delivery.copySelectionToSystemClipboard(payload);
+      },
     },
     {
       id: 'edit.cut',
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
-      execute: workspace.cutSelection,
+      execute: () => {
+        const payload = workspace.cutSelection();
+        if (payload) void delivery.copySelectionToSystemClipboard(payload);
+      },
     },
     { id: 'edit.paste', enabled: true, execute: () => {
       if (workspace.hasClipboard) workspace.pasteClipboard();
@@ -87,7 +93,7 @@ export function useAppCommands({
       execute: () => workspace.selectedGroup ? workspace.deleteGroup(false) : workspace.deleteSelected(),
     },
     { id: 'group.create', enabled: workspace.selectedIds.length >= 2, execute: workspace.createGroup },
-  ]), [history.canRedo, history.canUndo, history.redo, history.undo, imageImport, workspace]);
+  ]), [delivery, history.canRedo, history.canUndo, history.redo, history.undo, imageImport, workspace]);
 
   const shortcutCommands = createAppShortcutCommandRegistry([
     { id: 'colorPicker.press', execute: () => setColorPickerHeld(true) },
@@ -148,8 +154,6 @@ export function useAppCommands({
     { id: 'layout.alignRight', execute: () => workspace.layout('align-right') },
     { id: 'layout.alignTop', execute: () => workspace.layout('align-top') },
     { id: 'layout.alignBottom', execute: () => workspace.layout('align-bottom') },
-    { id: 'layout.distributeHorizontal', execute: () => workspace.layout('distribute-horizontal') },
-    { id: 'layout.distributeVertical', execute: () => workspace.layout('distribute-vertical') },
     { id: 'layout.normalizeWidth', execute: () => workspace.layout('normalize-width') },
     { id: 'layout.normalizeHeight', execute: () => workspace.layout('normalize-height') },
     { id: 'layout.normalizeSize', execute: () => workspace.layout('normalize-size') },
@@ -292,6 +296,8 @@ export function useAppCommands({
     },
     export: {
       render: (onlySelected, copy, format) => { void delivery.exportItems(onlySelected, copy, format); },
+      originals: () => { void delivery.exportOriginalItems(); },
+      copyOriginal: () => { void delivery.copyPrimaryOriginal(); },
     },
     application: { newScene: project.newScene, close: () => api?.close() },
   });

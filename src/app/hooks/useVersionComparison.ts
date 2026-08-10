@@ -24,6 +24,7 @@ export function useVersionComparison({
   documentBlocked,
 }: UseVersionComparisonOptions) {
   const [comparisonVersionId, setComparisonVersionId] = useState<string>();
+  const [comparisonBaseVersionId, setComparisonBaseVersionId] = useState<string>();
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('ab');
   const [comparisonSplit, setComparisonSplit] = useState(50);
   const [comparisonOpacity, setComparisonOpacity] = useState(50);
@@ -45,6 +46,7 @@ export function useVersionComparison({
 
   const closeVersionComparison = useCallback(() => {
     resetComparisonPreview();
+    setComparisonBaseVersionId(undefined);
     setComparisonVersionId(undefined);
   }, [resetComparisonPreview]);
 
@@ -80,6 +82,7 @@ export function useVersionComparison({
   const openVersionComparison = useCallback((version: PhotoshopVersionRecord) => {
     if (documentBlocked) return;
     resetComparisonPreview();
+    setComparisonBaseVersionId(undefined);
     setComparisonVersionId(version.id);
     setComparisonMode('ab');
     setComparisonSplit(50);
@@ -88,6 +91,9 @@ export function useVersionComparison({
   }, [captureComparisonPreview, documentBlocked, resetComparisonPreview]);
 
   const comparisonVersions = useMemo(() => [...metadata.versions].reverse(), [metadata.versions]);
+  const comparisonBaseVersion = comparisonBaseVersionId
+    ? metadata.versions.find((version) => version.id === comparisonBaseVersionId)
+    : undefined;
   const comparisonVersion = comparisonVersionId
     ? metadata.versions.find((version) => version.id === comparisonVersionId)
     : undefined;
@@ -102,12 +108,18 @@ export function useVersionComparison({
   }, [closeVersionComparison, comparisonVersion, comparisonVersionId]);
 
   useEffect(() => {
+    if (comparisonBaseVersionId && !comparisonBaseVersion) setComparisonBaseVersionId(undefined);
+  }, [comparisonBaseVersion, comparisonBaseVersionId]);
+
+  useEffect(() => {
     if (drawingCollaborationMode && comparisonVersionId) closeVersionComparison();
   }, [closeVersionComparison, comparisonVersionId, drawingCollaborationMode]);
 
   return {
     comparisonVersionId,
     comparisonVersion,
+    comparisonBaseVersionId,
+    comparisonBaseVersion,
     comparisonVersions,
     comparisonMode,
     comparisonSplit,
@@ -117,6 +129,7 @@ export function useVersionComparison({
     setComparisonSplit,
     setComparisonOpacity,
     setComparisonVersionId,
+    setComparisonBaseVersionId,
     openVersionComparison,
     refreshComparisonPreview,
     closeVersionComparison,

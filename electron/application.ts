@@ -20,7 +20,12 @@ import { appendRendererLogs, flushLogs, getLogDirectory, getLogPath, initializeL
 import { createIpcHandlerRegistrar } from './ipc/register-handler.js';
 import { createImageCachePathResolver } from './services/image-cache-paths.js';
 import { WorkerGeneration } from './services/worker-generation.js';
-import { IMAGE_CACHE_FORMAT_VERSION, IMAGE_IMPORT_STAGE_WEIGHTS, IMAGE_MIP_EDGES } from '../src/shared/imagePipelineConfig.js';
+import {
+  clipboardImageDimensionsAllowed,
+  IMAGE_CACHE_FORMAT_VERSION,
+  IMAGE_IMPORT_STAGE_WEIGHTS,
+  IMAGE_MIP_EDGES,
+} from '../src/shared/imagePipelineConfig.js';
 import { closestManifestLevel, readImagePyramidManifest } from './services/image-pyramid-manifest.js';
 import { trimImagePyramidCache } from './services/image-cache-cleaner.js';
 import { WorkerAssetRegistrations } from './services/worker-asset-registrations.js';
@@ -68,6 +73,9 @@ let mainWindow;
 let dirtyRevisionState = createDirtyRevisionState();
 let closeConfirmationPending = false;
 let closeConfirmed = false;
+let projectCloseForQuitStarted = false;
+let projectCloseForQuitCompleted = false;
+const pendingProjectSavePaths = new Map<string, { filePath: string; senderId: number; timer: NodeJS.Timeout }>();
 let startupScenePath = process.env.REFCANVAS_PROJECT_BENCH_PATH || process.argv.find((value) => /\.(?:yoi|refcanvas)$/i.test(value));
 let windowState = { alwaysOnTop: false, clickThrough: false, locked: false, collaborationMode: false, opacity: 1 };
 const DEFAULT_COLLABORATION_SHORTCUT = 'Ctrl+Alt+Y';
@@ -214,6 +222,34 @@ async function trimImageCacheForActive(activeIds: ReadonlySet<string>) {
 
 function mimeFromName(name, fallback = 'application/octet-stream') {
   return mimeByExt[path.extname(name).toLowerCase()] ?? fallback;
+}
+
+function originalExportName(record, suggestedName) {
+  const originalName = path.basename(typeof record.originalName === 'string' ? record.originalName : '');
+  const requestedName = path.basename(typeof suggestedName === 'string' ? suggestedName : '');
+  const sourceExtension = mimeFromName(originalName) === record.mimeType
+    ? path.extname(originalName).toLowerCase()
+    : extByMime[record.mimeType] ?? '.bin';
+  const requestedStem = (requestedName || originalName || record.id)
+    .replace(/\.[^.]+$/, '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/[. ]+$/g, '') || record.id;
+  return `${requestedStem}${sourceExtension}`;
+}
+
+async function availableExportPath(directory, fileName, reservedPaths) {
+  const extension = path.extname(fileName);
+  const stem = path.basename(fileName, extension);
+  for (let index = 1; index <= 10000; index += 1) {
+    const candidateName = index === 1 ? fileName : `${stem} (${index})${extension}`;
+    const candidate = path.join(directory, candidateName);
+    const key = path.resolve(candidate).toLowerCase();
+    if (!reservedPaths.has(key) && !existsSync(candidate)) {
+      reservedPaths.add(key);
+      return candidate;
+    }
+  }
+  throw new Error(`无法为原图生成可用文件名：${fileName}`);
 }
 
 async function mapWithConcurrency(values, mapper, concurrency = 4) {
@@ -1160,6 +1196,27 @@ function projectFilePath(pathname: string) {
   if (/\.yoi$/i.test(pathname)) return pathname;
   if (/\.refcanvas$/i.test(pathname)) return `${pathname.slice(0, -'.refcanvas'.length)}.yoi`;
   return `${pathname}.yoi`;
+}
+
+function registerProjectSavePath(filePath: string, senderId: number) {
+  for (const [token, pending] of pendingProjectSavePaths) {
+    if (pending.senderId !== senderId) continue;
+    clearTimeout(pending.timer);
+    pendingProjectSavePaths.delete(token);
+  }
+  const token = randomUUID();
+  const timer = setTimeout(() => pendingProjectSavePaths.delete(token), 5 * 60 * 1000);
+  timer.unref?.();
+  pendingProjectSavePaths.set(token, { filePath, senderId, timer });
+  return token;
+}
+
+function consumeProjectSavePath(token: string, senderId: number) {
+  const pending = typeof token === 'string' ? pendingProjectSavePaths.get(token) : undefined;
+  if (!pending || pending.senderId !== senderId) throw new Error('保存路径选择已过期，请重新保存');
+  clearTimeout(pending.timer);
+  pendingProjectSavePaths.delete(token);
+  return pending.filePath;
 }
 
 function projectPreviewBuffer(value: unknown): Buffer | undefined {
@@ -2387,9 +2444,21 @@ app.on('second-instance', (_event, argv) => {
   mainWindow?.focus();
 });
 
-app.on('will-quit', () => {
+app.on('will-quit', (event) => {
+  if (!projectCloseForQuitCompleted) {
+    event.preventDefault();
+    if (!projectCloseForQuitStarted) {
+      projectCloseForQuitStarted = true;
+      void projectPersistence.close()
+        .catch((error) => logWarn('project.close-before-quit-failed', { error: String(error) }))
+        .finally(() => {
+          projectCloseForQuitCompleted = true;
+          app.quit();
+        });
+    }
+    return;
+  }
   logInfo('app.will-quit');
-  void projectPersistence.close();
   void flushLogs();
   globalShortcut.unregisterAll();
   destroyTaskbarPenWindows();
@@ -2616,13 +2685,20 @@ handleIpc('project:commit', async (_event, request) => {
   return result;
 });
 
-handleIpc('project:save-as', async (_event, request) => {
+handleIpc('project:choose-save-path', async (event, suggestedName) => {
+  const rawName = path.basename(typeof suggestedName === 'string' ? suggestedName : '');
+  const safeStem = rawName.replace(/\.(?:yoi|refcanvas)$/i, '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/g, '') || '未命名画板';
   const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: `${request.scene.name || '未命名画板'}.yoi`,
+    defaultPath: `${safeStem.slice(0, 180)}.yoi`,
     filters: sceneFilters,
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   const filePath = projectFilePath(result.filePath);
+  return { canceled: false, token: registerProjectSavePath(filePath, event.sender.id) };
+});
+handleIpc('project:save-as', async (event, request, pathToken) => {
+  const filePath = consumeProjectSavePath(pathToken, event.sender.id);
   dirtyRevisionState = updateDirtyRevision(dirtyRevisionState, true, request.rendererRevision);
   const committed = await projectPersistence.saveAs({
     sessionId: request.sessionId, scene: request.scene, metadata: request.photoshopProject,
@@ -2704,7 +2780,80 @@ handleIpc('image:export', async (_event, data, suggestedName) => {
   await fs.writeFile(result.filePath, wantsJpeg ? image.toJPEG(92) : image.toPNG());
   return { canceled: false, path: result.filePath };
 });
-handleIpc('image:copy', async (_event, data) => clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(data))));
+handleIpc('image:export-originals', async (_event, requestedItems) => {
+  if (!Array.isArray(requestedItems) || requestedItems.length < 1 || requestedItems.length > 256) {
+    throw new Error('请选择 1 至 256 张图片导出');
+  }
+  const items = requestedItems.map((requested) => {
+    if (!requested || typeof requested.assetId !== 'string' || !/^[a-f0-9]{64}$/i.test(requested.assetId)) {
+      throw new Error('导出原图请求无效');
+    }
+    const registered = assetRegistry.get(requested.assetId);
+    if (!registered) throw new Error(`原图资源不存在：${requested.assetId}`);
+    return {
+      assetId: requested.assetId,
+      name: originalExportName(registered.record, requested.suggestedName),
+    };
+  });
+  if (items.length === 1) {
+    const extension = path.extname(items[0].name).slice(1) || 'bin';
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: items[0].name,
+      filters: [{ name: '原始图片', extensions: [extension] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    const sourcePath = await ensureAssetFile(items[0].assetId);
+    if (path.resolve(sourcePath).toLowerCase() !== path.resolve(result.filePath).toLowerCase()) {
+      await fs.copyFile(sourcePath, result.filePath);
+    }
+    return { canceled: false, path: result.filePath, count: 1 };
+  }
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: `选择保存 ${items.length} 张原图的文件夹`,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || !result.filePaths[0]) return { canceled: true };
+  const directory = result.filePaths[0];
+  const reservedPaths = new Set();
+  for (const item of items) {
+    const targetPath = await availableExportPath(directory, item.name, reservedPaths);
+    await fs.copyFile(await ensureAssetFile(item.assetId), targetPath);
+  }
+  return { canceled: false, path: directory, count: items.length };
+});
+handleIpc('image:copy', async (_event, data) => {
+  const encoded = Buffer.from(data);
+  const metadata = await sharp(encoded, { sequentialRead: true, limitInputPixels: false }).metadata()
+    .catch(() => { throw new Error('复制的图片数据无法解码'); });
+  if (!clipboardImageDimensionsAllowed(metadata.width ?? 0, metadata.height ?? 0)) {
+    throw new Error('合成图尺寸过大，无法安全复制到系统剪贴板');
+  }
+  const image = nativeImage.createFromBuffer(encoded);
+  if (image.isEmpty()) throw new Error('复制的图片数据无法解码');
+  clipboard.writeImage(image);
+});
+handleIpc('image:copy-original', async (_event, assetId) => {
+  if (typeof assetId !== 'string' || !/^[a-f0-9]{64}$/i.test(assetId) || !assetRegistry.has(assetId)) {
+    throw new Error('复制原图请求无效');
+  }
+  const registered = assetRegistry.get(assetId)!;
+  if (!clipboardImageDimensionsAllowed(registered.record.naturalWidth, registered.record.naturalHeight)) {
+    throw new Error('原图尺寸过大，无法安全复制到系统剪贴板');
+  }
+  if (!sessionCachePath) throw new Error('剪贴板临时目录尚未准备好');
+  const sourcePath = await ensureAssetFile(assetId);
+  const outputPath = path.join(sessionCachePath, `clipboard-${randomUUID()}.png`);
+  try {
+    await runRegisteredImageWorker(registered.record.hash, undefined, {
+      type: 'clipboardPng', outputRelativePath: cacheRelativePath(outputPath),
+    }, 120_000, sourcePath);
+    const image = nativeImage.createFromPath(outputPath);
+    if (image.isEmpty()) throw new Error('原图无法写入系统剪贴板');
+    clipboard.writeImage(image);
+  } finally {
+    await fs.rm(outputPath, { force: true }).catch(() => undefined);
+  }
+});
 handleIpc('image:show-source', async (_event, requestedPath) => {
   if (typeof requestedPath !== 'string' || !path.isAbsolute(requestedPath)) return { ok: false, message: '这张图片没有可用的本地源文件' };
   try { await fs.access(requestedPath); shell.showItemInFolder(requestedPath); return { ok: true }; }

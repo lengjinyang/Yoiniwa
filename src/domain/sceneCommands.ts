@@ -68,11 +68,14 @@ export function applyImageChanges(scene: Scene, changes: readonly ImageChange[],
 }
 
 export function layoutSceneImages(scene: Scene, targetIds: readonly string[], action: LayoutAction, targetAspect: number) {
-  const selected = new Set(targetIds);
-  const targets = scene.items.filter((item) => selected.has(item.id));
+  const byId = new Map(scene.items.map((item) => [item.id, item]));
+  const targets = targetIds.flatMap((id) => {
+    const item = byId.get(id);
+    return item ? [item] : [];
+  });
   const transformed = applyLayout(targets, action, scene.canvas.padding, targetAspect);
-  const byId = new Map(transformed.map((item) => [item.id, item]));
-  scene.items = scene.items.map((item) => byId.get(item.id) ?? item);
+  const transformedById = new Map(transformed.map((item) => [item.id, item]));
+  scene.items = scene.items.map((item) => transformedById.get(item.id) ?? item);
   transformed.forEach((item) => reconcileMemberBounds(scene, { type: 'image', id: item.id }, itemBounds(item)));
   return transformed;
 }

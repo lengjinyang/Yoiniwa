@@ -11,5 +11,6 @@
     "electron/**/*.test.ts"
   ],
   "project": ["src/**/*.{ts,tsx}", "electron/**/*.{ts,cts}", "scripts/**/*.mjs", "tools/**/*.mjs"],
-  "ignore": ["electron/preload.cts", "electron/taskbar-input-preload.cts"]
+  "ignore": ["electron/preload.cts", "electron/taskbar-input-preload.cts"],
+  "ignoreBinaries": ["attrib.exe"]
 }

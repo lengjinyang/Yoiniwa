@@ -350,17 +350,19 @@ export function useSceneWorkspaceController({
 
   const copySelection = useCallback(() => {
     const payload = captureSceneSelection(history.scene, selectedIds, selectedGroupId);
-    if (!payload) { setStatus('没有可复制的内容'); return false; }
+    if (!payload) { setStatus('没有可复制的内容'); return undefined; }
     sceneClipboardRef.current = payload;
     setStatus(selectedGroupId ? '已复制分组框及其内容' : `已复制 ${payload.items.length} 项`);
-    return true;
+    return payload;
   }, [history.scene, selectedGroupId, selectedIds, setStatus]);
 
   const cutSelection = useCallback(() => {
-    if (!copySelection()) return;
+    const payload = copySelection();
+    if (!payload) return undefined;
     if (selectedGroup) deleteGroup(true);
     else deleteSelected();
     setStatus('已剪切，可使用粘贴快捷键粘贴');
+    return payload;
   }, [copySelection, deleteGroup, deleteSelected, selectedGroup, setStatus]);
 
   const pasteClipboard = useCallback(() => {

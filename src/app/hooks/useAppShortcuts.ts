@@ -16,7 +16,7 @@ export type AppShortcutCommandId =
   | 'image.restoreCrop' | 'image.resetTransform' | 'image.flipHorizontal' | 'image.flipVertical'
   | 'image.toggleLock' | 'image.moveFront' | 'image.moveBack'
   | 'layout.pack' | 'layout.packAndFit' | 'layout.alignLeft' | 'layout.alignRight' | 'layout.alignTop'
-  | 'layout.alignBottom' | 'layout.distributeHorizontal' | 'layout.distributeVertical'
+  | 'layout.alignBottom'
   | 'layout.normalizeWidth' | 'layout.normalizeHeight' | 'layout.normalizeSize'
   | 'view.openMenu' | 'view.fitCanvas' | 'view.resetZoom' | 'view.toggleFocus'
   | 'view.focusNext' | 'view.focusPrevious' | 'view.zoomIn' | 'view.zoomOut'
@@ -107,8 +107,6 @@ const APP_SHORTCUT_BINDINGS: ReadonlyArray<{
   { shortcut: 'alignRight', command: 'layout.alignRight' },
   { shortcut: 'alignTop', command: 'layout.alignTop' },
   { shortcut: 'alignBottom', command: 'layout.alignBottom' },
-  { shortcut: 'distributeHorizontal', command: 'layout.distributeHorizontal' },
-  { shortcut: 'distributeVertical', command: 'layout.distributeVertical' },
   { shortcut: 'normalizeWidth', command: 'layout.normalizeWidth' },
   { shortcut: 'normalizeHeight', command: 'layout.normalizeHeight' },
   { shortcut: 'normalizeSize', command: 'layout.normalizeSize' },

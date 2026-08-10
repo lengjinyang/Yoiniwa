@@ -7,6 +7,7 @@ import { mergeSceneInto } from '../../sceneMerge';
 import { EMPTY_PHOTOSHOP_PROJECT_METADATA } from '../../shared/photoshopVersions';
 import type { PhotoshopProjectMetadata, RecentScene, Scene } from '../../types';
 import { renderProjectPreview } from '../projectPreview';
+import { runProjectSaveFlow } from '../projectSaveFlow';
 
 interface ProjectHistory {
   scene: Scene;
@@ -107,18 +108,19 @@ export function useProjectLifecycle({
     const saveRevision = flushed.revision;
     const requestId = beginOperation('save', '正在保存…');
     try {
-      const preview = await renderProjectPreview(flushed.scene);
-      const request = {
-        sessionId: projectSessionIdRef.current,
-        scene: serializeProjectScene(flushed.scene),
-        photoshopProject: photoshopMetadataRef.current,
-        rendererRevision: saveRevision,
-        preview,
-        reason: 'explicit' as const,
-      };
-      const result = saveAs || !projectSessionIdRef.current
-        ? await api.saveProjectAs(request)
-        : await api.commitProject(request);
+      const result = await runProjectSaveFlow({
+        api,
+        useSaveAs: saveAs || !projectSessionIdRef.current,
+        suggestedName: flushed.scene.name || '未命名画板',
+        createRequest: async () => ({
+          sessionId: projectSessionIdRef.current,
+          scene: serializeProjectScene(flushed.scene),
+          photoshopProject: photoshopMetadataRef.current,
+          rendererRevision: saveRevision,
+          preview: await renderProjectPreview(flushed.scene),
+          reason: 'explicit' as const,
+        }),
+      });
       if (!result.canceled) {
         if (result.sessionId) projectSessionIdRef.current = result.sessionId;
         const savedCurrentRevision = result.scene

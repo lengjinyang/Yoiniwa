@@ -16,15 +16,6 @@ describe('layout operations', () => {
     expect(result[1].y).toBe(90);
   });
 
-  it('distributes items into a horizontal row using configured padding', () => {
-    const result = applyLayout([
-      item('1', 0, 0, 20, 20), item('2', 25, 0, 20, 20), item('3', 100, 0, 20, 20),
-    ], 'distribute-horizontal', 10);
-    expect(result[0].x).toBe(0);
-    expect(result[1].x).toBe(30);
-    expect(result[2].x).toBe(60);
-  });
-
   it('aligns rotated items by their visible edges', () => {
     const rotated = item('1', 0, 0, 100, 50);
     rotated.rotation = 90;
@@ -43,11 +34,6 @@ describe('layout operations', () => {
       : edge === 'top' ? bounds.map((value) => value.y)
         : bounds.map((value) => value.y + value.height);
     expect(values[0]).toBeCloseTo(values[1]);
-  });
-
-  it('distributes items into a vertical column using configured padding', () => {
-    const result = applyLayout([item('1', 0, 0, 20, 30), item('2', 0, 100, 20, 40)], 'distribute-vertical', 7);
-    expect(result.map((value) => value.y)).toEqual([0, 37]);
   });
 
   it('normalizes width while preserving aspect ratio', () => {

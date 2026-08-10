@@ -14,6 +14,19 @@ export const IMAGE_WHOLE_TEXTURE_EDGE = 1024;
 export const LARGE_IMAGE_TILE_EDGE = 8192;
 export const MIP_OVERSAMPLE = 1.25;
 
+// Windows clipboard bitmaps are materialized in the Electron main process by
+// nativeImage. Keep the decoded bitmap below a predictable CPU-memory ceiling,
+// even when the encoded source is a small high-compression image.
+export const CLIPBOARD_IMAGE_MAX_EDGE = 16_384;
+export const CLIPBOARD_IMAGE_MAX_PIXELS = 40_000_000;
+
+export function clipboardImageDimensionsAllowed(width: number, height: number) {
+  return Number.isSafeInteger(width) && Number.isSafeInteger(height)
+    && width > 0 && height > 0
+    && width <= CLIPBOARD_IMAGE_MAX_EDGE && height <= CLIPBOARD_IMAGE_MAX_EDGE
+    && width * height <= CLIPBOARD_IMAGE_MAX_PIXELS;
+}
+
 const CPU_IMAGE_CACHE_DEFAULT_BYTES = 512 * 1024 * 1024;
 const CPU_IMAGE_CACHE_MIN_BYTES = 256 * 1024 * 1024;
 const CPU_IMAGE_CACHE_MAX_BYTES = 1024 * 1024 * 1024;

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { createRecoveringQueue } from './persistence-queue.js';
 import { LegacyZipProjectReader } from './legacy-zip-project-reader.js';
 import { YoiRepository, isYoiStorageV4, type YoiBlobSource, type YoiCommitResult, type YoiStorageStats } from './yoi-repository.js';
@@ -58,6 +59,13 @@ export type ProjectCompactResponse = ProjectStorageStats | { skipped: true; mess
 interface WriteLease {
   path: string;
   token: string;
+}
+
+function hideWindowsLockFile(filePath: string) {
+  if (process.platform !== 'win32') return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    execFile('attrib.exe', ['+H', filePath], { windowsHide: true }, () => resolve());
+  });
 }
 
 export class ProjectSession {
@@ -511,6 +519,7 @@ export class ProjectPersistenceService {
     const token = randomUUID();
     try {
       await fs.writeFile(lockPath, JSON.stringify({ pid: process.pid, token, openedAt: new Date().toISOString() }), { flag: 'wx' });
+      await hideWindowsLockFile(lockPath);
       return { path: lockPath, token };
     } catch (error: any) {
       if (error?.code !== 'EEXIST') throw error;
@@ -523,6 +532,7 @@ export class ProjectPersistenceService {
         }
         await fs.rm(lockPath, { force: true });
         await fs.writeFile(lockPath, JSON.stringify({ pid: process.pid, token, openedAt: new Date().toISOString() }), { flag: 'wx' });
+        await hideWindowsLockFile(lockPath);
         return { path: lockPath, token };
       } catch { return undefined; }
     }

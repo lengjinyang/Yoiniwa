@@ -241,6 +241,7 @@ export function AppOverlays({
       currentPreviewError={comparison.error}
       currentCapturedAt={comparison.capturedAt}
       currentLabel={comparison.documentName || 'Photoshop 当前文档'}
+      baseVersion={versions.comparisonBaseVersion}
       version={versions.comparisonVersion}
       versions={versions.comparisonVersions}
       mode={versions.comparisonMode}
@@ -249,6 +250,7 @@ export function AppOverlays({
       onModeChange={versions.setComparisonMode}
       onSplitChange={versions.setComparisonSplit}
       onOpacityChange={versions.setComparisonOpacity}
+      onBaseVersionChange={versions.setComparisonBaseVersionId}
       onVersionChange={versions.setComparisonVersionId}
       onRefreshCurrent={versions.refreshComparisonPreview}
       onClose={versions.closeVersionComparison}

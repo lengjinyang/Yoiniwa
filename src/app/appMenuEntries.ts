@@ -72,6 +72,8 @@ interface BuildAppMenuEntriesOptions {
   };
   export: {
     render(onlySelected: boolean, copy?: boolean, format?: 'png' | 'jpg'): void;
+    originals(): void;
+    copyOriginal(): void;
   };
   application: {
     newScene(): void;
@@ -209,8 +211,6 @@ export function buildAppMenuEntries({
         { type: 'item', label: '右对齐', shortcut: displayShortcut('alignRight'), disabled: layout.targetCount < 2, action: () => layout.run('align-right') },
         { type: 'item', label: '顶部对齐', shortcut: displayShortcut('alignTop'), disabled: layout.targetCount < 2, action: () => layout.run('align-top') },
         { type: 'item', label: '底部对齐', shortcut: displayShortcut('alignBottom'), disabled: layout.targetCount < 2, action: () => layout.run('align-bottom') },
-        { type: 'item', label: '水平分布', shortcut: displayShortcut('distributeHorizontal'), disabled: layout.targetCount < 2, action: () => layout.run('distribute-horizontal') },
-        { type: 'item', label: '垂直分布', shortcut: displayShortcut('distributeVertical'), disabled: layout.targetCount < 2, action: () => layout.run('distribute-vertical') },
         { type: 'separator' },
         { type: 'item', label: '统一宽度', shortcut: displayShortcut('normalizeWidth'), disabled: layout.targetCount < 2, action: () => layout.run('normalize-width') },
         { type: 'item', label: '统一高度', shortcut: displayShortcut('normalizeHeight'), disabled: layout.targetCount < 2, action: () => layout.run('normalize-height') },
@@ -248,7 +248,9 @@ export function buildAppMenuEntries({
         { type: 'item', label: '画板为 PNG…', shortcut: displayShortcut('exportBoard'), action: () => exportActions.render(false, false, 'png') },
         { type: 'item', label: '画板为 JPEG…', action: () => exportActions.render(false, false, 'jpg') },
         { type: 'item', label: '导出选中…', shortcut: displayShortcut('exportSelected'), disabled: !hasSelection, action: () => exportActions.render(true) },
+        { type: 'item', label: '导出选中原图…', disabled: !hasImageSelection, action: exportActions.originals },
         { type: 'item', label: '复制合成图', action: () => exportActions.render(hasSelection, true) },
+        { type: 'item', label: '复制选中原图', disabled: selection.selectedItems.length !== 1, action: exportActions.copyOriginal },
       ],
     },
     { type: 'separator' },

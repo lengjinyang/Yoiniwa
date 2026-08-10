@@ -36,8 +36,6 @@ const SHORTCUT_IDS = [
   'alignRight',
   'alignTop',
   'alignBottom',
-  'distributeHorizontal',
-  'distributeVertical',
   'normalizeWidth',
   'normalizeHeight',
   'normalizeSize',
@@ -111,8 +109,6 @@ export const DEFAULT_SHORTCUTS: ShortcutPreferences = {
   alignRight: 'Ctrl+ArrowRight',
   alignTop: 'Ctrl+ArrowUp',
   alignBottom: 'Ctrl+ArrowDown',
-  distributeHorizontal: 'Ctrl+Alt+Shift+ArrowUp',
-  distributeVertical: 'Ctrl+Alt+Shift+ArrowDown',
   normalizeWidth: 'Ctrl+Alt+ArrowRight',
   normalizeHeight: 'Ctrl+Alt+ArrowLeft',
   normalizeSize: 'Ctrl+Alt+ArrowUp',
@@ -185,8 +181,6 @@ export const SHORTCUT_LABELS: ReadonlyArray<{ id: ShortcutId; label: string; gro
   { id: 'alignRight', label: '右对齐', group: '排列' },
   { id: 'alignTop', label: '顶部对齐', group: '排列' },
   { id: 'alignBottom', label: '底部对齐', group: '排列' },
-  { id: 'distributeHorizontal', label: '水平分布', group: '排列' },
-  { id: 'distributeVertical', label: '垂直分布', group: '排列' },
   { id: 'normalizeWidth', label: '统一宽度', group: '排列' },
   { id: 'normalizeHeight', label: '统一高度', group: '排列' },
   { id: 'normalizeSize', label: '统一尺寸', group: '排列' },
@@ -292,14 +286,10 @@ export function shortcutMatchesKeyboardEvent(
   return shortcutMatchesEvent(shortcut, event);
 }
 
-export const panShortcutMatchesKeyboardEvent = shortcutMatchesKeyboardEvent;
-
 export function shortcutReleasedByKeyboardEvent(shortcut: string, event: Pick<KeyboardEvent, 'key' | 'code'>) {
   const released = modifierFromEventKey(event.key) ?? keyFromEvent(event);
   return Boolean(released && shortcut.split('+').includes(released));
 }
-
-export const panShortcutReleasedByKeyboardEvent = shortcutReleasedByKeyboardEvent;
 
 export function panShortcutMatchesPointerEvent(
   shortcut: string,

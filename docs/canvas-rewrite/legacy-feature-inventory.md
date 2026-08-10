@@ -41,7 +41,6 @@
 ## 排列与吸附
 
 - 左/右/上/下对齐。
-- 水平/垂直分布。
 - 统一宽、高、尺寸。
 - Pack、Pack and Fit。
 - Scene `canvas.snap` 和 padding 设置。

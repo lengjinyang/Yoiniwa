@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { LassoPoint } from '../../canvas/selection/SelectionController';
 import { renderItems } from '../../exportScene';
+import type { SceneClipboardPayload } from '../../sceneClipboard';
 import type { ImageItem, Scene } from '../../types';
 import type { useVisualNotes } from './useVisualNotes';
 
@@ -68,6 +69,55 @@ export function useSceneDelivery({
       settleOperation(requestId, 'error', `导出失败：${String(error)}`);
     }
   }, [api, beginOperation, clearOperation, getVisualNotesForRender, scene, selectedItems, setStatus, settleOperation]);
+
+  const exportOriginalItems = useCallback(async () => {
+    if (!api) return;
+    if (!selectedItems.length) { setStatus('请先选择要导出的图片'); return; }
+    if (selectedItems.some((item) => !item.assetId)) { setStatus('选中内容包含没有原图资源的图片'); return; }
+    const requestId = beginOperation('export', '正在导出原图…');
+    try {
+      const result = await api.exportOriginalImages(selectedItems.map((item) => ({
+        assetId: item.assetId!, suggestedName: item.name,
+      })));
+      if (result.canceled) clearOperation(requestId);
+      else settleOperation(requestId, 'success', selectedItems.length === 1
+        ? `已导出原图至 ${result.path}`
+        : `已导出 ${result.count ?? selectedItems.length} 张原图至 ${result.path}`);
+    } catch (error) {
+      settleOperation(requestId, 'error', `导出原图失败：${String(error)}`);
+    }
+  }, [api, beginOperation, clearOperation, selectedItems, setStatus, settleOperation]);
+
+  const copySelectionToSystemClipboard = useCallback(async (payload: SceneClipboardPayload) => {
+    if (!api || !payload.items.length) return;
+    try {
+      const imageData = await renderItems(
+        payload.items,
+        undefined,
+        payload.groups,
+        1,
+        payload.visualNotes,
+        { margin: 0 },
+      );
+      await api.copyImage(imageData);
+      setStatus('已复制选中内容的合成图');
+    } catch (error) {
+      setStatus(`复制到系统剪贴板失败：${String(error)}`);
+    }
+  }, [api, setStatus]);
+
+  const copyPrimaryOriginal = useCallback(async () => {
+    if (!api || selectedItems.length !== 1 || !selectedItems[0].assetId) {
+      setStatus('请选择一张包含原图资源的图片');
+      return;
+    }
+    try {
+      await api.copyOriginalImage(selectedItems[0].assetId);
+      setStatus('已复制原图，可粘贴到其他软件');
+    } catch (error) {
+      setStatus(`复制原图失败：${String(error)}`);
+    }
+  }, [api, selectedItems, setStatus]);
 
   const renderSelectedPhotoshopImage = useCallback(async () => {
     if (!selectedItems.length) throw new Error('请先选择要发送到 Photoshop 的图片');
@@ -139,5 +189,5 @@ export function useSceneDelivery({
   }, [api, beginOperation, clearLasso, lassoPoints, photoshopDocumentBlocked, renderLassoPhotoshopImage,
     renderSelectedPhotoshopImage, renderSelectedPhotoshopLayers, scene.name, selectedItems, settleOperation]);
 
-  return { exportItems, sendSelectedToPhotoshop };
+  return { exportItems, exportOriginalItems, copySelectionToSystemClipboard, copyPrimaryOriginal, sendSelectedToPhotoshop };
 }

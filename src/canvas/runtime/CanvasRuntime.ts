@@ -21,9 +21,9 @@ import { VisualNotesController, type VisualNotesToolState } from '../interaction
 import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../interactions';
 import { resolveImageChanges } from '../../domain/sceneCommands';
 import {
-  panShortcutMatchesKeyboardEvent,
+  shortcutMatchesKeyboardEvent,
   panShortcutMatchesPointerEvent,
-  panShortcutReleasedByKeyboardEvent,
+  shortcutReleasedByKeyboardEvent,
 } from '../../keyboardShortcuts';
 
 export interface CanvasRuntimeOptions {
@@ -133,9 +133,9 @@ export class CanvasRuntime {
       if (event.type === 'keyup') hideAltHover();
     };
     const updatePanShortcutFromKeyboard = (event: KeyboardEvent) => {
-      if (event.type === 'keydown' && panShortcutMatchesKeyboardEvent(this.panCanvasShortcut, event)) {
+      if (event.type === 'keydown' && shortcutMatchesKeyboardEvent(this.panCanvasShortcut, event)) {
         this.panCanvasShortcutHeld = true;
-      } else if (event.type === 'keyup' && panShortcutReleasedByKeyboardEvent(this.panCanvasShortcut, event)) {
+      } else if (event.type === 'keyup' && shortcutReleasedByKeyboardEvent(this.panCanvasShortcut, event)) {
         this.panCanvasShortcutHeld = false;
       }
     };
