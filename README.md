@@ -118,6 +118,7 @@ npm run dev
 - [调试指南](docs/DEBUGGING.md)
 - [性能审计](docs/performance/PERFORMANCE_AUDIT.md)
 - [`.yoi` v4 存储格式](docs/YOI_STORAGE_V4.md)
+- [版本记录](CHANGELOG.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全政策](SECURITY.md)
 
