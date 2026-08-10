@@ -1,6 +1,8 @@
 node_modules/
 dist/
 release/
+.claude/
+build/thumbnail-provider/
 *.log
 .vite/
 dist-electron/
