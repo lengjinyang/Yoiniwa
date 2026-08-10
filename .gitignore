@@ -4,6 +4,14 @@ release/
 .claude/
 build/thumbnail-provider/
 *.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
 .vite/
 dist-electron/
 performance-results/

@@ -1,7 +1,29 @@
 {
   "name": "yoiniwa",
   "version": "0.1.0",
-  "description": "Yoiniwa (宵庭), a quiet offline reference board for Windows",
+  "description": "A local-first Windows reference board for artists with Photoshop collaboration support",
+  "private": true,
+  "author": "lengjinyang",
+  "license": "UNLICENSED",
+  "homepage": "https://github.com/lengjinyang/Yoiniwa#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lengjinyang/Yoiniwa.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lengjinyang/Yoiniwa/issues"
+  },
+  "keywords": [
+    "reference-board",
+    "digital-art",
+    "electron",
+    "pixijs",
+    "photoshop",
+    "windows"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "scripts": {
