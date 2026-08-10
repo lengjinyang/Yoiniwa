@@ -1,0 +1,229 @@
+import {
+  forwardRef, useEffect, useImperativeHandle, useRef, useState, type CSSProperties,
+} from 'react';
+import { UiIcon } from './app/components/UiIcon';
+
+const PRESET_COLORS = [
+  '#20242b', '#536778', '#2677ff', '#16a4b8', '#2da66f', '#8bad38',
+  '#e0a12f', '#dc683f', '#d94f68', '#a061d1', '#8b929c', '#e8edf2',
+];
+
+const DEFAULT_GROUP_ALPHA = 0.2;
+const DEFAULT_GROUP_COLOR = '#3a4955';
+
+const GROUP_COLORS = [
+  ['石墨灰', '#56616d', 0.24], ['蓝灰', '#3d668f', 0.28],
+  ['墨绿', '#2f7056', 0.26], ['暗红', '#7b3d50', 0.28],
+  ['褐色', '#79542c', 0.28], ['灰紫', '#684b9a', 0.28],
+  ['暖灰', '#765446', 0.26],
+] as const;
+
+function inputHex(value: string) {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value.toLowerCase();
+  const context = document.createElement('canvas').getContext('2d');
+  if (!context) return '#000000';
+  context.fillStyle = '#000000';
+  context.fillStyle = value;
+  return /^#[0-9a-f]{6}$/i.test(context.fillStyle) ? context.fillStyle : '#000000';
+}
+
+function hexToHsl(value: string) {
+  const hex = inputHex(value).slice(1);
+  const [r, g, b] = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+  const max = Math.max(r, g, b); const min = Math.min(r, g, b); const delta = max - min;
+  const lightness = (max + min) / 2;
+  const saturation = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+  let hue = 0;
+  if (delta) {
+    if (max === r) hue = 60 * (((g - b) / delta) % 6);
+    else if (max === g) hue = 60 * ((b - r) / delta + 2);
+    else hue = 60 * ((r - g) / delta + 4);
+  }
+  return { h: hue < 0 ? hue + 360 : hue, s: saturation * 100, l: lightness * 100 };
+}
+
+function hslToHex(h: number, s: number, l: number) {
+  const saturation = s / 100; const lightness = l / 100;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const section = h / 60; const x = chroma * (1 - Math.abs(section % 2 - 1));
+  const [red, green, blue] = section < 1 ? [chroma, x, 0] : section < 2 ? [x, chroma, 0]
+    : section < 3 ? [0, chroma, x] : section < 4 ? [0, x, chroma]
+      : section < 5 ? [x, 0, chroma] : [chroma, 0, x];
+  const match = lightness - chroma / 2;
+  return `#${[red, green, blue].map((channel) => Math.round((channel + match) * 255).toString(16).padStart(2, '0')).join('')}`;
+}
+
+interface ColorControlProps {
+  label?: string;
+  value: string;
+  onChange(value: string): void;
+  onPreviewChange?(value: string): void;
+  onPresetChange?(value: string, alpha: number): void;
+  alpha?: number;
+  onAlphaChange?(value: number): void;
+  onInteractionStart?(): void;
+  onInteractionEnd?(): void;
+  compact?: boolean;
+  anchor?: { x: number; y: number };
+  onClose?(): void;
+  groupPalette?: boolean;
+}
+
+export interface ColorControlHandle {
+  setAnchor(anchor: { x: number; y: number }): void;
+}
+
+function clampedPopupAnchor(anchor: { x: number; y: number }, height = 286, width = 238) {
+  return {
+    left: Math.max(8, Math.min(anchor.x, window.innerWidth - width - 8)),
+    top: Math.max(8, Math.min(anchor.y, window.innerHeight - height)),
+  };
+}
+
+export const ColorControl = forwardRef<ColorControlHandle, ColorControlProps>(function ColorControl({
+  label, value, onChange, onPreviewChange, onPresetChange, alpha, onAlphaChange, onInteractionStart, onInteractionEnd, compact = false, anchor, onClose,
+  groupPalette = false,
+}, forwardedRef) {
+  const nativeValue = inputHex(value);
+  const [open, setOpen] = useState(Boolean(anchor));
+  const [draft, setDraft] = useState(nativeValue.toUpperCase());
+  const [popupAnchor, setPopupAnchor] = useState<{ x: number; y: number }>();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const liveAnchorRef = useRef(anchor);
+  const visible = anchor ? true : open;
+
+  useImperativeHandle(forwardedRef, () => ({
+    setAnchor(nextAnchor) {
+      liveAnchorRef.current = nextAnchor;
+      const popover = popoverRef.current;
+      if (!popover) return;
+      const next = clampedPopupAnchor(nextAnchor, groupPalette ? 240 : 286, groupPalette ? 232 : 238);
+      popover.style.left = `${next.left}px`;
+      popover.style.top = `${next.top}px`;
+    },
+  }), [groupPalette]);
+
+  useEffect(() => setDraft(nativeValue.toUpperCase()), [nativeValue]);
+  useEffect(() => {
+    if (!visible) return undefined;
+    const close = (event: PointerEvent) => {
+      if (rootRef.current?.contains(event.target as Node)) return;
+      // Canvas interactions decide closure from the selected group. This keeps
+      // the editor alive while its own group is dragged, but still closes it
+      // when the canvas selects empty space, an image, or another group.
+      if (event.target instanceof Element && event.target.closest('.canvas-runtime-root')) return;
+      setOpen(false);
+      onClose?.();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      onClose?.();
+    };
+    // A floating editor can be mounted by the canvas' native pointerdown
+    // handler. Defer the outside listener so that opening pointer cannot bubble
+    // to window and immediately close the editor again.
+    const listenerTimer = window.setTimeout(() => {
+      window.addEventListener('pointerdown', close);
+      window.addEventListener('keydown', key);
+    }, 0);
+    return () => {
+      window.clearTimeout(listenerTimer);
+      window.removeEventListener('pointerdown', close);
+      window.removeEventListener('keydown', key);
+    };
+  }, [onClose, visible]);
+
+  const commitDraft = () => {
+    const normalized = draft.startsWith('#') ? draft : `#${draft}`;
+    if (/^#[0-9a-f]{6}$/i.test(normalized)) onChange(normalized);
+    else setDraft(nativeValue.toUpperCase());
+  };
+  const effectiveAnchor = anchor ? (liveAnchorRef.current ?? anchor) : popupAnchor;
+  const clampedAnchor = effectiveAnchor
+    ? clampedPopupAnchor(effectiveAnchor, groupPalette ? 240 : 286, groupPalette ? 232 : 238)
+    : undefined;
+  const popupStyle: CSSProperties | undefined = clampedAnchor ? {
+    position: 'fixed',
+    left: clampedAnchor.left,
+    top: clampedAnchor.top,
+    right: 'auto',
+  } : undefined;
+  const toggle = () => {
+    if (!open) {
+      const bounds = rootRef.current?.getBoundingClientRect();
+      if (bounds) setPopupAnchor({ x: bounds.right - 238, y: bounds.bottom + 6 });
+    }
+    setOpen((current) => !current);
+  };
+  const hsl = hexToHsl(nativeValue);
+  const applyPreset = (preset: string, presetAlpha: number) => {
+    if (onPresetChange) onPresetChange(preset, presetAlpha);
+    else {
+      onChange(preset);
+      onAlphaChange?.(presetAlpha);
+    }
+  };
+
+  return <div ref={rootRef} className={`color-control${compact ? ' compact' : ''}${anchor ? ' floating' : ''}`}
+    style={{ '--color-control-value': value } as CSSProperties}
+    onPointerDown={(event) => event.stopPropagation()}>
+    {!anchor && <button type="button" className="color-control-trigger" onClick={toggle}>
+      <span className="color-control-checker"><i style={{ backgroundColor: value, opacity: alpha ?? 1 }} /></span>
+      {label && <span>{label}</span>}
+      {!compact && <code>{nativeValue.toUpperCase()}</code>}
+      <b><UiIcon name="caret-down" size={14} /></b>
+    </button>}
+    {visible && <div ref={popoverRef} className={`color-control-popover${groupPalette ? ' group-palette' : ''}`} style={popupStyle}>
+      <header>
+        <div className="color-control-heading">
+          <strong>{groupPalette ? '组颜色' : label ?? '颜色'}</strong>
+        </div>
+        <div className="color-control-header-actions">
+          {groupPalette && <button type="button" title="恢复默认" aria-label="恢复默认"
+            onClick={() => applyPreset(DEFAULT_GROUP_COLOR, DEFAULT_GROUP_ALPHA)}><UiIcon name="reset" size={14} className="color-tool-icon" /></button>}
+          <button type="button" aria-label="关闭颜色面板" onClick={() => { setOpen(false); onClose?.(); }}><UiIcon name="close" /></button>
+        </div>
+      </header>
+      <div className="color-control-current">
+        <label className="color-control-native" title="自定义颜色">
+          <span className="color-control-checker"><i style={{ backgroundColor: value, opacity: alpha ?? 1 }} /></span>
+          <input type="color" value={nativeValue} onChange={(event) => onChange(event.target.value)} />
+        </label>
+        <label className="color-control-hex">HEX
+          <input value={draft} maxLength={7} spellCheck={false}
+            onChange={(event) => setDraft(event.target.value)} onBlur={commitDraft}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commitDraft(); } }} />
+        </label>
+      </div>
+      {groupPalette ? <>
+        <div className="group-color-presets">{GROUP_COLORS.map(([name, preset, presetAlpha]) => <button type="button" key={name}
+          title={name} aria-label={name}
+          className={preset === nativeValue && Math.abs((alpha ?? DEFAULT_GROUP_ALPHA) - presetAlpha) < 0.001 ? 'selected' : ''}
+          onClick={() => applyPreset(preset, presetAlpha)}>
+          <i style={{ backgroundColor: preset }} /><span>{name}</span></button>)}</div>
+        <label className="color-control-adjustment"><span><b><UiIcon name="lightness" size={14} className="color-tool-icon" />明度</b><output>{Math.round(hsl.l)}%</output></span>
+          <input type="range" min="12" max="72" value={Math.round(hsl.l)}
+            onPointerDown={() => onInteractionStart?.()} onPointerUp={() => onInteractionEnd?.()}
+            onPointerCancel={() => onInteractionEnd?.()} onBlur={() => onInteractionEnd?.()}
+            onChange={(event) => (onPreviewChange ?? onChange)(hslToHex(hsl.h, hsl.s, Number(event.target.value)))} /></label>
+        <label className="color-control-adjustment"><span><b><UiIcon name="saturation" size={14} className="color-tool-icon" />饱和度</b><output>{Math.round(hsl.s)}%</output></span>
+          <input type="range" min="0" max="65" value={Math.round(hsl.s)}
+            onPointerDown={() => onInteractionStart?.()} onPointerUp={() => onInteractionEnd?.()}
+            onPointerCancel={() => onInteractionEnd?.()} onBlur={() => onInteractionEnd?.()}
+            onChange={(event) => (onPreviewChange ?? onChange)(hslToHex(hsl.h, Number(event.target.value), hsl.l))} /></label>
+      </> : <div className="color-control-presets">{PRESET_COLORS.map((preset) => <button type="button" key={preset}
+        className={preset.toLowerCase() === nativeValue ? 'selected' : ''}
+        style={{ backgroundColor: preset }} title={preset} onClick={() => onChange(preset)} />)}</div>}
+      {alpha !== undefined && onAlphaChange && <label className="color-control-alpha">
+        <span><b>{groupPalette && <UiIcon name="opacity" size={14} className="color-tool-icon" />}不透明度</b><output>{Math.round(alpha * 100)}%</output></span>
+        <input type="range" min="0" max="100" value={Math.round(alpha * 100)}
+          style={{ background: `linear-gradient(90deg, transparent, ${value})` }}
+          onPointerDown={() => onInteractionStart?.()} onPointerUp={() => onInteractionEnd?.()}
+          onPointerCancel={() => onInteractionEnd?.()} onBlur={() => onInteractionEnd?.()}
+          onChange={(event) => onAlphaChange(Number(event.target.value) / 100)} />
+      </label>}
+    </div>}
+  </div>;
+});

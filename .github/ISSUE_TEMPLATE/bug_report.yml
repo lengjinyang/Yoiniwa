@@ -1,0 +1,57 @@
+name: Bug 报告
+description: 报告可复现的功能、兼容性或性能问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: 感谢反馈。请移除工程、截图和日志中的隐私或版权敏感内容。
+  - type: input
+    id: version
+    attributes:
+      label: Yoiniwa 版本
+      placeholder: 例如 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: Windows、Photoshop、数位板及驱动版本（不适用的可省略）
+      placeholder: Windows 11 24H2 / Photoshop 2026 / Wacom ...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开……
+        2. 执行……
+        3. 出现……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 日志与补充信息
+      description: 可以拖入脱敏后的截图或日志。不要上传含真实素材的工程。
+  - type: checkboxes
+    id: photoshop_first_stroke
+    attributes:
+      label: Photoshop 第一笔检查
+      options:
+        - label: 如果问题涉及协作取色，我已说明取色后第一次真实笔尖按下是否能够绘画
