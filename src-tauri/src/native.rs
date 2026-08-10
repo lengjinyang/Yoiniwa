@@ -11,12 +11,13 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition,
     WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 
-use crate::types::{WindowState, WindowStatePatch};
+use crate::{diagnostics::DiagnosticsLog, types::{WindowState, WindowStatePatch}};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -86,6 +87,7 @@ pub struct NativeWindowManager {
     helper_script: PathBuf,
     helper: Mutex<Option<NativeHelper>>,
     shared: Arc<NativeShared>,
+    diagnostics: Arc<DiagnosticsLog>,
     dirty: AtomicBool,
     close_confirmed: AtomicBool,
     close_pending: AtomicBool,
@@ -94,7 +96,7 @@ pub struct NativeWindowManager {
 }
 
 impl NativeWindowManager {
-    pub fn new(app: AppHandle, resource_dir: &Path) -> Arc<Self> {
+    pub fn new(app: AppHandle, resource_dir: &Path, diagnostics: Arc<DiagnosticsLog>) -> Arc<Self> {
         Arc::new(Self {
             helper_script: resource_dir.join("resources/native-window-move.ps1"), helper: Mutex::new(None),
             shared: Arc::new(NativeShared {
@@ -102,6 +104,7 @@ impl NativeWindowManager {
                 pending_layer: Mutex::new(HashMap::new()), pending_input: Mutex::new(HashMap::new()), pending_key: Mutex::new(HashMap::new()),
                 ready: AtomicBool::new(false), non_activating_ready: AtomicBool::new(false), sequence: AtomicU64::new(0),
             }),
+            diagnostics,
             dirty: AtomicBool::new(false), close_confirmed: AtomicBool::new(false), close_pending: AtomicBool::new(false),
             move_sent: AtomicBool::new(false),
             shortcut: RwLock::new("Ctrl+Alt+Y".into()),
@@ -140,10 +143,14 @@ impl NativeWindowManager {
 
     pub fn set_mode(&self, patch: WindowStatePatch) -> Result<WindowState> {
         let previous = self.shared.state.read().clone();
-        let next = previous.patched(patch);
+        let next = previous.patched(patch.clone());
         let focusless_before = focusless(&previous);
         let focusless_next = focusless(&next);
         let mode_changed = previous.collaboration_mode != next.collaboration_mode;
+        self.diagnostics.info("window.set_mode.begin", json!({
+            "previous": previous, "patch": patch, "next": next,
+            "focuslessBefore": focusless_before, "focuslessNext": focusless_next,
+        }));
         let main = self.main_window()?;
         if previous.always_on_top != next.always_on_top { main.set_always_on_top(next.always_on_top)?; }
         set_window_opacity(&main, next.opacity.clamp(0.25, 1.0))?;
@@ -151,12 +158,16 @@ impl NativeWindowManager {
         if focusless_before != focusless_next || mode_changed {
             if !self.request_layer(focusless_next, next.collaboration_mode, Duration::from_millis(1500))? && focusless_next {
                 self.restore_window_state(&main, &previous)?;
-                return Ok(previous);
+                let message = "无法建立协作窗口层级（LAYER），请确认原生助手已启动后重试";
+                self.diagnostics.error_with_message("window.set_mode.layer_failed", message, json!({ "previous": previous, "next": next }));
+                return Err(anyhow!(message));
             }
             if !self.request_input(focusless_next, next.collaboration_mode, Duration::from_millis(2000))? && focusless_next {
                 let _ = self.request_layer(focusless_before, previous.collaboration_mode, Duration::from_millis(500));
                 self.restore_window_state(&main, &previous)?;
-                return Ok(previous);
+                let message = "无法启用协作输入钩子（INPUT），请重试或检查数位板驱动";
+                self.diagnostics.error_with_message("window.set_mode.input_failed", message, json!({ "previous": previous, "next": next }));
+                return Err(anyhow!(message));
             }
         }
         let pen_before = focusless_before && previous.collaboration_mode;
@@ -169,8 +180,10 @@ impl NativeWindowManager {
                     let _ = self.request_input(focusless_before, previous.collaboration_mode, Duration::from_millis(500));
                     let _ = self.request_layer(focusless_before, previous.collaboration_mode, Duration::from_millis(500));
                     self.restore_window_state(&main, &previous)?;
-                    return Ok(previous);
+                    self.diagnostics.error_with_message("window.set_mode.pen_failed", error.to_string(), json!({ "previous": previous, "next": next }));
+                    return Err(anyhow!("无法创建任务栏笔迹窗口：{error}"));
                 }
+                self.diagnostics.error_with_message("window.set_mode.pen_failed", error.to_string(), json!({ "enabled": pen_next }));
                 return Err(error);
             }
         }
@@ -181,6 +194,7 @@ impl NativeWindowManager {
             self.shared.app.state::<crate::state::AppState>().photoshop.capture_focus();
         }
         if focusless_before && !focusless_next { let _ = main.set_focus(); }
+        self.diagnostics.info("window.set_mode.ok", json!({ "state": next }));
         Ok(next)
     }
 
@@ -221,7 +235,40 @@ impl NativeWindowManager {
         let _ = self.shared.app.emit("window:click-through-disabled", ());
     }
 
-    pub fn toggle_collaboration_requested(&self) { let _ = self.shared.app.emit("window:toggle-collaboration-requested", ()); }
+    pub fn toggle_collaboration_requested(&self) {
+        let state = self.mode();
+        self.diagnostics.info("window.toggle_collaboration_requested", json!({
+            "collaborationMode": state.collaboration_mode,
+            "locked": state.locked,
+            "alwaysOnTop": state.always_on_top,
+        }));
+        if state.collaboration_mode {
+            // Electron contract: release native INPUT before React restores window state.
+            // Must not activate a window or inject input (AGENTS.md first-stroke invariant).
+            if let Ok(main) = self.main_window() {
+                let _ = main.set_ignore_cursor_events(state.click_through);
+            }
+            let released = self.request_input(false, false, Duration::from_millis(500)).unwrap_or(false);
+            self.diagnostics.info("window.collaboration_input_release", json!({ "released": released }));
+            if !released {
+                self.diagnostics.warn("window.collaboration_input_release", json!({ "action": "restart_helper" }));
+                self.restart_helper();
+            }
+        }
+        let _ = self.shared.app.emit("window:toggle-collaboration-requested", ());
+    }
+
+    fn restart_helper(&self) {
+        {
+            let mut helper = self.helper.lock();
+            if let Some(mut current) = helper.take() {
+                let _ = current.child.kill();
+            }
+        }
+        self.shared.ready.store(false, Ordering::SeqCst);
+        self.shared.non_activating_ready.store(false, Ordering::SeqCst);
+        let _ = self.start_helper();
+    }
 
     pub fn begin_native_move(&self) -> Result<()> {
         if self.move_sent.swap(true, Ordering::SeqCst) { return Ok(()); }

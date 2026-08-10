@@ -300,6 +300,15 @@ export interface ImageThumbnailReady {
   variant: 'thumb128' | 'thumb256' | 'thumb512' | 'thumb768' | 'thumb1024';
 }
 
+export interface ImageDerivativeReady {
+  assetId: string;
+  kind: 'mip' | 'tile' | 'thumb';
+  edge?: number;
+  level?: number;
+  column?: number;
+  row?: number;
+}
+
 export interface WindowState {
   alwaysOnTop: boolean;
   clickThrough: boolean;
@@ -330,6 +339,7 @@ export interface RefCanvasAPI {
   cancelPrewarmImages(requestId: string): void;
   onPrewarmProgress(callback: (progress: ImagePrewarmProgress) => void): () => void;
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
+  onDerivativeReady?(callback: (derivative: ImageDerivativeReady) => void): () => void;
   onFilesDropped(callback: (drop: { paths: string[]; clientX: number; clientY: number }) => void): () => void;
   pathForFile(file: File): string | undefined;
   openProject(path?: string): Promise<ProjectOpenResult>;
@@ -352,7 +362,8 @@ export interface RefCanvasAPI {
   recordManualWheelSession(payload: unknown): Promise<{ path: string }>;
   writeLogEntries(entries: Array<{ level: string; event: string; data?: unknown }>): Promise<void>;
   openLogsFolder(): Promise<{ path: string }>;
-  copyDiagnostics(): Promise<{ sessionId: string; path?: string }>;
+  copyDiagnostics(): Promise<{ sessionId: string; path?: string; mirrorPath?: string; problemCount?: number }>;
+  recentLogProblems?(limit?: number): Promise<{ sessionId: string; path: string; mirrorPath?: string; problems: unknown[] }>;
   exportImage(data: ArrayBuffer, suggestedName: string): Promise<{ canceled: boolean; path?: string }>;
   copyImage(data: ArrayBuffer): Promise<void>;
   showSourceInFolder(path: string): Promise<{ ok: boolean; message?: string }>;

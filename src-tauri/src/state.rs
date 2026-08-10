@@ -1,19 +1,18 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use anyhow::{anyhow, Result};
-use chrono::Utc;
 use parking_lot::Mutex;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
-use uuid::Uuid;
 
 use crate::{
     assets::{atomic_write, AssetService, SharedAssets},
+    diagnostics::DiagnosticsLog,
+    image_jobs::ImageJobQueue,
     native::{NativeWindowManager, SharedNative},
     photoshop::{PhotoshopService, SharedPhotoshop},
     project::ProjectService,
@@ -25,29 +24,49 @@ pub struct AppState {
     pub project: Mutex<ProjectService>,
     pub native: SharedNative,
     pub photoshop: SharedPhotoshop,
+    pub diagnostics: Arc<DiagnosticsLog>,
     pub user_data: PathBuf,
     pub temp_dir: PathBuf,
     pub resource_dir: PathBuf,
     pub session_id: String,
     startup_path: Mutex<Option<String>>,
-    log_file: Mutex<PathBuf>,
 }
 
 impl AppState {
     pub fn new(app: &AppHandle, startup_path: Option<String>) -> Result<Self> {
         let user_data = dirs::config_dir().ok_or_else(|| anyhow!("无法定位 Windows AppData"))?.join("Yoiniwa");
         fs::create_dir_all(&user_data)?;
+        let diagnostics = Arc::new(DiagnosticsLog::create(&user_data));
         let resource_dir = resolve_resource_dir(app);
-        let assets = Arc::new(AssetService::new(user_data.clone())?);
-        let native = NativeWindowManager::new(app.clone(), &resource_dir);
-        let photoshop = Arc::new(PhotoshopService::new(&resource_dir));
-        let session_id = Uuid::new_v4().to_string();
-        let logs = user_data.join("logs"); fs::create_dir_all(&logs)?;
-        let log_file = logs.join(format!("yoiniwa-{}.jsonl", Utc::now().format("%Y-%m-%d")));
+        let jobs = ImageJobQueue::new(4);
+        let assets = Arc::new(AssetService::new(user_data.clone(), jobs, diagnostics.clone())?);
+        assets.bind_app(app.clone());
+        let native = NativeWindowManager::new(app.clone(), &resource_dir, diagnostics.clone());
+        let photoshop = Arc::new(PhotoshopService::new(&resource_dir, diagnostics.clone()));
+        diagnostics.info("app.start", json!({
+            "userData": user_data,
+            "resourceDir": resource_dir,
+            "logPath": diagnostics.path(),
+            "mirrorPath": diagnostics.mirror_path(),
+            "scripts": {
+                "nativeHelper": resource_dir.join("resources/native-window-move.ps1").exists(),
+                "colorBridge": resource_dir.join("resources/photoshop-color-bridge.ps1").exists(),
+                "focusBridge": resource_dir.join("resources/photoshop-focus-bridge.ps1").exists(),
+                "documentBridge": resource_dir.join("resources/photoshop-document-bridge.ps1").exists(),
+            },
+            "startupPath": startup_path,
+        }));
         Ok(Self {
-            project: Mutex::new(ProjectService::new(assets.clone())), assets, native, photoshop,
-            user_data, temp_dir: std::env::temp_dir(), resource_dir, session_id,
-            startup_path: Mutex::new(startup_path), log_file: Mutex::new(log_file),
+            project: Mutex::new(ProjectService::new(assets.clone())),
+            assets,
+            native,
+            photoshop,
+            session_id: diagnostics.session_id().to_string(),
+            diagnostics,
+            user_data,
+            temp_dir: std::env::temp_dir(),
+            resource_dir,
+            startup_path: Mutex::new(startup_path),
         })
     }
 
@@ -57,7 +76,7 @@ impl AppState {
     pub fn state_path(&self) -> PathBuf { self.user_data.join("state.json") }
 
     pub fn read_persisted_state(&self) -> Value {
-        fs::read(self.state_path()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| serde_json::json!({}))
+        fs::read(self.state_path()).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_else(|| json!({}))
     }
 
     pub fn write_persisted_state(&self, value: &Value) -> Result<()> {
@@ -81,22 +100,18 @@ impl AppState {
         let name = path.file_stem().and_then(|name| name.to_str()).unwrap_or("未命名画板");
         let mut recent = object.get("recent").and_then(|value| value.as_array()).cloned().unwrap_or_default();
         recent.retain(|item| item.get("path").and_then(|value| value.as_str()) != Some(&path_string));
-        recent.insert(0, serde_json::json!({
-            "path": path_string, "name": name, "openedAt": Utc::now().to_rfc3339(), "assetIds": asset_ids,
+        recent.insert(0, json!({
+            "path": path_string, "name": name, "openedAt": chrono::Utc::now().to_rfc3339(), "assetIds": asset_ids,
         }));
         recent.truncate(12); object.insert("recent".into(), Value::Array(recent)); self.write_persisted_state(&state)
     }
 
     pub fn append_logs(&self, entries: &[Value]) -> Result<()> {
-        let mut file = OpenOptions::new().create(true).append(true).open(self.log_file.lock().clone())?;
-        for entry in entries {
-            let value = serde_json::json!({ "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true), "sessionId": self.session_id, "source": "renderer", "entry": entry });
-            writeln!(file, "{}", serde_json::to_string(&value)?)?;
-        }
+        self.diagnostics.append_renderer_entries(entries);
         Ok(())
     }
 
-    pub fn log_path(&self) -> PathBuf { self.log_file.lock().clone() }
+    pub fn log_path(&self) -> PathBuf { self.diagnostics.path().to_path_buf() }
 }
 
 fn resolve_resource_dir(app: &AppHandle) -> PathBuf {

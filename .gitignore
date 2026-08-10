@@ -10,4 +10,6 @@ performance-results/
 .dev-smoke-user-data/
 .project-bench-user-data*/
 .refcanvas-test-session/
+.dev-runtime/*.jsonl
+.dev-runtime/*.log
 未命名画板.refcanvas

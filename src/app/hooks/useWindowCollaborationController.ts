@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { shouldAutoPhotoshopRoundTrip } from '../../shared/photoshopIntegration';
 import type { WindowState } from '../../types';
+import { logError, logInfo, logWarn } from '../../logger';
 
 const initialWindowState: WindowState = {
   alwaysOnTop: false,
@@ -33,17 +34,23 @@ export function useWindowCollaborationController({
       && ('locked' in patch || 'alwaysOnTop' in patch || 'collaborationMode' in patch)
       ? { ...patch, locked: true, alwaysOnTop: true, collaborationMode: true }
       : patch;
-    const next = await api.setWindowMode(protectedPatch);
-    setModeState(next);
-    if (next.locked) {
-      onLockedRef.current();
-      setStatus(shouldAutoPhotoshopRoundTrip(next)
-        ? '无感取色已启用 · Photoshop 保持前台，Alt + 笔尖直接取色'
-        : '参考模式已锁定 · 同时开启始终置顶后可启用 Photoshop 无焦点取色');
-    } else if (patch.locked === false) {
-      setStatus('画板已解锁');
+    try {
+      const next = await api.setWindowMode(protectedPatch);
+      setModeState(next);
+      if (next.locked) {
+        onLockedRef.current();
+        setStatus(shouldAutoPhotoshopRoundTrip(next)
+          ? '无感取色已启用 · Photoshop 保持前台，Alt + 笔尖直接取色'
+          : '参考模式已锁定 · 同时开启始终置顶后可启用 Photoshop 无焦点取色');
+      } else if (patch.locked === false) {
+        setStatus('画板已解锁');
+      }
+      return next;
+    } catch (error) {
+      setStatus(`窗口模式切换失败：${error instanceof Error ? error.message : String(error)}`);
+      logWarn('window.set_mode_failed', { error: String(error), patch: protectedPatch });
+      throw error;
     }
-    return next;
   }, [api, drawingCollaborationMode, onLockedRef, setStatus]);
 
   const toggleDrawingCollaborationMode = useCallback(async () => {
@@ -58,9 +65,11 @@ export function useWindowCollaborationController({
         }, true);
         if (next?.collaborationMode) throw new Error('窗口层级仍在恢复中');
         setDrawingCollaborationMode(false);
+        logInfo('collaboration.disabled');
         setStatus('已退出协作模式，窗口状态已恢复');
       } catch (error) {
         drawingModeSnapshotRef.current = snapshot;
+        logError('collaboration.disable_failed', error);
         setStatus(`退出协作模式失败：${String(error)}`);
       }
       return;
@@ -71,9 +80,11 @@ export function useWindowCollaborationController({
       if (!next?.collaborationMode) throw new Error('未能确认任务栏后方的稳定协作窗口层级');
       drawingModeSnapshotRef.current = snapshot;
       setDrawingCollaborationMode(true);
+      logInfo('collaboration.enabled', { shortcut: collaborationShortcut });
       setStatus(`协作模式已启用 · Space + 主按钮拖动可平移画布 · ${collaborationShortcut} 退出`);
     } catch (error) {
       drawingModeSnapshotRef.current = undefined;
+      logError('collaboration.enable_failed', error);
       setStatus(`启用协作模式失败：${String(error)}`);
     }
   }, [api, collaborationShortcut, drawingCollaborationMode, mode.alwaysOnTop, mode.locked, setMode, setStatus]);

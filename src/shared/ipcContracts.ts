@@ -62,7 +62,8 @@ export interface IpcContractMap {
   'window:set-title': IpcContract<[title: string], void>;
   'logs:write': IpcContract<[entries: Array<{ level: string; event: string; data?: unknown }>], void>;
   'logs:open-folder': IpcContract<[], { path: string }>;
-  'logs:copy-diagnostics': IpcContract<[], { sessionId: string; path?: string }>;
+  'logs:copy-diagnostics': IpcContract<[], { sessionId: string; path?: string; mirrorPath?: string; problemCount?: number }>;
+  'logs:recent-problems': IpcContract<[limit?: number], { sessionId: string; path: string; mirrorPath?: string; problems: unknown[] }>;
   'performance:record-manual-wheel': IpcContract<[payload: unknown], { path: string }>;
 }
 

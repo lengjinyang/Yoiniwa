@@ -34,6 +34,7 @@ export class TextureManager {
     const cached = this.gpu.pin(key);
     if (cached) { this.cacheHits += 1; return Promise.resolve(cached); }
     this.cacheMisses += 1;
+    if (typeof window !== 'undefined') window.refCanvas?.boostImageResource(request.url, request.priority);
     let pending = this.inFlight.get(key);
     if (!pending) {
       const generation = this.requests.currentGeneration;
@@ -94,12 +95,20 @@ export class TextureManager {
     this.gpu.clear();
   }
 
+  private async fetchDerivative(request: TextureRequest) {
+    if (typeof window !== 'undefined') window.refCanvas?.boostImageResource(request.url, request.priority);
+    // Native protocol waits for mip/tile generation and returns 200 (Electron contract).
+    const response = await fetch(request.url);
+    if (this.destroyed) throw new StaleTextureRequestError('Texture manager is destroyed');
+    if (!response.ok) throw new Error(`Mip request failed (${response.status}): ${request.url}`);
+    return response;
+  }
+
   private async decodeAndUpload(key: string, request: TextureRequest, generation: number) {
     if (this.destroyed) throw new StaleTextureRequestError('Texture manager is destroyed');
     let decoded = this.cpu.pin(key);
     if (!decoded) {
-      const response = await fetch(request.url);
-      if (!response.ok) throw new Error(`Mip request failed (${response.status}): ${request.url}`);
+      const response = await this.fetchDerivative(request);
       const bitmap = await createImageBitmap(await response.blob(), { premultiplyAlpha: 'premultiply', colorSpaceConversion: 'default' });
       decoded = createDecodedImageEntry(bitmap);
       decoded.pinCount = 1;

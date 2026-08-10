@@ -341,6 +341,16 @@ pub struct ImagePipelinePerformanceStats {
     pub thumbnail_count: u64,
     pub thumbnail_ms: f64,
     pub thumbnail_failures: u64,
+    #[serde(default)]
+    pub jobs_active: u64,
+    #[serde(default)]
+    pub jobs_pending: u64,
+    #[serde(default)]
+    pub jobs_inflight: u64,
+    #[serde(default)]
+    pub jobs_concurrency: u64,
+    #[serde(default)]
+    pub jobs_completed: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -359,7 +369,7 @@ impl Default for WindowState {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowStatePatch {
     pub always_on_top: Option<bool>,

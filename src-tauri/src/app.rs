@@ -29,7 +29,12 @@ pub fn run() {
             }
             if let Some(window) = app.get_webview_window("main") { let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus(); }
         }))
-        .register_uri_scheme_protocol("refcanvas-asset", |context, request| context.app_handle().state::<AppState>().assets.protocol_response(&request))
+        .register_asynchronous_uri_scheme_protocol("refcanvas-asset", |context, request, responder| {
+            let assets = context.app_handle().state::<AppState>().assets.clone();
+            std::thread::spawn(move || {
+                responder.respond(assets.protocol_response(&request));
+            });
+        })
         .setup(move |app| {
             let state = AppState::new(app.handle(), startup_for_setup.clone())?;
             let persisted = state.read_persisted_state();
@@ -42,6 +47,8 @@ pub fn run() {
             native.set_shortcut_value(register_shortcuts(app.handle(), &native.shortcut()));
             let appearance = native.clone();
             thread::spawn(move || appearance.apply_flat_appearance());
+            let photoshop = app.state::<AppState>().photoshop.clone();
+            thread::spawn(move || photoshop.warm());
             if let Some(main) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 main.on_window_event(move |event| handle_window_event(&handle, event));
@@ -69,7 +76,7 @@ pub fn run() {
             bridge::window_toggle_maximize, bridge::window_move_start, bridge::window_move_update,
             bridge::window_move_end, bridge::window_close, bridge::window_close_response, bridge::window_dirty,
             bridge::taskbar_pen_start, bridge::taskbar_pen_pointer,
-            bridge::logs_write, bridge::logs_open_folder, bridge::logs_copy_diagnostics,
+            bridge::logs_write, bridge::logs_open_folder, bridge::logs_copy_diagnostics, bridge::logs_recent_problems,
             bridge::performance_record_manual_wheel,
         ]);
 

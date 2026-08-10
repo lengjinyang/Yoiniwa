@@ -31,8 +31,12 @@ export function mipWithHysteresis(options: {
   desired: number; required: number; state: MipSelectionState; now: number; cameraMoving: boolean; downgradeDelayMs?: number;
 }) {
   const current = options.state.displayedMip;
-  if (current === undefined || options.desired >= current) return { mip: options.desired, state: { displayedMip: options.desired } };
-  if (options.cameraMoving || current < options.required * 2) return { mip: current, state: { displayedMip: current } };
+  // Keep the on-screen plane stable while the camera is moving. Upgrades wait
+  // until the gesture settles so pan/zoom is not fighting decode/upload work.
+  if (current === undefined) return { mip: options.desired, state: { displayedMip: options.desired } };
+  if (options.cameraMoving) return { mip: current, state: { displayedMip: current } };
+  if (options.desired >= current) return { mip: options.desired, state: { displayedMip: options.desired } };
+  if (current < options.required * 2) return { mip: current, state: { displayedMip: current } };
   const since = options.state.downgradeCandidate === options.desired ? options.state.downgradeSince ?? options.now : options.now;
   if (options.now - since < (options.downgradeDelayMs ?? 300)) {
     return { mip: current, state: { displayedMip: current, downgradeCandidate: options.desired, downgradeSince: since } };

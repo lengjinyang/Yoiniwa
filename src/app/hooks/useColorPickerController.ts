@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ColorPickerShortcut } from '../../interactions';
 import type { PickedColor } from '../../types';
+import { logWarn } from '../../logger';
 
 interface UseColorPickerControllerOptions {
   api: Window['refCanvas'];
@@ -35,6 +36,7 @@ export function useColorPickerController({
     const result = await api.syncPhotoshopForeground(color, autoPhotoshopRoundTrip);
     if (request !== colorSyncRequestRef.current) return;
     if (!result.ok) {
+      logWarn('photoshop.sync_failed', { hex: color.hex, status: result.status, message: result.message, copied: result.copied });
       setStatus(`${result.message ?? 'Photoshop 同步失败'} · ${color.hex}`);
       return;
     }

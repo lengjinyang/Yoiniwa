@@ -3,6 +3,8 @@
 mod app;
 mod assets;
 mod bridge;
+mod diagnostics;
+mod image_jobs;
 mod image_pipeline;
 mod native;
 mod photoshop;

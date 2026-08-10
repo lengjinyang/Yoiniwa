@@ -8,6 +8,6 @@ const scene = { assets: { 'asset id': { cacheVersion: 3 } } } as unknown as Scen
 describe('resolveCanvasImageUrl', () => {
   it('resolves an asset identity at call time without persisting cache paths', () => {
     expect(resolveCanvasImageUrl(scene, item, 'thumb512')).toBe('http://refcanvas-asset.localhost/asset/asset%20id?variant=thumb512&v=3');
-    expect(resolveCanvasMipUrl(scene, item, 2048)).toBe('http://refcanvas-asset.localhost/asset/asset%20id?variant=mip&edge=2048&v=3');
+    expect(resolveCanvasMipUrl(scene, item, 2048)).toBe('http://refcanvas-asset.localhost/asset/asset%20id?variant=mip&edge=2048&priority=100&v=3');
   });
 });

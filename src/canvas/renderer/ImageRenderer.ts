@@ -183,7 +183,7 @@ export class ImageRenderer {
     if (!this.scene || !item.assetId) return;
     const key = imageRequestKey(item.assetId, mip);
     if (object.textureKey === key || object.targetKey === key) return;
-    const url = resolveCanvasMipUrl(this.scene, item, mip);
+    const url = resolveCanvasMipUrl(this.scene, item, mip, priority);
     if (!url) return;
     object.targetKey = key;
     const token = ++object.loadToken;

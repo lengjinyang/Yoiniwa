@@ -61,7 +61,7 @@ export class TileRenderer {
     const token = ++object.token;
     object.targetSignature = signature;
     const requests = selection.tiles.map((tile) => {
-      const url = resolveCanvasTileUrl(item, tile.level, tile.column, tile.row);
+      const url = resolveCanvasTileUrl(item, tile.level, tile.column, tile.row, priority);
       if (!url) throw new Error('Tile asset URL is unavailable');
       return this.textures.request({
         assetId: item.assetId as string, mip: tile.level, tileX: tile.column, tileY: tile.row, url, priority,

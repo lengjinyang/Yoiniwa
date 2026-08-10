@@ -19,4 +19,36 @@ describe('TextureRequestScheduler', () => {
     finish(1);
     await expect(result).rejects.toBeInstanceOf(StaleTextureRequestError);
   });
+
+  it('limits concurrent decode work', async () => {
+    const scheduler = new TextureRequestScheduler(2);
+    let running = 0;
+    let peak = 0;
+    const make = (key: string) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const result = scheduler.request({
+        key, generation: 0, priority: 1,
+        run: async () => {
+          running += 1;
+          peak = Math.max(peak, running);
+          await gate;
+          running -= 1;
+          return key;
+        },
+      });
+      return { result, release: () => release() };
+    };
+    const first = make('a');
+    const second = make('b');
+    const third = make('c');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(peak).toBe(2);
+    first.release();
+    second.release();
+    third.release();
+    await Promise.all([first.result, second.result, third.result]);
+    expect(peak).toBe(2);
+  });
 });

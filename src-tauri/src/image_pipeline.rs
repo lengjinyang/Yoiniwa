@@ -30,7 +30,6 @@ extern "C" {
     fn vips_image_hasalpha(image: *const VipsImageOpaque) -> c_int;
     fn vips_image_write_to_memory(image: *mut VipsImageOpaque, size: *mut usize) -> *mut c_void;
     fn vips_thumbnail(filename: *const c_char, output: *mut *mut VipsImageOpaque, width: c_int, ...) -> c_int;
-    fn vips_thumbnail_image(input: *mut VipsImageOpaque, output: *mut *mut VipsImageOpaque, width: c_int, ...) -> c_int;
     fn vips_autorot(input: *mut VipsImageOpaque, output: *mut *mut VipsImageOpaque, ...) -> c_int;
     fn vips_extract_area(input: *mut VipsImageOpaque, output: *mut *mut VipsImageOpaque, left: c_int, top: c_int, width: c_int, height: c_int, ...) -> c_int;
     fn vips_pngsave_buffer(input: *mut VipsImageOpaque, output: *mut *mut c_void, size: *mut usize, ...) -> c_int;
@@ -107,17 +106,15 @@ pub fn metadata(path: &Path, stats: &Mutex<ImagePipelinePerformanceStats>) -> Re
 }
 
 fn thumbnail_file(path: &Path, width: i32, height: i32, allow_upsize: bool) -> Result<VipsImage> {
-    initialize()?; let path = c_path(path)?; let mut output = ptr::null_mut();
-    let height_name = option("height"); let size_name = option("size");
-    let size = if allow_upsize { 0 } else { 2 };
-    let status = unsafe { vips_thumbnail(path.as_ptr(), &mut output, width, height_name.as_ptr(), height, size_name.as_ptr(), size, terminator()) };
-    if status != 0 || output.is_null() { Err(vips_error("缩略图生成失败")) } else { Ok(VipsImage(output)) }
+    // VipsSize: 0 BOTH, 1 UP, 2 DOWN, 3 FORCE
+    thumbnail_file_with_size(path, width, height, if allow_upsize { 0 } else { 2 })
 }
 
-fn thumbnail_loaded(source: &VipsImage, width: i32, height: i32) -> Result<VipsImage> {
-    let mut output = ptr::null_mut(); let height_name = option("height"); let size_name = option("size");
-    let status = unsafe { vips_thumbnail_image(source.0, &mut output, width, height_name.as_ptr(), height, size_name.as_ptr(), 3 as c_int, terminator()) };
-    if status != 0 || output.is_null() { Err(vips_error("Tile 缩放失败")) } else { Ok(VipsImage(output)) }
+fn thumbnail_file_with_size(path: &Path, width: i32, height: i32, size: c_int) -> Result<VipsImage> {
+    initialize()?; let path = c_path(path)?; let mut output = ptr::null_mut();
+    let height_name = option("height"); let size_name = option("size");
+    let status = unsafe { vips_thumbnail(path.as_ptr(), &mut output, width, height_name.as_ptr(), height, size_name.as_ptr(), size, terminator()) };
+    if status != 0 || output.is_null() { Err(vips_error("缩略图生成失败")) } else { Ok(VipsImage(output)) }
 }
 
 fn extract(source: &VipsImage, left: i32, top: i32, width: i32, height: i32) -> Result<VipsImage> {
@@ -160,15 +157,30 @@ pub fn thumbnail_png(path: &Path, edge: u32, stats: &Mutex<ImagePipelinePerforma
 
 pub fn mip_webp(path: &Path, edge: u32) -> Result<Vec<u8>> { let _guard = VIPS_LOCK.lock(); webp(&thumbnail_file(path, edge as i32, edge as i32, false)?) }
 
-pub fn tile_webp(path: &Path, natural_width: u32, natural_height: u32, level: u32, column: u32, row: u32, tile_size: u32, gutter: u32) -> Result<Vec<u8>> {
-    let _guard = VIPS_LOCK.lock(); let source = autorot(&load(path)?)?;
+pub fn level_webp(path: &Path, width: u32, height: u32) -> Result<Vec<u8>> {
+    let _guard = VIPS_LOCK.lock();
+    // FORCE exact pyramid dimensions so tile crop math matches the level pixels.
+    webp(&thumbnail_file_with_size(path, width.max(1) as i32, height.max(1) as i32, 3)?)
+}
+
+pub fn tile_from_level(
+    level_path: &Path, natural_width: u32, natural_height: u32, level: u32, column: u32, row: u32, tile_size: u32, gutter: u32,
+) -> Result<Vec<u8>> {
+    let _guard = VIPS_LOCK.lock();
     let denominator = 2_u32.checked_pow(level).unwrap_or(u32::MAX).max(1);
-    let width = natural_width.div_ceil(denominator).max(1); let height = natural_height.div_ceil(denominator).max(1);
-    let resized = thumbnail_loaded(&source, width as i32, height as i32)?;
-    let left = column.saturating_mul(tile_size).saturating_sub(gutter).min(width); let top = row.saturating_mul(tile_size).saturating_sub(gutter).min(height);
-    let right = ((column + 1).saturating_mul(tile_size) + gutter).min(width); let bottom = ((row + 1).saturating_mul(tile_size) + gutter).min(height);
+    let expected_width = natural_width.div_ceil(denominator).max(1);
+    let expected_height = natural_height.div_ceil(denominator).max(1);
+    // Level 0 uses the original asset; apply EXIF orientation so crop math matches natural size.
+    let source = if level == 0 { autorot(&load(level_path)?)? } else { load(level_path)? };
+    let (actual_width, actual_height) = dimensions(&source);
+    let width = if actual_width > 0 { actual_width as u32 } else { expected_width };
+    let height = if actual_height > 0 { actual_height as u32 } else { expected_height };
+    let left = column.saturating_mul(tile_size).saturating_sub(gutter).min(width);
+    let top = row.saturating_mul(tile_size).saturating_sub(gutter).min(height);
+    let right = ((column + 1).saturating_mul(tile_size) + gutter).min(width);
+    let bottom = ((row + 1).saturating_mul(tile_size) + gutter).min(height);
     if left >= right || top >= bottom { return Err(anyhow!("分块坐标无效")); }
-    webp(&extract(&resized, left as i32, top as i32, (right - left) as i32, (bottom - top) as i32)?)
+    webp(&extract(&source, left as i32, top as i32, (right - left) as i32, (bottom - top) as i32)?)
 }
 
 pub fn sample_pixel(path: &Path, x: u32, y: u32) -> Result<[u8; 4]> {

@@ -12,10 +12,11 @@ use arboard::Clipboard;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use parking_lot::Mutex;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use wait_timeout::ChildExt;
 
 use crate::{
+    diagnostics::DiagnosticsLog,
     image_pipeline,
     types::{PickedColor, PhotoshopColorSyncResult, PhotoshopDocumentResult, WindowState},
 };
@@ -90,16 +91,18 @@ pub struct PhotoshopService {
     document_script: PathBuf,
     bridges: Mutex<ColorBridges>,
     document_queue: Mutex<()>,
+    diagnostics: Arc<DiagnosticsLog>,
 }
 
 impl PhotoshopService {
-    pub fn new(resource_dir: &Path) -> Self {
+    pub fn new(resource_dir: &Path, diagnostics: Arc<DiagnosticsLog>) -> Self {
         Self {
             color_script: resource_dir.join("resources/photoshop-color-bridge.ps1"),
             focus_script: resource_dir.join("resources/photoshop-focus-bridge.ps1"),
             document_script: resource_dir.join("resources/photoshop-document-bridge.ps1"),
             bridges: Mutex::new(ColorBridges { color: None, focus: None }),
             document_queue: Mutex::new(()),
+            diagnostics,
         }
     }
 
@@ -128,20 +131,46 @@ impl PhotoshopService {
 
     pub fn set_foreground(&self, color: PickedColor, requested_return_focus: bool, window_state: &WindowState) -> PhotoshopColorSyncResult {
         let started = Instant::now();
+        if !self.color_script.exists() {
+            return PhotoshopColorSyncResult {
+                ok: false, status: "automation-error".into(), sync_status: "automation-error".into(),
+                focus_status: "skipped".into(), copied: true, sync_latency_ms: 0.0,
+                message: Some(format!("缺少 Photoshop 颜色桥接脚本：{}", self.color_script.display())),
+            };
+        }
         let requested_round_trip = requested_return_focus && window_state.locked && window_state.always_on_top;
         let focusless = window_state.locked && window_state.always_on_top;
         let return_focus = requested_round_trip && !focusless;
         let mut bridges = self.bridges.lock();
-        if bridges.color.is_none() { bridges.color = PersistentHelper::start(&self.color_script).ok(); }
+        if bridges.color.is_none() {
+            bridges.color = match PersistentHelper::start(&self.color_script) {
+                Ok(helper) => Some(helper),
+                Err(error) => {
+                    let _ = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(color.hex.clone()));
+                    return PhotoshopColorSyncResult {
+                        ok: false, status: "automation-error".into(), sync_status: "automation-error".into(),
+                        focus_status: "skipped".into(), copied: true,
+                        sync_latency_ms: started.elapsed().as_secs_f64() * 1000.0,
+                        message: Some(format!("无法启动 Photoshop 颜色桥：{error}")),
+                    };
+                }
+            };
+        }
         let mut sync = bridges.color.as_mut().map(|helper| helper.send('S', &[color.r, color.g, color.b], Duration::from_millis(1200), sync_error()))
             .unwrap_or_else(sync_error);
         if sync.sync == "automation-error" {
+            // Bridge may have died mid-flight; restart once then retry.
+            bridges.color = PersistentHelper::start(&self.color_script).ok();
             sync = bridges.color.as_mut().map(|helper| helper.send('S', &[color.r, color.g, color.b], Duration::from_millis(1200), sync_error()))
                 .unwrap_or_else(sync_error);
         }
         let focus = if return_focus {
-            if bridges.focus.is_none() { bridges.focus = PersistentHelper::start(&self.focus_script).ok(); }
-            bridges.focus.as_mut().map(|helper| helper.send('F', &[], Duration::from_millis(1200), focus_error())).unwrap_or_else(focus_error).focus
+            if !self.focus_script.exists() {
+                "automation-error".into()
+            } else {
+                if bridges.focus.is_none() { bridges.focus = PersistentHelper::start(&self.focus_script).ok(); }
+                bridges.focus.as_mut().map(|helper| helper.send('F', &[], Duration::from_millis(1200), focus_error())).unwrap_or_else(focus_error).focus
+            }
         } else { "skipped".into() };
         let copied = sync.sync != "synced";
         if copied { let _ = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(color.hex.clone())); }
@@ -151,22 +180,47 @@ impl PhotoshopService {
             _ if return_focus && focus != "activated" => Some("颜色已同步，但未能自动返回 Photoshop".into()),
             _ => None,
         };
-        PhotoshopColorSyncResult {
+        let result = PhotoshopColorSyncResult {
             ok: sync.sync == "synced", status: sync.sync.clone(), sync_status: sync.sync,
             focus_status: focus, copied, sync_latency_ms: started.elapsed().as_secs_f64() * 1000.0, message,
+        };
+        if result.ok {
+            self.diagnostics.info("photoshop.set_foreground", json!({
+                "hex": color.hex, "focusStatus": result.focus_status, "latencyMs": result.sync_latency_ms, "focusless": focusless,
+            }));
+        } else {
+            self.diagnostics.warn("photoshop.set_foreground", json!({
+                "hex": color.hex, "status": result.sync_status, "message": result.message, "copied": result.copied, "focusless": focusless,
+            }));
         }
+        result
     }
 
     pub fn run_document(&self, request: &Value, timeout: Duration) -> PhotoshopDocumentResult {
-        let _guard = self.document_queue.lock();
-        match run_document_process(&self.document_script, request, timeout) {
-            Ok(result) => result,
-            Err(error) => PhotoshopDocumentResult {
-                ok: false, status: "automation-error".into(), message: Some(error.to_string()), document_name: None,
-                width: None, height: None, color_mode: None, bit_depth: None, layer_count: None,
-                format: None, archive_path: None, preview_path: None, preview: None,
-            },
+        if !self.document_script.exists() {
+            let message = format!("缺少 Photoshop 文档桥接脚本：{}", self.document_script.display());
+            self.diagnostics.error_with_message("photoshop.document", &message, json!({ "kind": request.get("kind") }));
+            return automation_error(&message);
         }
+        let kind = request.get("kind").and_then(|value| value.as_str()).unwrap_or("unknown").to_string();
+        let _guard = self.document_queue.lock();
+        let result = match run_document_process(&self.document_script, request, timeout) {
+            Ok(result) => result,
+            Err(error) => {
+                self.diagnostics.error_with_message("photoshop.document", error.to_string(), json!({ "kind": kind }));
+                PhotoshopDocumentResult {
+                    ok: false, status: "automation-error".into(), message: Some(error.to_string()), document_name: None,
+                    width: None, height: None, color_mode: None, bit_depth: None, layer_count: None,
+                    format: None, archive_path: None, preview_path: None, preview: None,
+                }
+            }
+        };
+        if result.ok {
+            self.diagnostics.info("photoshop.document", json!({ "kind": kind, "status": result.status, "documentName": result.document_name }));
+        } else {
+            self.diagnostics.warn("photoshop.document", json!({ "kind": kind, "status": result.status, "message": result.message }));
+        }
+        result
     }
 
     pub fn rendered_command(&self, data: &[u8], name: &str, kind: &str, blocked: bool, temp_root: &Path) -> PhotoshopDocumentResult {

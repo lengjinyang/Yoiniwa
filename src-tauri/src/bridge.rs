@@ -86,7 +86,9 @@ pub async fn images_prewarm(app: AppHandle, state: State<'_, AppState>, ids: Vec
 #[tauri::command(rename_all = "camelCase")]
 pub fn images_cancel_prewarm(state: State<'_, AppState>, request_id: String) { state.assets.cancel_prewarm(&request_id); }
 #[tauri::command(rename_all = "camelCase")]
-pub fn images_boost_resource(_key: String, _priority: f64) {}
+pub fn images_boost_resource(state: State<'_, AppState>, key: String, priority: f64) {
+    let _ = state.assets.boost_resource(&key, priority.round() as i32);
+}
 #[tauri::command]
 pub fn images_performance_stats(state: State<'_, AppState>) -> crate::types::ImagePipelinePerformanceStats { state.assets.performance_stats() }
 #[tauri::command(rename_all = "camelCase")]
@@ -351,11 +353,39 @@ pub fn taskbar_pen_pointer(window: WebviewWindow, state: State<'_, AppState>, in
 pub fn logs_write(state: State<'_, AppState>, entries: Vec<Value>) -> CommandResult<()> { command_result(state.append_logs(&entries)) }
 #[tauri::command]
 pub fn logs_open_folder(state: State<'_, AppState>) -> CommandResult<Value> {
-    let path = state.user_data.join("logs"); command_result(Command::new("explorer.exe").arg(&path).spawn().map(|_| serde_json::json!({ "path": path })).map_err(Into::into))
+    let path = state.diagnostics.directory().to_path_buf();
+    command_result(Command::new("explorer.exe").arg(&path).spawn().map(|_| serde_json::json!({ "path": path })).map_err(Into::into))
 }
 #[tauri::command]
 pub fn logs_copy_diagnostics(state: State<'_, AppState>) -> CommandResult<Value> {
-    let path = state.log_path(); command_result((|| { Clipboard::new()?.set_text(format!("Yoiniwa session: {}\nLog: {}", state.session_id, path.display()))?; Ok(serde_json::json!({ "sessionId": state.session_id, "path": path })) })())
+    let path = state.log_path();
+    let problems = state.diagnostics.recent_problems(30);
+    let mirror = state.diagnostics.mirror_path().map(|path| path.display().to_string());
+    let text = format!(
+        "Yoiniwa diagnostics\nsession: {}\nlog: {}\nmirror: {}\nrecentProblems: {}\n",
+        state.session_id,
+        path.display(),
+        mirror.unwrap_or_else(|| "(none)".into()),
+        serde_json::to_string_pretty(&problems).unwrap_or_else(|_| "[]".into()),
+    );
+    command_result((|| {
+        Clipboard::new()?.set_text(text)?;
+        Ok(serde_json::json!({
+            "sessionId": state.session_id,
+            "path": path,
+            "mirrorPath": state.diagnostics.mirror_path(),
+            "problemCount": problems.len(),
+        }))
+    })())
+}
+#[tauri::command]
+pub fn logs_recent_problems(state: State<'_, AppState>, limit: Option<usize>) -> Value {
+    serde_json::json!({
+        "sessionId": state.session_id,
+        "path": state.log_path(),
+        "mirrorPath": state.diagnostics.mirror_path(),
+        "problems": state.diagnostics.recent_problems(limit.unwrap_or(50).clamp(1, 200)),
+    })
 }
 #[tauri::command(rename_all = "camelCase")]
 pub fn performance_record_manual_wheel(state: State<'_, AppState>, payload: Value) -> CommandResult<Value> {

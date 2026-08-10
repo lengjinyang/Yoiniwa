@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{mpsc, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -17,6 +17,8 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    diagnostics::DiagnosticsLog,
+    image_jobs::ImageJobQueue,
     image_pipeline,
     types::{AssetRecord, CacheInfo, ImagePipelinePerformanceStats, ImportedImage},
 };
@@ -47,6 +49,9 @@ pub struct AssetService {
     registry: RwLock<HashMap<String, AssetEntry>>,
     canceled_prewarm: Mutex<HashSet<String>>,
     stats: Mutex<ImagePipelinePerformanceStats>,
+    jobs: Arc<ImageJobQueue>,
+    diagnostics: Arc<DiagnosticsLog>,
+    app: Mutex<Option<AppHandle>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,7 +68,7 @@ struct PrewarmProgress<'a> {
 }
 
 impl AssetService {
-    pub fn new(user_data: PathBuf) -> Result<Self> {
+    pub fn new(user_data: PathBuf, jobs: Arc<ImageJobQueue>, diagnostics: Arc<DiagnosticsLog>) -> Result<Self> {
         fs::create_dir_all(&user_data)?;
         let cache_override = read_json(&user_data.join("state.json"))
             .and_then(|value| value.get("cacheRoot").and_then(|value| value.as_str()).map(PathBuf::from))
@@ -74,10 +79,15 @@ impl AssetService {
             registry: RwLock::new(HashMap::new()),
             canceled_prewarm: Mutex::new(HashSet::new()),
             stats: Mutex::new(ImagePipelinePerformanceStats::default()),
+            jobs,
+            diagnostics,
+            app: Mutex::new(None),
         };
         fs::create_dir_all(service.asset_cache_dir())?;
         Ok(service)
     }
+
+    pub fn bind_app(&self, app: AppHandle) { *self.app.lock() = Some(app); }
 
     pub fn cache_root(&self) -> PathBuf {
         self.cache_override.read().as_ref()
@@ -215,9 +225,22 @@ impl AssetService {
         image_pipeline::sample_pixel(&self.ensure_file(id)?, x, y)
     }
 
-    pub fn performance_stats(&self) -> ImagePipelinePerformanceStats { self.stats.lock().clone() }
+    pub fn performance_stats(&self) -> ImagePipelinePerformanceStats {
+        let mut stats = self.stats.lock().clone();
+        let jobs = self.jobs.stats();
+        stats.jobs_active = jobs.active as u64;
+        stats.jobs_pending = jobs.pending as u64;
+        stats.jobs_inflight = jobs.inflight as u64;
+        stats.jobs_concurrency = jobs.concurrency as u64;
+        stats.jobs_completed = self.jobs.completed();
+        stats
+    }
 
-    pub fn cancel_prewarm(&self, request_id: &str) { self.canceled_prewarm.lock().insert(request_id.to_string()); }
+    pub fn cancel_prewarm(&self, request_id: &str) {
+        self.canceled_prewarm.lock().insert(request_id.to_string());
+        // Drop speculative thumbnail work when import prewarm is canceled.
+        let _ = self.jobs.cancel(|key| key.starts_with("thumbnail:"));
+    }
 
     pub fn prewarm(&self, app: &AppHandle, ids: &[String], request_id: &str) -> Result<serde_json::Value> {
         self.canceled_prewarm.lock().remove(request_id);
@@ -226,58 +249,78 @@ impl AssetService {
         let total = ids.len();
         for id in ids {
             if self.canceled_prewarm.lock().contains(request_id) { break; }
-            let result = self.thumbnail(id, 128).and_then(|_| self.thumbnail(id, 512));
+            // Match Electron: only the permanent safety plane blocks import.
+            let result = self.ensure_thumbnail(id, 128, 20);
             if result.is_err() { failed += 1; }
             completed += 1;
             let failed_name = result.err().map(|error| error.to_string());
             let _ = app.emit("images:prewarm-progress", PrewarmProgress {
-                request_id, completed, total, stage: "detail",
+                request_id, completed, total, stage: "preview",
                 fraction: if total == 0 { 1.0 } else { completed as f64 / total as f64 },
                 failed, last_failed_name: failed_name.as_deref(),
             });
         }
         let canceled = self.canceled_prewarm.lock().remove(request_id);
-        Ok(serde_json::json!({ "canceled": canceled, "completed": completed, "total": total, "failed": failed, "detailFailed": failed }))
+        Ok(serde_json::json!({ "canceled": canceled, "completed": completed, "total": total, "failed": failed, "detailFailed": 0 }))
     }
 
-    pub fn thumbnail(&self, id: &str, edge: u32) -> Result<Vec<u8>> {
-        let entry = self.entry(id).ok_or_else(|| anyhow!("资源不存在: {id}"))?;
-        let path = self.image_asset_root(id).join(format!("thumb-{edge}.png"));
-        if let Ok(bytes) = fs::read(&path) { if is_png(&bytes) { return Ok(bytes); } }
-        let bytes = image_pipeline::thumbnail_png(&entry.cache_path, edge, &self.stats).inspect_err(|_| {
-            self.stats.lock().thumbnail_failures += 1;
-        })?;
-        atomic_write(&path, &bytes)?;
-        Ok(bytes)
-    }
-
-    pub fn mip(&self, id: &str, edge: u32) -> Result<Vec<u8>> {
-        let entry = self.entry(id).ok_or_else(|| anyhow!("资源不存在: {id}"))?;
-        let path = self.image_asset_root(id).join(format!("level-{edge}.webp"));
-        if let Ok(bytes) = fs::read(&path) { if is_webp(&bytes) { return Ok(bytes); } }
-        let bytes = image_pipeline::mip_webp(&entry.cache_path, edge)?;
-        atomic_write(&path, &bytes)?;
-        Ok(bytes)
-    }
-
-    pub fn tile(&self, id: &str, level: u32, column: u32, row: u32) -> Result<Vec<u8>> {
-        let entry = self.entry(id).ok_or_else(|| anyhow!("资源不存在: {id}"))?;
-        let path = self.image_asset_root(id).join(format!("tiles/{level}/{column}-{row}.webp"));
-        if let Ok(bytes) = fs::read(&path) { if is_webp(&bytes) { return Ok(bytes); } }
-        let bytes = image_pipeline::tile_webp(
-            &entry.cache_path, entry.record.natural_width, entry.record.natural_height,
-            level, column, row, 512, 1,
-        )?;
-        atomic_write(&path, &bytes)?;
-        Ok(bytes)
+    pub fn boost_resource(&self, key: &str, priority: i32) -> usize {
+        let priority = priority.max(0);
+        if let Ok(url) = Url::parse(key).or_else(|_| Url::parse(&format!("http://refcanvas-asset.localhost{key}"))) {
+            let id = url.path().trim_start_matches('/').strip_prefix("asset/").unwrap_or(url.path().trim_start_matches('/'));
+            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                let variant = url.query_pairs().find(|(name, _)| name == "variant").map(|(_, value)| value.into_owned()).unwrap_or_else(|| "original".into());
+                if variant == "mip" {
+                    if let Ok(edge) = query_u32(&url, "edge") {
+                        if matches!(edge, 128 | 256 | 512 | 1024) {
+                            let _ = self.enqueue_thumbnail(id, edge, priority);
+                            return self.jobs.boost(|job| job == &format!("thumbnail:{id}:{edge}"), priority);
+                        }
+                        let _ = self.enqueue_mip(id, edge, priority);
+                        return self.jobs.boost(|job| job == &format!("mip:{id}:{edge}"), priority);
+                    }
+                } else if variant == "tile" {
+                    if let (Ok(level), Ok(column), Ok(row)) = (query_u32(&url, "level"), query_u32(&url, "column"), query_u32(&url, "row")) {
+                        if level > 0 {
+                            let _ = self.enqueue_level(id, level, priority);
+                        }
+                        if let Ok(level_path) = self.pyramid_level_path_if_ready(id, level) {
+                            let _ = self.enqueue_tile(id, level, column, row, priority, level_path);
+                        }
+                        return self.jobs.boost(|job| {
+                            job == &format!("tile:{id}:{level}:{column}:{row}") || job == &format!("level:{id}:{level}")
+                        }, priority);
+                    }
+                } else if let Some(edge) = variant.strip_prefix("thumb").and_then(|value| value.parse::<u32>().ok()) {
+                    let _ = self.enqueue_thumbnail(id, edge, priority);
+                    return self.jobs.boost(|job| job == &format!("thumbnail:{id}:{edge}"), priority);
+                }
+            }
+        }
+        self.jobs.boost(|job| job.contains(key), priority)
     }
 
     fn image_asset_root(&self, id: &str) -> PathBuf { self.image_cache_dir().join("assets").join(id) }
 
     pub fn protocol_response(&self, request: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
         match self.protocol_response_inner(request) {
-            Ok(response) => response,
-            Err(error) => response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.to_string().into_bytes()),
+            Ok(response) => {
+                if response.status().is_server_error() || response.status() == http::StatusCode::NOT_FOUND {
+                    let body = String::from_utf8_lossy(response.body()).chars().take(200).collect::<String>();
+                    self.diagnostics.warn("assets.protocol", serde_json::json!({
+                        "uri": request.uri().to_string(),
+                        "status": response.status().as_u16(),
+                        "body": body,
+                    }));
+                }
+                response
+            }
+            Err(error) => {
+                self.diagnostics.error_with_message("assets.protocol", error.to_string(), serde_json::json!({
+                    "uri": request.uri().to_string(),
+                }));
+                response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.to_string().into_bytes())
+            }
         }
     }
 
@@ -301,19 +344,259 @@ impl AssetService {
         if request.method() == http::Method::HEAD {
             return Ok(response(http::StatusCode::METHOD_NOT_ALLOWED, "text/plain", Vec::new()));
         }
-        let (bytes, mime) = if variant == "mip" {
+        let priority = url.query_pairs().find(|(key, _)| key == "priority")
+            .and_then(|(_, value)| value.parse::<i32>().ok()).unwrap_or(10);
+
+        // Canvas mip/tile: Electron-like await generation on the async protocol thread, then 200.
+        // Never 404 for these — blank tiles break browsing.
+        if variant == "mip" {
             let edge = query_u32(&url, "edge")?;
-            (self.mip(id, edge)?, "image/webp")
-        } else if variant == "tile" {
-            (self.tile(id, query_u32(&url, "level")?, query_u32(&url, "column")?, query_u32(&url, "row")?)?, "image/webp")
-        } else if let Some(edge) = variant.strip_prefix("thumb").and_then(|value| value.parse::<u32>().ok()) {
-            (self.thumbnail(id, edge)?, "image/png")
+            if let Some(bytes) = self.read_mip(id, edge) {
+                return Ok(ok_asset_bytes(id, "image/webp", bytes)?);
+            }
+            // Electron: whole-image mips up to 4096 reuse the thumbnail pipeline when the edge matches.
+            if matches!(edge, 128 | 256 | 512 | 1024) {
+                if let Some(bytes) = self.read_thumbnail(id, edge) {
+                    return Ok(ok_asset_bytes(id, "image/png", bytes)?);
+                }
+                return Ok(match self.wait_job(self.enqueue_thumbnail(id, edge, priority.max(if edge <= 128 { 20 } else { 10 }))) {
+                    Ok(bytes) => ok_asset_bytes(id, "image/png", bytes)?,
+                    Err(error) => response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.into_bytes()),
+                });
+            }
+            return Ok(match self.wait_job(self.enqueue_mip(id, edge, priority)) {
+                Ok(bytes) => ok_asset_bytes(id, "image/webp", bytes)?,
+                Err(error) => response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.into_bytes()),
+            });
+        }
+        if variant == "tile" {
+            let level = query_u32(&url, "level")?;
+            let column = query_u32(&url, "column")?;
+            let row = query_u32(&url, "row")?;
+            if let Some(bytes) = self.read_tile(id, level, column, row) {
+                return Ok(ok_asset_bytes(id, "image/webp", bytes)?);
+            }
+            // Electron contract: wait for pyramid level OUTSIDE the tile job slot,
+            // so concurrent tiles cannot deadlock the worker pool on one level encode.
+            return Ok(match self.serve_tile(id, level, column, row, priority) {
+                Ok(bytes) => ok_asset_bytes(id, "image/webp", bytes)?,
+                Err(error) => response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.into_bytes()),
+            });
+        }
+        if let Some(edge) = variant.strip_prefix("thumb").and_then(|value| value.parse::<u32>().ok()) {
+            if let Some(bytes) = self.read_thumbnail(id, edge) {
+                return Ok(ok_asset_bytes(id, "image/png", bytes)?);
+            }
+            // Optional UI thumbs: fire-and-forget + 404 (listeners use thumbnail-ready).
+            // Thumb128 is critical — wait like Electron so import preview never blanks.
+            if edge <= 128 {
+                return Ok(match self.wait_job(self.enqueue_thumbnail(id, edge, priority.max(20))) {
+                    Ok(bytes) => ok_asset_bytes(id, "image/png", bytes)?,
+                    Err(error) => response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.into_bytes()),
+                });
+            }
+            let _ = self.enqueue_thumbnail(id, edge, priority.max(5));
+            let mut result = response(http::StatusCode::NOT_FOUND, "text/plain", b"Generating".to_vec());
+            result.headers_mut().insert(http::header::CACHE_CONTROL, "no-store".parse()?);
+            return Ok(result);
+        }
+        Ok(response(http::StatusCode::NOT_FOUND, "text/plain", b"Unknown variant".to_vec()))
+    }
+
+    fn wait_job(&self, receiver: mpsc::Receiver<Result<Vec<u8>, String>>) -> Result<Vec<u8>, String> {
+        receiver.recv_timeout(Duration::from_secs(120)).map_err(|_| "等待图像生成超时".to_string())?
+    }
+
+    fn read_thumbnail(&self, id: &str, edge: u32) -> Option<Vec<u8>> {
+        let path = self.image_asset_root(id).join(format!("thumb-{edge}.png"));
+        fs::read(path).ok().filter(|bytes| is_png(bytes))
+    }
+
+    fn read_mip(&self, id: &str, edge: u32) -> Option<Vec<u8>> {
+        let path = self.image_asset_root(id).join(format!("level-{edge}.webp"));
+        fs::read(path).ok().filter(|bytes| is_webp(bytes))
+    }
+
+    fn read_tile(&self, id: &str, level: u32, column: u32, row: u32) -> Option<Vec<u8>> {
+        let path = self.image_asset_root(id).join(format!("tiles/{level}/{column}-{row}.webp"));
+        fs::read(path).ok().filter(|bytes| is_webp(bytes))
+    }
+
+    fn ensure_thumbnail(&self, id: &str, edge: u32, _priority: i32) -> Result<Vec<u8>> {
+        self.generate_thumbnail_now(id, edge)
+    }
+
+    fn generate_thumbnail_now(&self, id: &str, edge: u32) -> Result<Vec<u8>> {
+        if let Some(bytes) = self.read_thumbnail(id, edge) { return Ok(bytes); }
+        let source = self.ensure_file(id)?;
+        let path = self.image_asset_root(id).join(format!("thumb-{edge}.png"));
+        let bytes = image_pipeline::thumbnail_png(&source, edge, &self.stats).inspect_err(|_| {
+            self.stats.lock().thumbnail_failures += 1;
+        })?;
+        atomic_write(&path, &bytes)?;
+        self.emit_thumbnail_ready(id, edge);
+        Ok(bytes)
+    }
+
+    fn emit_thumbnail_ready(&self, id: &str, edge: u32) {
+        emit_thumbnail_ready_app(self.app.lock().as_ref(), id, edge);
+    }
+
+    /// Electron: never wait for a level job while holding a tile queue slot.
+    fn serve_tile(&self, id: &str, level: u32, column: u32, row: u32, priority: i32) -> Result<Vec<u8>, String> {
+        if let Some(bytes) = self.read_tile(id, level, column, row) {
+            return Ok(bytes);
+        }
+        let level_path = self.ensure_pyramid_level(id, level, priority)?;
+        self.wait_job(self.enqueue_tile(id, level, column, row, priority, level_path))
+    }
+
+    fn ensure_pyramid_level(&self, id: &str, level: u32, priority: i32) -> Result<PathBuf, String> {
+        // Level 0 crops from the original asset — never re-encode a full-res WebP.
+        if level == 0 {
+            return self.ensure_file(id).map_err(|error| error.to_string());
+        }
+        let level_path = self.image_asset_root(id).join(format!("levels/{level}.webp"));
+        if fs::read(&level_path).ok().filter(|bytes| is_webp(bytes)).is_some() {
+            return Ok(level_path);
+        }
+        let _ = self.wait_job(self.enqueue_level(id, level, priority))?;
+        Ok(level_path)
+    }
+
+    fn pyramid_level_path_if_ready(&self, id: &str, level: u32) -> Result<PathBuf, String> {
+        if level == 0 {
+            return self.ensure_file(id).map_err(|error| error.to_string());
+        }
+        let level_path = self.image_asset_root(id).join(format!("levels/{level}.webp"));
+        if fs::read(&level_path).ok().filter(|bytes| is_webp(bytes)).is_some() {
+            Ok(level_path)
         } else {
-            return Ok(response(http::StatusCode::NOT_FOUND, "text/plain", b"Unknown variant".to_vec()));
+            Err("pyramid level not ready".into())
+        }
+    }
+
+    fn enqueue_thumbnail(&self, id: &str, edge: u32, priority: i32) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+        if let Some(bytes) = self.read_thumbnail(id, edge) {
+            return immediate_result(Ok(bytes));
+        }
+        let source = match self.ensure_file(id) {
+            Ok(path) => path,
+            Err(error) => return immediate_result(Err(error.to_string())),
         };
-        let mut result = response(http::StatusCode::OK, mime, bytes);
-        immutable_headers(result.headers_mut(), id);
-        Ok(result)
+        let out = self.image_asset_root(id).join(format!("thumb-{edge}.png"));
+        let asset_id = id.to_string();
+        let app = self.app.lock().clone();
+        let stats = Arc::new(Mutex::new(ImagePipelinePerformanceStats::default()));
+        self.jobs.enqueue(format!("thumbnail:{id}:{edge}"), priority, move |canceled| {
+            if canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("图像任务已取消".into());
+            }
+            if let Some(bytes) = fs::read(&out).ok().filter(|bytes| is_png(bytes)) {
+                emit_thumbnail_ready_app(app.as_ref(), &asset_id, edge);
+                return Ok(bytes);
+            }
+            let bytes = image_pipeline::thumbnail_png(&source, edge, &stats).map_err(|error| error.to_string())?;
+            atomic_write(&out, &bytes).map_err(|error| error.to_string())?;
+            emit_thumbnail_ready_app(app.as_ref(), &asset_id, edge);
+            Ok(bytes)
+        })
+    }
+
+    fn enqueue_mip(&self, id: &str, edge: u32, priority: i32) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+        if let Some(bytes) = self.read_mip(id, edge) {
+            return immediate_result(Ok(bytes));
+        }
+        let source = match self.ensure_file(id) {
+            Ok(path) => path,
+            Err(error) => return immediate_result(Err(error.to_string())),
+        };
+        let out = self.image_asset_root(id).join(format!("level-{edge}.webp"));
+        let asset_id = id.to_string();
+        let app = self.app.lock().clone();
+        self.jobs.enqueue(format!("mip:{id}:{edge}"), priority, move |canceled| {
+            if canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("图像任务已取消".into());
+            }
+            if let Some(bytes) = fs::read(&out).ok().filter(|bytes| is_webp(bytes)) {
+                emit_derivative_ready_app(app.as_ref(), &asset_id, "mip", Some(edge), None, None, None);
+                return Ok(bytes);
+            }
+            let bytes = image_pipeline::mip_webp(&source, edge).map_err(|error| error.to_string())?;
+            atomic_write(&out, &bytes).map_err(|error| error.to_string())?;
+            emit_derivative_ready_app(app.as_ref(), &asset_id, "mip", Some(edge), None, None, None);
+            Ok(bytes)
+        })
+    }
+
+    fn enqueue_level(&self, id: &str, level: u32, priority: i32) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+        if level == 0 {
+            return match self.ensure_file(id) {
+                Ok(_) => immediate_result(Ok(Vec::new())),
+                Err(error) => immediate_result(Err(error.to_string())),
+            };
+        }
+        let level_path = self.image_asset_root(id).join(format!("levels/{level}.webp"));
+        if let Some(bytes) = fs::read(&level_path).ok().filter(|bytes| is_webp(bytes)) {
+            return immediate_result(Ok(bytes));
+        }
+        let entry = match self.entry(id) {
+            Some(entry) => entry,
+            None => return immediate_result(Err(format!("资源不存在: {id}"))),
+        };
+        let source = match self.ensure_file(id) {
+            Ok(path) => path,
+            Err(error) => return immediate_result(Err(error.to_string())),
+        };
+        let natural_width = entry.record.natural_width;
+        let natural_height = entry.record.natural_height;
+        self.jobs.enqueue(format!("level:{id}:{level}"), priority, move |canceled| {
+            if canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("图像任务已取消".into());
+            }
+            if let Some(bytes) = fs::read(&level_path).ok().filter(|bytes| is_webp(bytes)) {
+                return Ok(bytes);
+            }
+            let denominator = 2_u32.checked_pow(level).unwrap_or(u32::MAX).max(1);
+            let width = natural_width.div_ceil(denominator).max(1);
+            let height = natural_height.div_ceil(denominator).max(1);
+            let bytes = image_pipeline::level_webp(&source, width, height).map_err(|error| error.to_string())?;
+            atomic_write(&level_path, &bytes).map_err(|error| error.to_string())?;
+            Ok(bytes)
+        })
+    }
+
+    fn enqueue_tile(
+        &self, id: &str, level: u32, column: u32, row: u32, priority: i32, level_path: PathBuf,
+    ) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+        if let Some(bytes) = self.read_tile(id, level, column, row) {
+            return immediate_result(Ok(bytes));
+        }
+        let entry = match self.entry(id) {
+            Some(entry) => entry,
+            None => return immediate_result(Err(format!("资源不存在: {id}"))),
+        };
+        let out = self.image_asset_root(id).join(format!("tiles/{level}/{column}-{row}.webp"));
+        let natural_width = entry.record.natural_width;
+        let natural_height = entry.record.natural_height;
+        let asset_id = id.to_string();
+        let app = self.app.lock().clone();
+        // Crop-only: level bytes must already exist (or be the original for level 0).
+        self.jobs.enqueue(format!("tile:{id}:{level}:{column}:{row}"), priority, move |canceled| {
+            if canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("图像任务已取消".into());
+            }
+            if let Some(bytes) = fs::read(&out).ok().filter(|bytes| is_webp(bytes)) {
+                emit_derivative_ready_app(app.as_ref(), &asset_id, "tile", None, Some(level), Some(column), Some(row));
+                return Ok(bytes);
+            }
+            let bytes = image_pipeline::tile_from_level(
+                &level_path, natural_width, natural_height, level, column, row, 512, 1,
+            ).map_err(|error| error.to_string())?;
+            atomic_write(&out, &bytes).map_err(|error| error.to_string())?;
+            emit_derivative_ready_app(app.as_ref(), &asset_id, "tile", None, Some(level), Some(column), Some(row));
+            Ok(bytes)
+        })
     }
 
     fn original_response(&self, request: &http::Request<Vec<u8>>, entry: &AssetEntry) -> Result<http::Response<Vec<u8>>> {
@@ -432,6 +715,18 @@ impl AssetService {
         }
         Ok(())
     }
+}
+
+fn ok_asset_bytes(id: &str, mime: &str, bytes: Vec<u8>) -> Result<http::Response<Vec<u8>>> {
+    let mut result = response(http::StatusCode::OK, mime, bytes);
+    immutable_headers(result.headers_mut(), id);
+    Ok(result)
+}
+
+fn immediate_result(result: Result<Vec<u8>, String>) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+    let (sender, receiver) = mpsc::channel();
+    let _ = sender.send(result);
+    receiver
 }
 
 fn response(status: http::StatusCode, mime: &str, body: Vec<u8>) -> http::Response<Vec<u8>> {
@@ -558,5 +853,22 @@ fn now_ms() -> f64 { system_time_ms(SystemTime::now()).unwrap_or(0.0) }
 fn system_time_ms(value: SystemTime) -> Option<f64> { value.duration_since(UNIX_EPOCH).ok().map(|duration| duration.as_secs_f64() * 1000.0) }
 fn is_png(bytes: &[u8]) -> bool { bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) }
 fn is_webp(bytes: &[u8]) -> bool { bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" }
+
+fn emit_thumbnail_ready_app(app: Option<&AppHandle>, id: &str, edge: u32) {
+    let Some(app) = app else { return; };
+    let variant = match edge {
+        128 => "thumb128", 256 => "thumb256", 512 => "thumb512", 768 => "thumb768", 1024 => "thumb1024", _ => return,
+    };
+    let _ = app.emit("images:thumbnail-ready", serde_json::json!({ "assetId": id, "variant": variant }));
+}
+
+fn emit_derivative_ready_app(
+    app: Option<&AppHandle>, id: &str, kind: &str, edge: Option<u32>, level: Option<u32>, column: Option<u32>, row: Option<u32>,
+) {
+    let Some(app) = app else { return; };
+    let _ = app.emit("images:derivative-ready", serde_json::json!({
+        "assetId": id, "kind": kind, "edge": edge, "level": level, "column": column, "row": row,
+    }));
+}
 
 pub type SharedAssets = Arc<AssetService>;

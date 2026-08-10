@@ -2,12 +2,14 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import type {
-  ImagePrewarmProgress, ImageThumbnailReady, NativePointerInput, RefCanvasAPI,
+  ImagePrewarmProgress, ImageThumbnailReady, ImageDerivativeReady, NativePointerInput, RefCanvasAPI,
 } from '../types';
+import { createPhotoshopSyncQueue } from '../shared/photoshopSyncQueue';
 
 type EventPayloads = {
   'images:prewarm-progress': ImagePrewarmProgress;
   'images:thumbnail-ready': ImageThumbnailReady;
+  'images:derivative-ready': ImageDerivativeReady;
   'scene:external-open': string;
   'window:move-finished': void;
   'window:close-requested': void;
@@ -76,6 +78,10 @@ function renderedLayersFrame(images: Array<{ data: ArrayBuffer; name: string }>)
 
 export function installTauriRefCanvasApi() {
   if (window.refCanvas || !('__TAURI_INTERNALS__' in window)) return;
+  const photoshopSyncQueue = createPhotoshopSyncQueue((request) => command('photoshop_set_foreground', {
+    color: request.color,
+    returnFocus: request.returnFocus,
+  }));
   const api: RefCanvasAPI = {
     importImages: (requestId) => command('images_import', { requestId }),
     registerImagePaths: (paths, sourceType) => command('images_register_paths', { paths, sourceType }),
@@ -87,6 +93,7 @@ export function installTauriRefCanvasApi() {
     cancelPrewarmImages: (requestId) => { void command('images_cancel_prewarm', { requestId }); },
     onPrewarmProgress: (callback) => onEvent('images:prewarm-progress', callback),
     onThumbnailReady: (callback) => onEvent('images:thumbnail-ready', callback),
+    onDerivativeReady: (callback) => onEvent('images:derivative-ready', callback),
     onFilesDropped,
     pathForFile: (file) => (file as File & { path?: string }).path,
     openProject: (path) => command('project_open', { path }),
@@ -114,10 +121,11 @@ export function installTauriRefCanvasApi() {
     writeLogEntries: (entries) => command('logs_write', { entries }),
     openLogsFolder: () => command('logs_open_folder'),
     copyDiagnostics: () => command('logs_copy_diagnostics'),
+    recentLogProblems: (limit) => command('logs_recent_problems', { limit }),
     exportImage: (data, suggestedName) => rawCommand('image_export', data, { 'x-yoiniwa-name': encodedHeader(suggestedName) }),
     copyImage: (data) => rawCommand('image_copy', data),
     showSourceInFolder: (path) => command('image_show_source', { path }),
-    syncPhotoshopForeground: (color, returnFocus) => command('photoshop_set_foreground', { color, returnFocus }),
+    syncPhotoshopForeground: (color, returnFocus) => photoshopSyncQueue.enqueue({ color, returnFocus }),
     placeRenderedInPhotoshop: (data, name) => rawCommand('photoshop_place_rendered', data, { 'x-yoiniwa-name': encodedHeader(name) }),
     placeRenderedLayersInPhotoshop: (images) => rawCommand('photoshop_place_rendered_layers', renderedLayersFrame(images)),
     openRenderedInPhotoshop: (data, name) => rawCommand('photoshop_open_rendered', data, { 'x-yoiniwa-name': encodedHeader(name) }),
