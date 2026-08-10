@@ -97,7 +97,17 @@ public static class RefCanvasNativeWindowMove
     private static int collaborationZoomEnabled;
     private static int inputMode;
     private static int inputStartedAt;
+    private const uint LLMHF_INJECTED = 0x00000001;
+    private const int IMDT_PEN = 0x08;
+    private const int IMDT_TOUCH = 0x04;
     private const uint WM_QUIT = 0x0012;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct InputMessageSource
+    {
+        public uint DeviceType;
+        public uint OriginId;
+    }
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
@@ -107,6 +117,9 @@ public static class RefCanvasNativeWindowMove
 
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCurrentInputMessageSource(out InputMessageSource source);
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr window, out Rect rect);
@@ -237,10 +250,23 @@ public static class RefCanvasNativeWindowMove
             && point.Y >= bounds.Top && point.Y < bounds.Bottom;
     }
 
+    private static bool IsDigitizer(MouseHookData data)
+    {
+        InputMessageSource source;
+        if (GetCurrentInputMessageSource(out source)
+            && (source.DeviceType == IMDT_PEN || source.DeviceType == IMDT_TOUCH))
+            return true;
+        var extra = data.ExtraInfo.ToInt64();
+        // MI_WP_SIGNATURE and nearby Wacom Ink signatures.
+        if ((extra & 0xFFFFFF00L) == 0xFF515700L) return true;
+        if ((extra & 0xFFFFFF00L) == 0xFF515600L) return true;
+        if ((data.Flags & LLMHF_INJECTED) != 0) return true;
+        return false;
+    }
+
     private static string PointerType(MouseHookData data)
     {
-        var extra = data.ExtraInfo.ToInt64();
-        return (extra & 0xFFFFFF00L) == 0xFF515700L ? "pen" : "mouse";
+        return IsDigitizer(data) ? "pen" : "mouse";
     }
 
     private static void EmitPointer(string kind, MouseHookData data, bool alt, bool space, int delta)
@@ -250,12 +276,47 @@ public static class RefCanvasNativeWindowMove
             + "|" + PointerType(data) + "|" + delta);
     }
 
-    private static void SetInputMode(int mode)
+    // Pen-overlay path drives gesture mode because LL hook Alt sampling may miss
+    // the start of a Windows Ink contact. It must not alter cursor coordinates.
+    public static void SetGestureMode(string mode)
     {
-        Interlocked.Exchange(ref inputMode, mode);
-        Interlocked.Exchange(ref inputStartedAt, mode == INPUT_NONE ? 0 : Environment.TickCount);
+        if (string.Equals(mode, "pick", StringComparison.OrdinalIgnoreCase))
+        {
+            SetInputMode(INPUT_PICK);
+            return;
+        }
+        if (string.Equals(mode, "pan", StringComparison.OrdinalIgnoreCase))
+        {
+            SetInputMode(INPUT_PAN);
+            return;
+        }
+        if (string.Equals(mode, "block", StringComparison.OrdinalIgnoreCase))
+        {
+            SetInputMode(INPUT_BLOCK);
+            return;
+        }
+        SetInputMode(INPUT_NONE);
     }
 
+    private static void SetInputMode(int mode)
+    {
+        var previous = Interlocked.Exchange(ref inputMode, mode);
+        Interlocked.Exchange(ref inputStartedAt, mode == INPUT_NONE ? 0 : Environment.TickCount);
+        if ((mode == INPUT_NONE || mode == INPUT_BLOCK)
+            && (previous == INPUT_PICK || previous == INPUT_PAN))
+        {
+            Emit("PICK_CRITICAL|HOLD");
+            return;
+        }
+        if (mode == INPUT_PICK || mode == INPUT_PAN)
+        {
+            Emit("PICK_CRITICAL|ARM");
+        }
+    }
+
+    // Observe and mirror collaboration gestures without suppressing physical pen
+    // packets. Dropping MOVE/DOWN/UP leaves the absolute tablet cursor stale, so
+    // Windows catches it up on pen-up or the first Photoshop tip-down.
     private static IntPtr InputHook(int code, IntPtr wParam, IntPtr lParam)
     {
         if (code < 0 || Volatile.Read(ref inputEnabled) == 0)
@@ -263,9 +324,7 @@ public static class RefCanvasNativeWindowMove
 
         var data = (MouseHookData)Marshal.PtrToStructure(lParam, typeof(MouseHookData));
         var message = wParam.ToInt32();
-        var physicalMouse = PointerType(data) == "mouse";
         var window = new IntPtr(Interlocked.Read(ref inputWindowHandle));
-        // Stale HWND after Yoiniwa exit/HWND reuse must never eat buttons.
         if (window == IntPtr.Zero || !IsWindow(window))
         {
             Volatile.Write(ref inputEnabled, 0);
@@ -277,17 +336,15 @@ public static class RefCanvasNativeWindowMove
         var alt = IsKeyDown(VK_MENU);
         var space = IsKeyDown(VK_SPACE);
         var mode = Volatile.Read(ref inputMode);
-        if (message == WM_LBUTTONDOWN && alt)
+        if (message == WM_LBUTTONDOWN)
             Emit("INPUT_PROBE|DOWN|" + data.Position.X + "|" + data.Position.Y
-                + "|" + (inside ? "1" : "0") + "|" + PointerType(data));
+                + "|" + (inside ? "1" : "0") + "|" + PointerType(data) + "|" + mode);
         var expired = mode != INPUT_NONE
             && unchecked(Environment.TickCount - Volatile.Read(ref inputStartedAt)) > 15000;
-        // Windows Ink often reports VK_LBUTTON as released while a pen tip is
-        // still moving. Keep ownership through WM_MOUSEMOVE and finish only on
-        // the real up/cancel/superseding contact paths below.
         var physicalReleaseMissed = mode != INPUT_NONE && message != WM_LBUTTONUP
             && message != WM_MOUSEMOVE && !IsKeyDown(VK_LBUTTON);
-        var superseded = mode != INPUT_NONE && message == WM_LBUTTONDOWN;
+        // Inside tip-down is often the same contact that GESTURE already armed.
+        var superseded = mode != INPUT_NONE && message == WM_LBUTTONDOWN && !inside;
         if (expired || physicalReleaseMissed || superseded)
         {
             if (mode == INPUT_PICK || mode == INPUT_PAN) EmitPointer("CANCEL", data, alt, space, 0);
@@ -299,23 +356,14 @@ public static class RefCanvasNativeWindowMove
         {
             if (mode == INPUT_PICK)
             {
-                if (!alt)
-                {
-                    EmitPointer("CANCEL", data, false, space, 0);
-                    SetInputMode(INPUT_BLOCK);
-                }
-                else EmitPointer("MOVE", data, true, space, 0);
-                // A mouse reports relative motion through WM_MOUSEMOVE. If the
-                // hook consumes it, the system cursor never advances and the
-                // synthetic collaboration pointer appears stuck and jittery.
-                // Pen input remains suppressed so Windows Ink ownership and
-                // Photoshop's next real tip contact keep their existing path.
-                return physicalMouse ? CallNextHookEx(hookHandle, code, wParam, lParam) : new IntPtr(1);
+                // Do not cancel overlay-driven pick on a missed Alt sample.
+                EmitPointer("MOVE", data, true, space, 0);
+                return CallNextHookEx(hookHandle, code, wParam, lParam);
             }
             if (mode == INPUT_PAN)
             {
                 EmitPointer("MOVE", data, alt, space, 0);
-                return physicalMouse ? CallNextHookEx(hookHandle, code, wParam, lParam) : new IntPtr(1);
+                return CallNextHookEx(hookHandle, code, wParam, lParam);
             }
             if (mode == INPUT_BLOCK) return CallNextHookEx(hookHandle, code, wParam, lParam);
             if (inside && alt && !IsKeyDown(VK_LBUTTON)) EmitPointer("HOVER", data, true, space, 0);
@@ -324,37 +372,31 @@ public static class RefCanvasNativeWindowMove
 
         if (message == WM_LBUTTONDOWN && inside)
         {
-            if (alt)
+            if (alt || mode == INPUT_PICK)
             {
                 SetInputMode(INPUT_PICK);
                 EmitPointer("DOWN", data, true, space, 0);
             }
-            else if (space)
+            else if (space || mode == INPUT_PAN)
             {
                 SetInputMode(INPUT_PAN);
                 EmitPointer("DOWN", data, false, true, 0);
             }
-            else if (!physicalMouse)
-            {
-                // Pen tip over Yoiniwa: track block mode for MOVE suppress only.
-                // Never eat DOWN/UP — a leaked swallow bricks desktop LBUTTON.
-                SetInputMode(INPUT_BLOCK);
-            }
-            // ALWAYS pass buttons through. Collaboration uses ignore_cursor +
-            // POINTER emits; swallowing LBUTTON is what left the OS stuck.
+            else SetInputMode(INPUT_BLOCK);
+            // Never consume a real contact boundary. The no-activate pen overlay
+            // remains the target while Photoshop keeps foreground/Ink ownership.
             return CallNextHookEx(hookHandle, code, wParam, lParam);
         }
 
         if (message == WM_LBUTTONUP && mode != INPUT_NONE)
         {
             if (mode == INPUT_PICK)
-                EmitPointer(alt ? "UP" : "CANCEL", data, alt, space, 0);
+                EmitPointer("UP", data, true, space, 0);
             else if (mode == INPUT_PAN) EmitPointer("UP", data, alt, space, 0);
             SetInputMode(INPUT_NONE);
             return CallNextHookEx(hookHandle, code, wParam, lParam);
         }
 
-        // Never swallow right button either (same stuck-button failure mode).
         if (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP)
             return CallNextHookEx(hookHandle, code, wParam, lParam);
 
@@ -362,13 +404,11 @@ public static class RefCanvasNativeWindowMove
         {
             var delta = unchecked((short)((data.MouseData >> 16) & 0xFFFF));
             EmitPointer(message == WM_MOUSEHWHEEL ? "HWHEEL" : "WHEEL", data, alt, space, delta);
-            // Never swallow wheel — emit only. Swallowing is unnecessary with click-through.
             return CallNextHookEx(hookHandle, code, wParam, lParam);
         }
 
         return CallNextHookEx(hookHandle, code, wParam, lParam);
     }
-
     private static IntPtr KeyboardInputHook(int code, IntPtr wParam, IntPtr lParam)
     {
         if (code < 0 || Volatile.Read(ref inputEnabled) == 0
@@ -453,8 +493,8 @@ public static class RefCanvasNativeWindowMove
 
     private static void ReleaseStuckButtons()
     {
-        // If a prior hook ate LEFTDOWN and died before UP, the desktop can keep
-        // a stuck press. Force-up is exit-only recovery (not used during pick).
+        // Process-exit recovery only. Normal collab disable never swallows buttons,
+        // and mouse_event here made exit feel like a stuck cursor hitch.
         try
         {
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
@@ -465,7 +505,13 @@ public static class RefCanvasNativeWindowMove
 
     // Must run before the helper process dies. Killing PowerShell while WH_MOUSE_LL
     // is installed can leave LBUTTON swallowed (especially after HWND reuse).
+    // releaseButtons: only on process exit — never during collaboration mode toggle.
     public static void ShutdownInputHooks()
+    {
+        ShutdownInputHooks(false);
+    }
+
+    public static void ShutdownInputHooks(bool releaseButtons)
     {
         Volatile.Write(ref inputEnabled, 0);
         Interlocked.Exchange(ref inputWindowHandle, 0);
@@ -474,20 +520,29 @@ public static class RefCanvasNativeWindowMove
         // (InputHookLoop finally). Unhooking from stdin then killing races.
         var threadId = Volatile.Read(ref hookThreadId);
         if (threadId != 0) PostThreadMessage(threadId, WM_QUIT, IntPtr.Zero, IntPtr.Zero);
+
+        // CRITICAL: Join OUTSIDE HookLock. Holding HookLock during Join deadlocks
+        // InputHookLoop's finally → UninstallHooks, which needs the same lock.
+        // That used to burn the full Join timeout (~1.5s) and freeze the mouse on exit.
+        Thread thread;
         lock (HookLock)
         {
-            var thread = hookThread;
+            thread = hookThread;
             hookThread = null;
-            if (thread != null && thread.IsAlive)
+        }
+        if (thread != null && thread.IsAlive)
+        {
+            if (!thread.Join(300))
             {
-                if (!thread.Join(1500))
-                {
-                    try { thread.Interrupt(); } catch { }
-                }
+                try { thread.Interrupt(); } catch { }
+                UninstallHooks();
             }
         }
-        UninstallHooks();
-        ReleaseStuckButtons();
+        else
+        {
+            UninstallHooks();
+        }
+        if (releaseButtons) ReleaseStuckButtons();
         Volatile.Write(ref hookPhysicalCoordinatesReady, 0);
         HookStarted.Reset();
         try { Emit("INPUT_SHUTDOWN"); } catch { }
@@ -497,7 +552,12 @@ public static class RefCanvasNativeWindowMove
     {
         if (!enabled)
         {
-            ShutdownInputHooks();
+            // Idempotent fast path: shortcut exit + set_mode both disable once.
+            var alive = false;
+            lock (HookLock) { alive = hookThread != null && hookThread.IsAlive; }
+            if (Volatile.Read(ref inputEnabled) == 0 && !alive && hookHandle == IntPtr.Zero)
+                return true;
+            ShutdownInputHooks(false);
             return true;
         }
         lock (HookLock)
@@ -532,7 +592,7 @@ public static class RefCanvasNativeWindowMove
 
 try {
     AppDomain.CurrentDomain.add_ProcessExit({
-        try { [RefCanvasNativeWindowMove]::ShutdownInputHooks() } catch { }
+        try { [RefCanvasNativeWindowMove]::ShutdownInputHooks($true) } catch { }
     })
 } catch { }
 
@@ -541,7 +601,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     try {
         $parts = $line.Split('|')
         if ($parts[0] -eq 'SHUTDOWN') {
-            [RefCanvasNativeWindowMove]::ShutdownInputHooks()
+            [RefCanvasNativeWindowMove]::ShutdownInputHooks($true)
             [Console]::Out.WriteLine('SHUTDOWN_ACK')
             [Console]::Out.Flush()
             break
@@ -556,6 +616,9 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
         } elseif ($parts.Length -eq 2 -and $parts[0] -eq 'APPEARANCE') {
             $applied = [RefCanvasNativeWindowMove]::SetFlatAppearance([long]::Parse($parts[1]))
             [Console]::Out.WriteLine($(if ($applied) { 'APPEARANCE_DONE' } else { 'APPEARANCE_SKIPPED' }))
+        } elseif ($parts.Length -eq 2 -and $parts[0] -eq 'GESTURE') {
+            [RefCanvasNativeWindowMove]::SetGestureMode($parts[1])
+            [Console]::Out.WriteLine('GESTURE_ACK|' + $parts[1])
         } else {
             $handle = [long]::Parse($line)
             $moved = [RefCanvasNativeWindowMove]::Begin($handle)
@@ -567,5 +630,5 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     [Console]::Out.Flush()
 }
 } finally {
-    try { [RefCanvasNativeWindowMove]::ShutdownInputHooks() } catch { }
+    try { [RefCanvasNativeWindowMove]::ShutdownInputHooks($true) } catch { }
 }

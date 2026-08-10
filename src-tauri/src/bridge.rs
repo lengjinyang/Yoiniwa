@@ -290,6 +290,8 @@ fn available_export_path(directory: &Path, name: &str, reserved: &mut std::colle
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn photoshop_set_foreground(state: State<'_, AppState>, color: PickedColor, return_focus: Option<bool>) -> PhotoshopColorSyncResult {
+    // Color COM sync must not race with blur Z-order repair during collab handoff.
+    state.native.extend_pick_critical(std::time::Duration::from_millis(500));
     state.photoshop.set_foreground(color, return_focus.unwrap_or(false), &state.native.mode())
 }
 

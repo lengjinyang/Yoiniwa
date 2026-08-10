@@ -140,6 +140,21 @@ describe('ColorPickerController', () => {
     state.lifecycle.destroy();
   });
 
+  it('commits the last preview immediately when tip-up stays near the sample point', () => {
+    const state = setup();
+    state.input.down?.(pointer());
+    state.input.move?.(pointer({ clientX: 30, clientY: 35 }));
+    state.advance(34);
+    state.frames.values().next().value?.(16);
+    expect(state.previews.at(-1)).toMatchObject({ r: 30, g: 35 });
+    const samplesBeforeUp = state.samples.length;
+    state.input.up?.(pointer({ clientX: 34, clientY: 38, buttons: 0 }));
+    expect(state.picked).toHaveLength(1);
+    expect(state.picked[0]).toMatchObject({ r: 30, g: 35 });
+    expect(state.samples.length).toBe(samplesBeforeUp);
+    state.lifecycle.destroy();
+  });
+
   it('ignores touch, pen erasers, side buttons, and non-primary pen contacts', () => {
     const state = setup();
     state.input.down?.(pointer({ pointerType: 'touch' }));

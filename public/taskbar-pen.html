@@ -6,7 +6,7 @@
 <div id="surface"></div>
 <script>
   const surface = document.getElementById('surface');
-  let active, mode, lastX, lastY, pendingMove, pendingEnd, ending = false, gesture = 0;
+  let active, mode, lastX, lastY, pendingMove, pendingEnd, ending = false, gesture = 0, ignoredLostCapture;
   let sending = false;
   const pointerQueue = [];
   const invoke = (command, payload) => window.__TAURI_INTERNALS__.invoke(command, payload);
@@ -29,7 +29,8 @@
     })();
   };
   const clear = () => {
-    active = undefined; mode = undefined; pendingMove = undefined; pendingEnd = undefined; ending = false;
+    active = undefined; mode = undefined; pendingMove = undefined; pendingEnd = undefined;
+    ending = false; ignoredLostCapture = undefined;
   };
   const finishPending = () => {
     if (!mode) return;
@@ -54,7 +55,16 @@
     const currentGesture = ++gesture;
     active = event.pointerId; mode = undefined; pendingMove = undefined; pendingEnd = undefined; ending = false;
     lastX = event.clientX; lastY = event.clientY; event.preventDefault();
-    try { surface.setPointerCapture(active); } catch {}
+    // Pen contacts can receive implicit Pointer Capture. Release it immediately:
+    // retaining capture in this no-activate WebView until pen-up forces a native
+    // target handoff before Photoshop's next contact, which is especially visible
+    // across monitors. Picking only needs events while the tip remains in Yoiniwa.
+    try {
+      if (surface.hasPointerCapture(active)) {
+        ignoredLostCapture = active;
+        surface.releasePointerCapture(active);
+      }
+    } catch {}
     const start = payload('down', event);
     invoke('taskbar_pen_start', start).then((nextMode) => {
       if (currentGesture !== gesture || start.input.pointerId !== active) return;
@@ -70,12 +80,10 @@
   surface.addEventListener('pointerup', (event) => {
     if (event.pointerId !== active) return;
     event.preventDefault(); move(event);
-    const end = payload('up', event); const released = active;
-    // Ignore the lostpointercapture raised by this intentional release.
+    const end = payload('up', event);
     ending = true;
     if (mode) { if (mode !== 'block') send({ input: { ...end.input, mode } }); clear(); }
     else pendingEnd = end;
-    try { surface.releasePointerCapture(released); } catch {}
   }, { passive: false });
   const cancel = (event) => {
     if (event.pointerId !== active || ending) return;
@@ -85,6 +93,12 @@
     else pendingEnd = end;
   };
   surface.addEventListener('pointercancel', cancel, { passive: false });
-  surface.addEventListener('lostpointercapture', cancel);
+  surface.addEventListener('lostpointercapture', (event) => {
+    if (event.pointerId === ignoredLostCapture) { ignoredLostCapture = undefined; return; }
+    cancel(event);
+  });
+  surface.addEventListener('pointerleave', (event) => {
+    if (event.pointerId === active && (event.buttons & 1) !== 0) cancel(event);
+  });
   addEventListener('contextmenu', (event) => event.preventDefault());
 </script>

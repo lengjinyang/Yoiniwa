@@ -57,6 +57,8 @@ export class ColorPickerController {
   private previewFrame?: number;
   private pendingPreview?: Point;
   private lastClientPoint?: Point;
+  private lastPreviewColor?: PickedColor;
+  private lastPreviewClient?: Point;
   private lastPreviewSampleAt = Number.NEGATIVE_INFINITY;
   constructor(private readonly options: {
     element: HTMLElement;
@@ -73,10 +75,13 @@ export class ColorPickerController {
     schedulePreview?(callback: FrameRequestCallback): number;
     cancelPreview?(handle: number): void;
     previewSampleIntervalMs?: number;
+    /** Reuse last preview on UP when the tip has not moved farther than this (client px). */
+    previewReuseMaxDistancePx?: number;
     now?(): number;
   }) {}
 
   private now() { return this.options.now?.() ?? performance.now(); }
+  private previewReuseMaxDistancePx() { return this.options.previewReuseMaxDistancePx ?? 12; }
 
   start() {
     const down = (event: PointerEvent) => {
@@ -90,6 +95,8 @@ export class ColorPickerController {
       this.pointerId = event.pointerId;
       this.pointerType = event.pointerType;
       this.lastClientPoint = { x: event.clientX, y: event.clientY };
+      this.lastPreviewColor = undefined;
+      this.lastPreviewClient = undefined;
       this.request += 1;
       try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic input may not support capture. */ }
       this.lastPreviewSampleAt = this.now();
@@ -132,7 +139,11 @@ export class ColorPickerController {
         if (now - this.lastPreviewSampleAt < interval) return;
         this.lastPreviewSampleAt = now;
         const color = this.options.sample(target.point, false);
-        if (color) this.options.preview(color);
+        if (color) {
+          this.lastPreviewColor = color;
+          this.lastPreviewClient = { x: pending.x, y: pending.y };
+          this.options.preview(color);
+        }
       });
     };
     const up = (event: PointerEvent) => {
@@ -183,6 +194,8 @@ export class ColorPickerController {
     this.pointerId = undefined;
     this.pointerType = undefined;
     this.lastClientPoint = undefined;
+    this.lastPreviewColor = undefined;
+    this.lastPreviewClient = undefined;
     try {
       if (this.options.element.hasPointerCapture?.(pointerId)) this.options.element.releasePointerCapture(pointerId);
     } catch { /* The pointer may already have been canceled by Windows Ink. */ }
@@ -205,7 +218,16 @@ export class ColorPickerController {
   }
 
   private finish(pointerId: number, clientPoint: Point) {
-    const target = this.sampleTarget(clientPoint.x, clientPoint.y, true);
+    const previewColor = this.lastPreviewColor;
+    const previewClient = this.lastPreviewClient;
+    const reusePreview = Boolean(
+      previewColor
+      && previewClient
+      && Math.hypot(clientPoint.x - previewClient.x, clientPoint.y - previewClient.y)
+        <= this.previewReuseMaxDistancePx(),
+    );
+    // Hit-test without a final GPU sample when reusing the last preview color.
+    const target = this.sampleTarget(clientPoint.x, clientPoint.y, !reusePreview, !reusePreview);
     const token = this.request;
     this.release(pointerId);
     // The gesture has ended even when the final source-pixel read is async.
@@ -217,6 +239,10 @@ export class ColorPickerController {
       this.state = 'canceled';
       this.options.position();
       this.options.preview(undefined);
+      return;
+    }
+    if (reusePreview && previewColor) {
+      this.commit(previewColor);
       return;
     }
     if (target.color) {

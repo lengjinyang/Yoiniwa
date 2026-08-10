@@ -5,7 +5,7 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{atomic::{AtomicBool, AtomicU64, Ordering}, mpsc, Arc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -82,6 +82,11 @@ struct NativeShared {
     pending_key: Mutex<HashMap<String, mpsc::Sender<bool>>>,
     pending_shutdown: Mutex<Option<mpsc::Sender<()>>>,
     ready: AtomicBool,
+    /// True while the helper LL hooks are armed. Used to skip a second disable
+    /// IPC when the shortcut path already released INPUT before set_mode.
+    input_hooks_active: AtomicBool,
+    /// Skip blur Z-order / INPUT repair while Alt-pick handoff is critical.
+    pick_critical_until: Mutex<Option<Instant>>,
     sequence: AtomicU64,
 }
 
@@ -106,7 +111,9 @@ impl NativeWindowManager {
                 app, state: RwLock::new(WindowState::default()), pen_labels: Mutex::new(Vec::new()),
                 pending_input: Mutex::new(HashMap::new()), pending_key: Mutex::new(HashMap::new()),
                 pending_shutdown: Mutex::new(None),
-                ready: AtomicBool::new(false), sequence: AtomicU64::new(0),
+                ready: AtomicBool::new(false), input_hooks_active: AtomicBool::new(false),
+                pick_critical_until: Mutex::new(None),
+                sequence: AtomicU64::new(0),
             }),
             diagnostics,
             mode_lock: Mutex::new(()),
@@ -136,6 +143,7 @@ impl NativeWindowManager {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) { handle_helper_line(&shared, &diagnostics, &line); }
             shared.ready.store(false, Ordering::SeqCst);
+            shared.input_hooks_active.store(false, Ordering::SeqCst);
             diagnostics.warn("window.helper_stdout_closed", json!({}));
             // Do not kill_orphan here — a racing restart can murder the live helper.
             // Button release only; orphan scrub belongs to clear_helper/shutdown.
@@ -170,12 +178,14 @@ impl NativeWindowManager {
                 self.diagnostics.warn("window.helper_exited", json!({ "status": format!("{status}") }));
                 *helper = None;
                 self.shared.ready.store(false, Ordering::SeqCst);
+                self.shared.input_hooks_active.store(false, Ordering::SeqCst);
                 false
             }
             Err(error) => {
                 self.diagnostics.warn("window.helper_wait_failed", json!({ "error": error.to_string() }));
                 *helper = None;
                 self.shared.ready.store(false, Ordering::SeqCst);
+                self.shared.input_hooks_active.store(false, Ordering::SeqCst);
                 false
             }
         }
@@ -212,6 +222,7 @@ impl NativeWindowManager {
             let _ = current.child.wait();
         }
         self.shared.ready.store(false, Ordering::SeqCst);
+        self.shared.input_hooks_active.store(false, Ordering::SeqCst);
         if had_helper {
             self.diagnostics.info("window.helper_shutdown", json!({}));
         }
@@ -292,11 +303,6 @@ impl NativeWindowManager {
         main.set_resizable(!next.collaboration_mode)?;
 
         if focusless_before != focusless_next || mode_changed {
-            if let Err(error) = self.ensure_helper_ready(Duration::from_millis(5000)) {
-                self.rollback_mode(&main, &previous)?;
-                self.diagnostics.error_with_message("window.set_mode.helper_not_ready", error.to_string(), json!({ "previous": previous, "next": next }));
-                return Ok(previous);
-            }
             // Apply focusless layer in-process (NOACTIVATE + taskbar place).
             if !apply_focusless_layer(&main, focusless_next, next.collaboration_mode)? && focusless_next {
                 self.rollback_mode(&main, &previous)?;
@@ -307,24 +313,47 @@ impl NativeWindowManager {
             self.diagnostics.info("window.layer_ready", json!({
                 "enabled": focusless_next, "aboveTaskbar": next.collaboration_mode,
             }));
-            if !self.request_input(focusless_next, next.collaboration_mode, Duration::from_millis(2500))? && focusless_next {
-                let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
-                self.rollback_mode(&main, &previous)?;
-                let message = "无法启用协作输入钩子（INPUT），请重试或检查数位板驱动";
-                self.diagnostics.error_with_message("window.set_mode.input_failed", message, json!({ "previous": previous, "next": next }));
-                return Ok(previous);
+
+            // Enabling needs a live helper. Disabling can skip IPC when hooks are
+            // already down (shortcut pre-release) or the helper is already gone.
+            let hooks_active = self.shared.input_hooks_active.load(Ordering::SeqCst);
+            let need_input_ipc = focusless_next || (focusless_before && hooks_active);
+            if need_input_ipc {
+                if let Err(error) = self.ensure_helper_ready(Duration::from_millis(if focusless_next { 5000 } else { 800 })) {
+                    if focusless_next {
+                        let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
+                        self.rollback_mode(&main, &previous)?;
+                        self.diagnostics.error_with_message("window.set_mode.helper_not_ready", error.to_string(), json!({ "previous": previous, "next": next }));
+                        return Ok(previous);
+                    }
+                    self.diagnostics.warn("window.set_mode.helper_skip_disable", json!({ "error": error.to_string() }));
+                    self.shared.input_hooks_active.store(false, Ordering::SeqCst);
+                } else {
+                    let input_timeout = if focusless_next { Duration::from_millis(2500) } else { Duration::from_millis(600) };
+                    if !self.request_input(focusless_next, next.collaboration_mode, input_timeout)? && focusless_next {
+                        let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
+                        self.rollback_mode(&main, &previous)?;
+                        let message = "无法启用协作输入钩子（INPUT），请重试或检查数位板驱动";
+                        self.diagnostics.error_with_message("window.set_mode.input_failed", message, json!({ "previous": previous, "next": next }));
+                        return Ok(previous);
+                    }
+                }
+            } else {
+                self.diagnostics.info("window.input_skip", json!({
+                    "enabled": focusless_next, "hooksActive": hooks_active,
+                }));
             }
             self.diagnostics.info("window.input_ready", json!({ "enabled": focusless_next }));
         }
 
-        let pen_before = focusless_before && previous.collaboration_mode;
-        let pen_next = focusless_next && next.collaboration_mode;
-        let pen_missing = pen_next && self.shared.pen_labels.lock().is_empty();
-        let refresh_pen = pen_before != pen_next || pen_missing;
+        // Do not place an interactive WebView above the click-through main window.
+        // A pen down implicitly captures to that WebView and releases to Photoshop
+        // at the contact boundary; on a virtual multi-monitor desktop that handoff
+        // can also expose a different absolute cursor coordinate. INPUT observes
+        // the physical packets while the real target remains Photoshop.
+        let remove_pen_layer = !self.shared.pen_labels.lock().is_empty();
 
-        // Tauri has no Electron-style ignoreMouse({ forward:true }); focusless must rely on INPUT + pen window.
-        // Commit mode BEFORE creating the pen WebView — WebviewWindowBuilder::build() from inside a
-        // sync command deadlocks the UI thread (logs: input_ready with zero set_mode.ok).
+        // Commit the click-through mode only after the native input observer is ready.
         main.set_ignore_cursor_events(next.click_through || focusless_next)?;
         *self.shared.state.write() = next.clone();
         if focusless_next && (!focusless_before || !previous.collaboration_mode && next.collaboration_mode) {
@@ -334,8 +363,8 @@ impl NativeWindowManager {
         if focusless_before && !focusless_next { let _ = main.set_focus(); }
         self.diagnostics.info("window.set_mode.ok", json!({ "state": next }));
 
-        if refresh_pen {
-            self.spawn_pen_window_update(pen_next);
+        if remove_pen_layer {
+            self.spawn_pen_window_update(false);
         }
         Ok(next)
     }
@@ -424,34 +453,78 @@ impl NativeWindowManager {
     }
 
     pub fn work_area(&self, point: Option<(f64, f64)>) -> Result<VisibleBounds> {
-        let window = self.main_window()?; let position = window.outer_position()?; let size = window.inner_size()?; let scale = window.scale_factor()?;
+        let window = self.main_window()?; let position = window.inner_position()?; let size = window.inner_size()?; let scale = window.scale_factor()?;
         let point = point.unwrap_or((size.width as f64 / scale / 2.0, size.height as f64 / scale / 2.0));
         Ok(monitor_bounds(position.x as f64 + point.0 * scale, position.y as f64 + point.1 * scale, position, scale))
     }
 
     pub fn taskbar_pen_start(&self, input: &TaskbarPointerInput) -> String {
         if !self.mode().collaboration_mode || !focusless(&self.mode()) || input.pointer_type != "pen" { return "block".into(); }
-        if input.alt_key { "pick".into() } else if self.query_key(0x20) { "pan".into() } else { "block".into() }
+        let mode = if input.alt_key { "pick" } else if self.query_key(0x20) { "pan" } else { "block" };
+        // Drive LL-hook gesture state from the pen overlay because hook-level
+        // Alt sampling alone can miss the start of a Windows Ink contact.
+        let _ = self.send_line(&format!("GESTURE|{mode}\n"));
+        if mode == "pick" || mode == "pan" {
+            self.extend_pick_critical(Duration::from_millis(2000));
+        }
+        mode.into()
     }
 
     pub fn taskbar_pen_pointer(&self, source: &WebviewWindow, input: TaskbarPointerInput) -> Result<()> {
         if !self.mode().collaboration_mode || !focusless(&self.mode()) || input.pointer_type != "pen" { return Ok(()); }
         if !matches!(input.kind.as_str(), "down" | "move" | "up" | "cancel") { return Ok(()); }
         let mode = input.mode.as_deref().unwrap_or("block"); if mode == "block" { return Ok(()); }
-        let source_position = source.outer_position()?; let main = self.main_window()?; let main_position = main.outer_position()?;
-        let scale = main.scale_factor()?;
-        let screen_x = source_position.x as f64 + input.client_x * scale;
-        let screen_y = source_position.y as f64 + input.client_y * scale;
-        let visible_bounds = monitor_bounds(screen_x, screen_y, main_position, scale);
+        if matches!(input.kind.as_str(), "down") && (mode == "pick" || mode == "pan") {
+            let _ = self.send_line(&format!("GESTURE|{mode}\n"));
+            self.extend_pick_critical(Duration::from_millis(2000));
+        } else if matches!(input.kind.as_str(), "up" | "cancel") {
+            let _ = self.send_line("GESTURE|none\n");
+            self.extend_pick_critical(Duration::from_millis(500));
+        } else if matches!(input.kind.as_str(), "move") && mode == "pick" {
+            self.extend_pick_critical(Duration::from_millis(2000));
+        }
+        // DOM client coordinates belong to the pen WebView's DPI space. On a
+        // multi-monitor desktop its scale can differ from the main WebView's,
+        // and virtual-screen coordinates can be negative. Convert through
+        // physical screen coordinates using each window's own client origin.
+        let source_position = source.inner_position()?;
+        let source_scale = source.scale_factor()?;
+        let main = self.main_window()?;
+        let main_position = main.inner_position()?;
+        let main_scale = main.scale_factor()?;
+        let screen_x = source_position.x as f64 + input.client_x * source_scale;
+        let screen_y = source_position.y as f64 + input.client_y * source_scale;
+        let client_x = (screen_x - main_position.x as f64) / main_scale;
+        let client_y = (screen_y - main_position.y as f64) / main_scale;
+        let visible_bounds = monitor_bounds(screen_x, screen_y, main_position, main_scale);
+        if input.kind == "down" {
+            self.diagnostics.info("window.pen_coordinate_space", json!({
+                "sourcePosition": { "x": source_position.x, "y": source_position.y },
+                "sourceScale": source_scale,
+                "mainPosition": { "x": main_position.x, "y": main_position.y },
+                "mainScale": main_scale,
+                "screen": { "x": screen_x, "y": screen_y },
+                "client": { "x": client_x, "y": client_y },
+            }));
+        }
         let payload = NativePointerPayload {
-            kind: input.kind, client_x: (screen_x - main_position.x as f64) / scale,
-            client_y: (screen_y - main_position.y as f64) / scale, alt_key: mode == "pick", space_key: mode == "pan",
+            kind: input.kind.clone(), client_x, client_y,
+            alt_key: mode == "pick", space_key: mode == "pan",
             pointer_type: "pen".into(), delta: 0.0, visible_bounds,
         };
         self.shared.app.emit("window:native-pointer", payload)?; Ok(())
     }
 
+    pub fn extend_pick_critical(&self, extra: Duration) {
+        extend_pick_critical(&self.shared, extra);
+    }
+
     pub fn repair_after_blur(&self) {
+        // AGENTS.md: do not re-apply Z-order / INPUT / pen sync during pick handoff.
+        if pick_critical_active(&self.shared) {
+            self.diagnostics.info("window.repair_after_blur_skipped", json!({ "reason": "pick_critical" }));
+            return;
+        }
         let state = self.mode();
         if focusless(&state) {
             if let Ok(main) = self.main_window() {
@@ -480,7 +553,17 @@ impl NativeWindowManager {
     }
 
     fn request_input(&self, enabled: bool, collaboration_zoom: bool, timeout: Duration) -> Result<bool> {
-        self.ensure_helper_ready(timeout.max(Duration::from_millis(3000)))?;
+        if !enabled && !self.shared.input_hooks_active.load(Ordering::SeqCst) {
+            return Ok(true);
+        }
+        // Disable should not wait 3s just to spawn a helper that we are about to disarm.
+        let ready_timeout = if enabled { timeout.max(Duration::from_millis(3000)) } else { timeout.min(Duration::from_millis(800)) };
+        if enabled {
+            self.ensure_helper_ready(ready_timeout)?;
+        } else if !self.shared.ready.load(Ordering::SeqCst) || !self.helper_alive() {
+            self.shared.input_hooks_active.store(false, Ordering::SeqCst);
+            return Ok(true);
+        }
         let id = self.next_id();
         let handle = raw_handle(&self.main_window()?)?;
         let (sender, receiver) = mpsc::channel();
@@ -490,10 +573,17 @@ impl NativeWindowManager {
             return Err(error);
         }
         match receiver.recv_timeout(timeout) {
-            Ok(ready) => Ok(ready),
+            Ok(ready) => {
+                if ready { self.shared.input_hooks_active.store(enabled, Ordering::SeqCst); }
+                else if !enabled { self.shared.input_hooks_active.store(false, Ordering::SeqCst); }
+                Ok(ready)
+            }
             Err(_) => {
                 self.shared.pending_input.lock().remove(&id);
                 self.diagnostics.warn("window.input_timeout", json!({ "id": id, "enabled": enabled }));
+                // On disable timeout assume disarmed so exit does not restart the helper
+                // or wait again; enable timeout remains a hard failure for the caller.
+                if !enabled { self.shared.input_hooks_active.store(false, Ordering::SeqCst); }
                 Ok(!enabled)
             }
         }
@@ -558,14 +648,19 @@ fn configure_pen_window_impl(
     let size = main.outer_size()?;
     let scale = main.scale_factor()?;
     let label = "taskbar-pen-0".to_string();
+    // Builder only accepts logical x/y; correct with Physical immediately after build
+    // so mixed-DPI multi-monitor layouts do not place the overlay on the wrong screen.
     let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("taskbar-pen.html".into()))
         .title("Yoiniwa Pen Input").decorations(false).transparent(true).shadow(false).visible(false)
         .focused(false).focusable(false).skip_taskbar(true).resizable(false).always_on_top(true)
         .position(position.x as f64 / scale, position.y as f64 / scale)
         .inner_size(size.width as f64 / scale, size.height as f64 / scale).build()?;
+    let _ = window.set_position(tauri::Position::Physical(position));
+    let _ = window.set_size(tauri::Size::Physical(size));
     set_pen_window_owner(&window, &main)?;
     configure_no_activate_tool_window(&window)?;
     set_always_on_top_screen_saver(&window, true)?;
+    let _ = window.set_position(tauri::Position::Physical(position));
     let _ = window.show();
     shared.pen_labels.lock().push(label);
     diagnostics.info("window.collaboration_pen_layer_ready", json!({ "windows": 1 }));
@@ -615,6 +710,18 @@ fn handle_helper_line(shared: &Arc<NativeShared>, diagnostics: &Arc<DiagnosticsL
         Some("INPUT_PROBE") => {
             diagnostics.info("window.native_input_probe", json!({ "line": line }));
         }
+        Some("PICK_CRITICAL") if parts.len() >= 2 => {
+            let extra = if parts[1] == "HOLD" {
+                Duration::from_millis(500)
+            } else {
+                Duration::from_millis(2000)
+            };
+            extend_pick_critical(shared, extra);
+            diagnostics.info("window.pick_critical", json!({ "phase": parts[1], "ms": extra.as_millis() }));
+        }
+        Some("GESTURE_ACK") if parts.len() >= 2 => {
+            diagnostics.info("window.gesture_ack", json!({ "mode": parts[1] }));
+        }
         Some("INPUT_SHUTDOWN") | Some("SHUTDOWN_ACK") => {
             diagnostics.info("window.input_hooks_shutdown", json!({ "line": line }));
             if let Some(sender) = shared.pending_shutdown.lock().take() {
@@ -629,11 +736,24 @@ fn handle_helper_line(shared: &Arc<NativeShared>, diagnostics: &Arc<DiagnosticsL
     }
 }
 
+fn extend_pick_critical(shared: &NativeShared, extra: Duration) {
+    let until = Instant::now() + extra;
+    let mut slot = shared.pick_critical_until.lock();
+    *slot = Some(match *slot {
+        Some(existing) if existing > until => existing,
+        _ => until,
+    });
+}
+
+fn pick_critical_active(shared: &NativeShared) -> bool {
+    shared.pick_critical_until.lock().is_some_and(|until| Instant::now() < until)
+}
+
 fn emit_helper_pointer(shared: &Arc<NativeShared>, parts: &[&str]) {
     let pointer_type = if parts[6] == "pen" { "pen" } else { "mouse" };
     if pointer_type == "pen" && !shared.pen_labels.lock().is_empty() && parts[1] != "HOVER" { return; }
     let Some(window) = shared.app.get_webview_window("main") else { return; };
-    let Ok(position) = window.outer_position() else { return; }; let Ok(scale) = window.scale_factor() else { return; };
+    let Ok(position) = window.inner_position() else { return; }; let Ok(scale) = window.scale_factor() else { return; };
     let Ok(screen_x) = parts[2].parse::<f64>() else { return; }; let Ok(screen_y) = parts[3].parse::<f64>() else { return; };
     let payload = NativePointerPayload {
         kind: parts[1].to_ascii_lowercase(), client_x: (screen_x - position.x as f64) / scale,

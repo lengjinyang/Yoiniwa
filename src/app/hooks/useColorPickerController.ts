@@ -33,7 +33,11 @@ export function useColorPickerController({
       setStatus(`无法连接桌面取色服务 ${color.hex}`);
       return;
     }
-    const result = await api.syncPhotoshopForeground(color, autoPhotoshopRoundTrip);
+    const result = await api.syncPhotoshopForeground(
+      color,
+      // Collaboration must never request a focus round-trip; Photoshop keeps Ink ownership.
+      drawingCollaborationMode ? false : autoPhotoshopRoundTrip,
+    );
     if (request !== colorSyncRequestRef.current) return;
     if (!result.ok) {
       logWarn('photoshop.sync_failed', { hex: color.hex, status: result.status, message: result.message, copied: result.copied });
