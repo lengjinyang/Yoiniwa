@@ -37,6 +37,10 @@ pub struct AssetRecord {
     pub original_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,6 +53,16 @@ pub struct ImageItem {
     pub source_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster_asset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted: Option<bool>,
+    #[serde(rename = "loop", default, skip_serializing_if = "Option::is_none")]
+    pub loop_playback: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_url: Option<String>,
     pub natural_width: f64,
@@ -228,6 +242,8 @@ pub struct ImportedImage {
     pub data_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<Box<ImportedImage>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -351,6 +367,10 @@ pub struct ImagePipelinePerformanceStats {
     pub jobs_concurrency: u64,
     #[serde(default)]
     pub jobs_completed: u64,
+    #[serde(default)]
+    pub proxy_active: u64,
+    #[serde(default)]
+    pub proxy_queued: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

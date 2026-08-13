@@ -1,7 +1,7 @@
 use std::{str::FromStr, thread, time::Duration};
 
 use anyhow::{anyhow, Result};
-use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+use tauri::{DragDropEvent, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::{bridge, state::AppState};
@@ -59,7 +59,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             bridge::images_import, bridge::images_register_paths, bridge::images_register_urls,
-            bridge::images_register_clipboard, bridge::images_start_native_drag, bridge::images_prewarm,
+            bridge::images_register_clipboard, bridge::images_register_bytes, bridge::images_asset_path,
+            bridge::videos_ensure_playback, bridge::videos_ensure_scrub, bridge::videos_cancel_playback,
+            bridge::images_start_native_drag, bridge::images_prewarm,
             bridge::images_cancel_prewarm, bridge::images_boost_resource, bridge::images_performance_stats,
             bridge::images_sample_pixel, bridge::project_open, bridge::project_commit, bridge::project_save_as,
             bridge::project_close, bridge::project_compact, bridge::project_stats, bridge::project_recover,
@@ -85,6 +87,7 @@ pub fn run() {
         if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
             if let Some(state) = app.try_state::<AppState>() {
                 state.native.shutdown();
+                state.assets.shutdown();
                 let _ = state.project.lock().close(None);
             }
         }
@@ -103,6 +106,18 @@ fn handle_window_event(app: &tauri::AppHandle, event: &WindowEvent) {
         }
         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
             state.native.sync_pen_windows();
+        }
+        WindowEvent::DragDrop(DragDropEvent::Drop { paths, position }) => {
+            if let Some(window) = app.get_webview_window("main") {
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let logical = position.to_logical::<f64>(scale);
+                let paths = paths.iter().map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>();
+                let _ = window.emit("window:file-drop", serde_json::json!({
+                    "paths": paths,
+                    "clientX": logical.x,
+                    "clientY": logical.y,
+                }));
+            }
         }
         _ => {}
     }

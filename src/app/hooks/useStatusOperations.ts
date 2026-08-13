@@ -43,8 +43,16 @@ export function useStatusOperations() {
 
   useEffect(() => {
     const resourceError = () => setStatus('图片资源载入失败，请重新拖入或检查文件是否损坏');
+    const customStatus = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      if (typeof message === 'string' && message.trim()) setStatus(message);
+    };
     window.addEventListener('refcanvas-resource-error', resourceError);
-    return () => window.removeEventListener('refcanvas-resource-error', resourceError);
+    window.addEventListener('refcanvas-status', customStatus);
+    return () => {
+      window.removeEventListener('refcanvas-resource-error', resourceError);
+      window.removeEventListener('refcanvas-status', customStatus);
+    };
   }, []);
 
   return {

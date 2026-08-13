@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWebview } from '@tauri-apps/api/webview';
 import type {
   ImagePrewarmProgress, ImageThumbnailReady, ImageDerivativeReady, NativePointerInput, RefCanvasAPI,
+  VideoPreparationProgress, VideoProxyFailed, VideoProxyReady,
 } from '../types';
 import { createPhotoshopSyncQueue } from '../shared/photoshopSyncQueue';
 
@@ -10,6 +10,9 @@ type EventPayloads = {
   'images:prewarm-progress': ImagePrewarmProgress;
   'images:thumbnail-ready': ImageThumbnailReady;
   'images:derivative-ready': ImageDerivativeReady;
+  'videos:proxy-ready': VideoProxyReady;
+  'videos:proxy-failed': VideoProxyFailed;
+  'videos:preparation-progress': VideoPreparationProgress;
   'scene:external-open': string;
   'window:move-finished': void;
   'window:close-requested': void;
@@ -17,6 +20,7 @@ type EventPayloads = {
   'window:toggle-collaboration-requested': void;
   'window:native-pointer': NativePointerInput;
   'window:native-zoom': 'in' | 'out';
+  'window:file-drop': { paths: string[]; clientX: number; clientY: number };
 };
 
 function onEvent<K extends keyof EventPayloads>(name: K, callback: (payload: EventPayloads[K]) => void) {
@@ -35,16 +39,7 @@ function command<T>(name: string, args?: Record<string, unknown>) {
 }
 
 function onFilesDropped(callback: (drop: { paths: string[]; clientX: number; clientY: number }) => void) {
-  let disposed = false;
-  let unlisten: (() => void) | undefined;
-  void getCurrentWebview().onDragDropEvent(({ payload }) => {
-    if (disposed || payload.type !== 'drop') return;
-    const position = payload.position.toLogical(window.devicePixelRatio || 1);
-    callback({ paths: payload.paths, clientX: position.x, clientY: position.y });
-  }).then((next) => {
-    if (disposed) next(); else unlisten = next;
-  });
-  return () => { disposed = true; unlisten?.(); };
+  return onEvent('window:file-drop', callback);
 }
 
 function bytes(value: ArrayBuffer) {
@@ -90,9 +85,20 @@ export function installTauriRefCanvasApi() {
   }));
   const api: RefCanvasAPI = {
     importImages: (requestId) => command('images_import', { requestId }),
-    registerImagePaths: (paths, sourceType) => command('images_register_paths', { paths, sourceType }),
+    registerImagePaths: (paths, sourceType, requestId) => command('images_register_paths', { paths, sourceType, requestId }),
     registerImageUrls: (urls) => command('images_register_urls', { urls }),
     registerClipboardImage: () => command('images_register_clipboard'),
+    registerImageBytes: (name, data, sourceType) => rawCommand('images_register_bytes', data, {
+      'x-yoiniwa-name': encodedHeader(name),
+      'x-yoiniwa-source-type': encodedHeader(sourceType ?? 'drop'),
+    }),
+    assetFilePath: (assetId) => command('images_asset_path', { assetId }),
+    ensureVideoPlayback: (assetId) => command('videos_ensure_playback', { assetId }),
+    ensureVideoScrub: (assetId) => command('videos_ensure_scrub', { assetId }),
+    cancelVideoPlayback: (assetId) => { void command('videos_cancel_playback', { assetId }); },
+    onVideoProxyReady: (callback) => onEvent('videos:proxy-ready', callback),
+    onVideoProxyFailed: (callback) => onEvent('videos:proxy-failed', callback),
+    onVideoPreparationProgress: (callback) => onEvent('videos:preparation-progress', callback),
     startImageDrag: (assetIds) => { void command('images_start_native_drag', { assetIds }); },
     prewarmImages: (ids, requestId) => command('images_prewarm', { ids, requestId }),
     boostImageResource: (key, priority) => { void command('images_boost_resource', { key, priority }); },

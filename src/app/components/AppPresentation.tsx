@@ -124,6 +124,7 @@ export function AppWorkspace({
         onWindowMoveEnd: () => api?.endWindowMove(),
       }}
       visualNotes={visualNotes.canvas}
+      videoScrubPixelsPerFrame={preferences.videoScrubPixelsPerFrame}
     />
 
     <PropertiesPanel
@@ -147,6 +148,8 @@ export function AppWorkspace({
       onClearCache={preferences.clearCache}
       onOpenLogsFolder={preferences.openLogsFolder}
       onCopyDiagnostics={preferences.copyDiagnostics}
+      videoScrubPixelsPerFrame={preferences.videoScrubPixelsPerFrame}
+      onVideoScrubPixelsPerFrameChange={preferences.setVideoScrubPixelsPerFrame}
     />
   </section>;
 }
@@ -362,8 +365,8 @@ export function AppOverlays({
       <img className="empty-brand-icon" src="./yoiniwa-icon.png" alt="宵庭 Logo" draggable={false} />
       <div className="empty-brand-name"><strong>Yoiniwa</strong><span>宵庭</span></div>
       <h1>建立你的参考画板</h1>
-      <p>拖入图片、粘贴截图，或从电脑中选择图片。</p>
-      <Button onClick={imageImport.importImages}>选择图片</Button>
+      <p>拖入图片或视频、粘贴截图，或从电脑中选择媒体。</p>
+      <Button onClick={imageImport.importImages}>选择图片/视频</Button>
       {project.recent.length > 0 && <section className="empty-recent" aria-label="最近的文件">
         <header><strong>最近的文件</strong><span>{project.recent.length}</span></header>
         <div className="empty-recent-list">

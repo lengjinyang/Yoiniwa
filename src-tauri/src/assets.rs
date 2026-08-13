@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    sync::{mpsc, Arc},
+    sync::{atomic::{AtomicI32, Ordering}, mpsc, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,10 +21,13 @@ use crate::{
     image_jobs::ImageJobQueue,
     image_pipeline,
     types::{AssetRecord, CacheInfo, ImagePipelinePerformanceStats, ImportedImage},
+    video_meta, video_poster, video_proxy,
 };
 
 const MAX_IMAGE_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_VIDEO_BYTES: u64 = 500 * 1024 * 1024;
 const ASSET_CACHE_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
+const VIDEO_RANGE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 const IMAGE_CACHE_VERSION: u32 = 3;
 
 #[derive(Clone, Debug)]
@@ -50,6 +53,10 @@ pub struct AssetService {
     canceled_prewarm: Mutex<HashSet<String>>,
     stats: Mutex<ImagePipelinePerformanceStats>,
     jobs: Arc<ImageJobQueue>,
+    video_jobs: Arc<ImageJobQueue>,
+    video_indexes: RwLock<HashMap<String, Arc<video_proxy::VideoScrubIndex>>>,
+    video_decode_generations: RwLock<HashMap<String, u64>>,
+    video_priority: AtomicI32,
     diagnostics: Arc<DiagnosticsLog>,
     app: Mutex<Option<AppHandle>>,
 }
@@ -80,14 +87,28 @@ impl AssetService {
             canceled_prewarm: Mutex::new(HashSet::new()),
             stats: Mutex::new(ImagePipelinePerformanceStats::default()),
             jobs,
+            video_jobs: ImageJobQueue::new(1),
+            video_indexes: RwLock::new(HashMap::new()),
+            video_decode_generations: RwLock::new(HashMap::new()),
+            video_priority: AtomicI32::new(100),
             diagnostics,
             app: Mutex::new(None),
         };
         fs::create_dir_all(service.asset_cache_dir())?;
+        video_proxy::cleanup_stale_proxy_temps(&service.cache_root());
         Ok(service)
     }
 
     pub fn bind_app(&self, app: AppHandle) { *self.app.lock() = Some(app); }
+
+    pub fn shutdown(&self) {
+        self.video_jobs.cancel(|_| true);
+        self.jobs.cancel(|_| true);
+        for _ in 0..20 {
+            if self.video_jobs.stats().active == 0 && self.jobs.stats().active == 0 { break; }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
 
     pub fn cache_root(&self) -> PathBuf {
         self.cache_override.read().as_ref()
@@ -125,13 +146,14 @@ impl AssetService {
     }
 
     pub fn register_path(&self, path: &Path, source_type: &str) -> Result<ImportedImage> {
-        if !path.is_absolute() { return Err(anyhow!("图片路径必须是绝对路径")); }
+        if !path.is_absolute() { return Err(anyhow!("媒体路径必须是绝对路径")); }
         let metadata = fs::metadata(path)?;
-        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_IMAGE_BYTES {
-            return Err(anyhow!("图片文件大小无效"));
+        let mime = media_mime(path).ok_or_else(|| anyhow!("不支持的媒体格式"))?;
+        let max_bytes = if is_video_mime(mime) { MAX_VIDEO_BYTES } else { MAX_IMAGE_BYTES };
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
+            return Err(anyhow!(if is_video_mime(mime) { "视频文件大小无效" } else { "图片文件大小无效" }));
         }
-        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("image").to_string();
-        let mime = image_mime(path).ok_or_else(|| anyhow!("不支持的图片格式"))?;
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(if is_video_mime(mime) { "video" } else { "image" }).to_string();
         let temporary = self.asset_cache_dir().join(format!(".import-{}.tmp", Uuid::new_v4()));
         fs::create_dir_all(self.asset_cache_dir())?;
         let mut reader = BufReader::new(File::open(path)?);
@@ -148,60 +170,297 @@ impl AssetService {
         let hash = format!("{:x}", hasher.finalize());
         let cache_path = self.asset_cache_dir().join(format!("{hash}{}", extension_for_mime(mime)));
         install_cache_file(&temporary, &cache_path, metadata.len())?;
-        let image = image_pipeline::metadata(&cache_path, &self.stats)?;
-        let record = AssetRecord {
-            id: hash.clone(), asset_id: Some(hash.clone()), hash: hash.clone(), mime_type: mime.to_string(),
-            byte_length: metadata.len(), source_size: Some(metadata.len()),
-            source_mtime_ms: metadata.modified().ok().and_then(system_time_ms),
-            natural_width: image.width, natural_height: image.height, orientation: Some(image.orientation),
-            has_alpha: Some(image.has_alpha), content_hash: Some(hash.clone()), cache_version: Some(IMAGE_CACHE_VERSION),
-            original_name: name.clone(), source_path: Some(path.to_string_lossy().into_owned()),
-        };
-        self.register_existing(record.clone(), cache_path);
+        let record = self.build_record(hash.clone(), mime, metadata.len(), name.clone(), Some(path.to_string_lossy().into_owned()), &cache_path, metadata.modified().ok().and_then(system_time_ms))?;
+        self.register_existing(record.clone(), cache_path.clone());
         self.trim_asset_cache()?;
-        Ok(ImportedImage {
+        let imported = ImportedImage {
             name, path: Some(path.to_string_lossy().into_owned()), asset_id: hash,
-            asset: record, data_url: None, source_type: Some(source_type.to_string()),
-        })
+            asset: record, data_url: None, source_type: Some(source_type.to_string()), poster: None,
+        };
+        // Video posters and compatibility proxies are derived lazily from viewport/playback demand.
+        Ok(imported)
     }
 
     pub fn register_bytes(&self, name: String, data: &[u8], source_path: Option<String>, source_type: &str) -> Result<ImportedImage> {
-        if data.is_empty() || data.len() as u64 > MAX_IMAGE_BYTES { return Err(anyhow!("图片数据大小无效")); }
-        let mime = image_mime(Path::new(&name)).ok_or_else(|| anyhow!("不支持的图片格式"))?;
+        let mime = media_mime(Path::new(&name)).ok_or_else(|| anyhow!("不支持的媒体格式"))?;
+        let max_bytes = if is_video_mime(mime) { MAX_VIDEO_BYTES } else { MAX_IMAGE_BYTES };
+        if data.is_empty() || data.len() as u64 > max_bytes {
+            return Err(anyhow!(if is_video_mime(mime) { "视频数据大小无效" } else { "图片数据大小无效" }));
+        }
         let hash = format!("{:x}", Sha256::digest(data));
         fs::create_dir_all(self.asset_cache_dir())?;
         let cache_path = self.asset_cache_dir().join(format!("{hash}{}", extension_for_mime(mime)));
         if fs::metadata(&cache_path).map(|metadata| metadata.len()).unwrap_or(0) != data.len() as u64 {
             atomic_write(&cache_path, data)?;
         }
-        let image = image_pipeline::metadata(&cache_path, &self.stats)?;
-        let record = AssetRecord {
-            id: hash.clone(), asset_id: Some(hash.clone()), hash: hash.clone(), mime_type: mime.to_string(),
-            byte_length: data.len() as u64, source_size: Some(data.len() as u64), source_mtime_ms: Some(now_ms()),
-            natural_width: image.width, natural_height: image.height, orientation: Some(image.orientation),
-            has_alpha: Some(image.has_alpha), content_hash: Some(hash.clone()), cache_version: Some(IMAGE_CACHE_VERSION),
-            original_name: name.clone(), source_path: source_path.clone(),
-        };
+        let record = self.build_record(hash.clone(), mime, data.len() as u64, name.clone(), source_path.clone(), &cache_path, Some(now_ms()))?;
         self.register_existing(record.clone(), cache_path);
         self.trim_asset_cache()?;
-        Ok(ImportedImage { name, path: source_path, asset_id: hash, asset: record, data_url: None, source_type: Some(source_type.to_string()) })
+        let imported = ImportedImage {
+            name, path: source_path, asset_id: hash.clone(), asset: record, data_url: None,
+            source_type: Some(source_type.to_string()), poster: None,
+        };
+        // Never fan out poster extraction or ffmpeg work during a large batch import.
+        Ok(imported)
+    }
+
+    fn enqueue_video_index(&self, asset_id: &str) -> Result<()> {
+        if video_proxy::ready_source_index(&self.cache_root(), asset_id).is_some() { return Ok(()); }
+        let source = self.ensure_file(asset_id)?;
+        let cache_root = self.cache_root();
+        let asset_id = asset_id.to_string();
+        let app = self.app.lock().clone();
+        let priority = self.video_priority.fetch_add(1, Ordering::Relaxed);
+        let key = format!("video-index:{asset_id}");
+        let receiver = self.video_jobs.enqueue(key, priority, move |canceled| {
+            if let Some(app) = app.as_ref() {
+                let _ = app.emit("videos:preparation-progress", serde_json::json!({
+                    "assetId": asset_id, "stage": "indexing", "fraction": 0.02,
+                }));
+            }
+            match video_proxy::ensure_source_frame_index(
+                &cache_root, &asset_id, &source, canceled.as_ref(),
+            ) {
+                Ok(index) => {
+                    if let Some(app) = app.as_ref() {
+                        let _ = app.emit("videos:preparation-progress", serde_json::json!({
+                            "assetId": asset_id,
+                            "stage": "index-ready",
+                            "fraction": 1.0,
+                            "fps": index.fps,
+                            "frameCount": index.frame_count,
+                            "vfr": index.vfr,
+                            "frameAccurate": index.frame_accurate,
+                        }));
+                    }
+                    Ok(Vec::new())
+                }
+                Err(error) => {
+                    if !canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                        if let Some(app) = app.as_ref() {
+                            let _ = app.emit("videos:preparation-progress", serde_json::json!({
+                                "assetId": asset_id,
+                                "stage": "failed",
+                                "fraction": 0.0,
+                                "message": error.to_string(),
+                            }));
+                        }
+                    }
+                    Err(error.to_string())
+                }
+            }
+        });
+        drop(receiver);
+        Ok(())
+    }
+
+    fn enqueue_video_proxy(&self, asset_id: &str) -> Result<()> {
+        if video_proxy::ready_proxy_path(&self.cache_root(), asset_id).is_some() { return Ok(()); }
+        let source = self.ensure_file(asset_id)?;
+        let cache_root = self.cache_root();
+        let asset_id = asset_id.to_string();
+        let app = self.app.lock().clone();
+        let priority = self.video_priority.fetch_add(1, Ordering::Relaxed);
+        let key = format!("video-proxy:{asset_id}");
+        let receiver = self.video_jobs.enqueue(key, priority, move |canceled| {
+            let emit_progress = |stage: &str, fraction: f64| {
+                if let Some(app) = app.as_ref() {
+                    let _ = app.emit("videos:preparation-progress", serde_json::json!({
+                        "assetId": asset_id, "stage": stage, "fraction": fraction,
+                    }));
+                }
+            };
+            let result = video_proxy::ensure_h264_proxy_with_progress(
+                &cache_root, &asset_id, &source, canceled.as_ref(), &emit_progress,
+            );
+            match result {
+                Ok(path) => {
+                    let index = video_proxy::ready_scrub_index(&cache_root, &asset_id);
+                    let fps = index.as_ref().map(|value| value.fps).unwrap_or(30.0);
+                    let frame_count = index.as_ref().map(|value| value.frame_count);
+                    if let Some(app) = app.as_ref() {
+                        let _ = app.emit("videos:proxy-ready", serde_json::json!({
+                            "assetId": asset_id, "path": path, "fps": fps, "frameCount": frame_count,
+                            "indexReady": true, "playbackReady": true, "scrubReady": true,
+                            "vfr": index.as_ref().is_some_and(|value| value.vfr),
+                        }));
+                    }
+                    Ok(Vec::new())
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if !canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                        let source_index = video_proxy::ready_source_index(&cache_root, &asset_id);
+                        if let Some(app) = app.as_ref() {
+                            let _ = app.emit("videos:proxy-failed", serde_json::json!({
+                                "assetId": asset_id, "message": message,
+                                "indexReady": source_index.is_some(),
+                                "unsupportedReason": source_index.and_then(|value| value.unsupported_reason),
+                            }));
+                        }
+                    }
+                    Err(message)
+                }
+            }
+        });
+        // The completion is delivered through Tauri events; dropping this waiter avoids a blocking thread.
+        drop(receiver);
+        Ok(())
+    }
+
+    pub fn cancel_video_playback(&self, asset_id: &str) {
+        let proxy_key = format!("video-proxy:{asset_id}");
+        let index_key = format!("video-index:{asset_id}");
+        self.video_jobs.cancel(|job| job == proxy_key || job == index_key);
+    }
+
+    pub fn ensure_video_scrub(&self, asset_id: &str) -> Result<serde_json::Value> {
+        if asset_id.len() != 64 || !asset_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(anyhow!("资源标识无效"));
+        }
+        self.ensure_file(asset_id)?;
+        let index = video_proxy::ready_source_index(&self.cache_root(), asset_id);
+        let decoder_available = video_proxy::source_decoder_available();
+        if index.is_none() && video_proxy::source_indexer_available() {
+            self.enqueue_video_index(asset_id)?;
+        }
+        let key = format!("video-index:{asset_id}");
+        let status = self.video_jobs.job_status(&key);
+        let fps = index.as_ref().map(|value| value.fps).unwrap_or(30.0);
+        let frame_count = index.as_ref().map(|value| value.frame_count);
+        Ok(serde_json::json!({
+            "assetId": asset_id,
+            "path": serde_json::Value::Null,
+            "fps": fps,
+            "frameCount": frame_count,
+            "ready": true,
+            "indexReady": index.is_some(),
+            "playbackReady": true,
+            // FFmpeg can decode an approximate PTS immediately; the index makes it frame-accurate.
+            "scrubReady": decoder_available,
+            "frameAccurate": index.as_ref().is_some_and(|value| value.frame_accurate),
+            "vfr": index.as_ref().is_some_and(|value| value.vfr),
+            "unsupportedReason": if !decoder_available { Some("未找到 FFmpeg 原片解码器") }
+                else if !video_proxy::source_indexer_available() { Some("未找到 ffprobe，Frame Scrub 可用但无法保证 VFR 精确映射") }
+                else { None },
+            "state": if index.is_some() { "ready" }
+                else if status.as_ref().is_some_and(|value| value.running) { "running" }
+                else { "queued" },
+            "queuePosition": status.and_then(|value| value.queue_position),
+        }))
+    }
+
+    pub fn ensure_video_playback(&self, asset_id: &str) -> Result<serde_json::Value> {
+        if asset_id.len() != 64 || !asset_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(anyhow!("资源标识无效"));
+        }
+        self.ensure_file(asset_id)?;
+        let source_index = video_proxy::ready_source_index(&self.cache_root(), asset_id);
+        let fps = source_index.as_ref().map(|value| value.fps).unwrap_or(30.0);
+        let frame_count = source_index.as_ref().map(|value| value.frame_count);
+        if let Some(path) = video_proxy::ready_proxy_path(&self.cache_root(), asset_id) {
+            let index = video_proxy::ready_scrub_index(&self.cache_root(), asset_id);
+            let fps = index.as_ref().map(|value| value.fps).unwrap_or(fps);
+            let frame_count = index.as_ref().map(|value| value.frame_count).or(frame_count);
+            video_proxy::touch_proxy(&path);
+            return Ok(serde_json::json!({
+                "assetId": asset_id,
+                "path": path,
+                "fps": fps,
+                "frameCount": frame_count,
+                "ready": true,
+                "indexReady": true,
+                "playbackReady": true,
+                "scrubReady": index.is_some(),
+                "vfr": index.as_ref().is_some_and(|value| value.vfr),
+                "unsupportedReason": serde_json::Value::Null,
+                "state": "ready",
+                "queuePosition": serde_json::Value::Null,
+            }));
+        }
+        if let Some(reason) = source_index.as_ref().and_then(|value| value.unsupported_reason.clone()) {
+            return Ok(serde_json::json!({
+                "assetId": asset_id,
+                "path": serde_json::Value::Null,
+                "fps": fps,
+                "frameCount": frame_count,
+                "ready": false,
+                "indexReady": true,
+                "playbackReady": false,
+                "scrubReady": false,
+                "vfr": source_index.as_ref().is_some_and(|value| value.vfr),
+                "unsupportedReason": reason,
+                "state": "ready",
+                "queuePosition": serde_json::Value::Null,
+            }));
+        }
+        // Never block the invoke on ffmpeg — spawn encode and let the UI wait for videos:proxy-ready.
+        self.enqueue_video_proxy(asset_id)?;
+        let key = format!("video-proxy:{asset_id}");
+        let status = self.video_jobs.job_status(&key);
+        Ok(serde_json::json!({
+            "assetId": asset_id,
+            "path": serde_json::Value::Null,
+            "fps": fps,
+            "frameCount": frame_count,
+            "ready": false,
+            "indexReady": source_index.is_some(),
+            "playbackReady": false,
+            "scrubReady": false,
+            "vfr": source_index.as_ref().is_some_and(|value| value.vfr),
+            "unsupportedReason": source_index.as_ref().and_then(|value| value.unsupported_reason.clone()),
+            "state": if status.as_ref().is_some_and(|value| value.running) { "running" } else { "queued" },
+            "queuePosition": status.and_then(|value| value.queue_position),
+        }))
+    }
+
+    fn build_record(
+        &self,
+        hash: String,
+        mime: &str,
+        byte_length: u64,
+        name: String,
+        source_path: Option<String>,
+        cache_path: &Path,
+        source_mtime_ms: Option<f64>,
+    ) -> Result<AssetRecord> {
+        if is_video_mime(mime) {
+            // Import stays copy/hash/container-metadata only. WebView metadata probing is
+            // bounded on the frontend; ffmpeg/ffprobe is reserved for an actual play request.
+            let meta = video_meta::read_video_metadata(cache_path).unwrap_or_default();
+            return Ok(AssetRecord {
+                id: hash.clone(), asset_id: Some(hash.clone()), hash: hash.clone(), mime_type: mime.to_string(),
+                byte_length, source_size: Some(byte_length), source_mtime_ms,
+                natural_width: meta.width.max(1), natural_height: meta.height.max(1), orientation: Some(1),
+                has_alpha: Some(false), content_hash: Some(hash), cache_version: Some(IMAGE_CACHE_VERSION),
+                original_name: name, source_path, kind: Some("video".into()), duration_sec: meta.duration_sec,
+            });
+        }
+        let image = image_pipeline::metadata(cache_path, &self.stats)?;
+        Ok(AssetRecord {
+            id: hash.clone(), asset_id: Some(hash.clone()), hash: hash.clone(), mime_type: mime.to_string(),
+            byte_length, source_size: Some(byte_length), source_mtime_ms,
+            natural_width: image.width, natural_height: image.height, orientation: Some(image.orientation),
+            has_alpha: Some(image.has_alpha), content_hash: Some(hash), cache_version: Some(IMAGE_CACHE_VERSION),
+            original_name: name, source_path, kind: Some("image".into()), duration_sec: None,
+        })
     }
 
     pub fn register_url(&self, raw_url: &str) -> Result<ImportedImage> {
         let url = Url::parse(raw_url)?;
-        if !matches!(url.scheme(), "http" | "https") { return Err(anyhow!("只支持 HTTP 或 HTTPS 图片地址")); }
+        if !matches!(url.scheme(), "http" | "https") { return Err(anyhow!("只支持 HTTP 或 HTTPS 媒体地址")); }
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::limited(6)).build()?;
         let response = client.get(url.clone()).send()?;
-        if !response.status().is_success() { return Err(anyhow!("图片下载失败: HTTP {}", response.status())); }
-        if response.content_length().unwrap_or(0) > MAX_IMAGE_BYTES { return Err(anyhow!("网络图片超过 200MB")); }
+        if !response.status().is_success() { return Err(anyhow!("媒体下载失败: HTTP {}", response.status())); }
+        if response.content_length().unwrap_or(0) > MAX_VIDEO_BYTES { return Err(anyhow!("网络媒体超过大小限制")); }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_string();
         let bytes = response.bytes()?;
-        if bytes.len() as u64 > MAX_IMAGE_BYTES { return Err(anyhow!("网络图片超过 200MB")); }
+        if bytes.len() as u64 > MAX_VIDEO_BYTES { return Err(anyhow!("网络媒体超过大小限制")); }
         let mut name = url.path_segments().and_then(|mut segments| segments.next_back()).filter(|value| !value.is_empty())
-            .unwrap_or("network-image").to_string();
-        if image_mime(Path::new(&name)).is_none() {
+            .unwrap_or("network-media").to_string();
+        if media_mime(Path::new(&name)).is_none() {
             name.push_str(extension_for_mime(&content_type));
         }
         self.register_bytes(name, &bytes, Some(raw_url.to_string()), "drop")
@@ -233,6 +492,9 @@ impl AssetService {
         stats.jobs_inflight = jobs.inflight as u64;
         stats.jobs_concurrency = jobs.concurrency as u64;
         stats.jobs_completed = self.jobs.completed();
+        let video_jobs = self.video_jobs.stats();
+        stats.proxy_active = video_jobs.active as u64;
+        stats.proxy_queued = video_jobs.pending as u64;
         stats
     }
 
@@ -249,8 +511,12 @@ impl AssetService {
         let total = ids.len();
         for id in ids {
             if self.canceled_prewarm.lock().contains(request_id) { break; }
-            // Match Electron: only the permanent safety plane blocks import.
-            let result = self.ensure_thumbnail(id, 128, 20);
+            let is_video = self.entry(id).is_some_and(|entry| is_video_asset(&entry.record));
+            let result = if is_video {
+                self.ensure_file(id).map(|_| Vec::new())
+            } else {
+                self.ensure_thumbnail(id, 128, 20)
+            };
             if result.is_err() { failed += 1; }
             completed += 1;
             let failed_name = result.err().map(|error| error.to_string());
@@ -341,6 +607,42 @@ impl AssetService {
         if variant == "original" {
             return self.original_response(request, &entry);
         }
+        if variant == "playback" {
+            return self.playback_response(request, &entry);
+        }
+        if variant == "scrub-index" {
+            return self.scrub_index_response(request, &entry);
+        }
+        if variant == "scrub-frame" {
+            return self.scrub_frame_response(request, &entry, &url);
+        }
+        if variant == "scrub-cancel" {
+            return self.scrub_cancel_response(&entry, &url);
+        }
+        if variant == "scrub-packets" {
+            return self.scrub_packets_response(request, &entry, &url);
+        }
+        if variant == "video-poster" {
+            if !is_video_asset(&entry.record) {
+                return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Not a video".to_vec()));
+            }
+            if request.method() == http::Method::HEAD {
+                return Ok(response(http::StatusCode::METHOD_NOT_ALLOWED, "text/plain", Vec::new()));
+            }
+            let edge = query_u32(&url, "edge")?.clamp(128, 2048);
+            let priority = url.query_pairs().find(|(key, _)| key == "priority")
+                .and_then(|(_, value)| value.parse::<i32>().ok()).unwrap_or(10);
+            if let Some(bytes) = self.read_video_poster(id, edge) {
+                return Ok(ok_asset_bytes(id, "image/png", bytes)?);
+            }
+            return Ok(match self.wait_job(self.enqueue_video_poster(id, edge, priority)) {
+                Ok(bytes) => ok_asset_bytes(id, "image/png", bytes)?,
+                Err(error) => response(http::StatusCode::INTERNAL_SERVER_ERROR, "text/plain; charset=utf-8", error.into_bytes()),
+            });
+        }
+        if is_video_asset(&entry.record) {
+            return Ok(response(http::StatusCode::NOT_FOUND, "text/plain", b"Video has no image derivatives".to_vec()));
+        }
         if request.method() == http::Method::HEAD {
             return Ok(response(http::StatusCode::METHOD_NOT_ALLOWED, "text/plain", Vec::new()));
         }
@@ -410,6 +712,46 @@ impl AssetService {
     fn read_thumbnail(&self, id: &str, edge: u32) -> Option<Vec<u8>> {
         let path = self.image_asset_root(id).join(format!("thumb-{edge}.png"));
         fs::read(path).ok().filter(|bytes| is_png(bytes))
+    }
+
+    fn video_poster_path(&self, id: &str, edge: u32) -> PathBuf {
+        self.derived_cache_dir().join("video-poster").join(id).join(format!("poster-{edge}.png"))
+    }
+
+    fn read_video_poster(&self, id: &str, edge: u32) -> Option<Vec<u8>> {
+        fs::read(self.video_poster_path(id, edge)).ok().filter(|bytes| is_png(bytes))
+    }
+
+    fn enqueue_video_poster(&self, id: &str, edge: u32, priority: i32) -> mpsc::Receiver<Result<Vec<u8>, String>> {
+        let edge = edge.clamp(128, 2048);
+        if let Some(bytes) = self.read_video_poster(id, edge) {
+            return immediate_result(Ok(bytes));
+        }
+        let entry = match self.entry(id) {
+            Some(entry) if is_video_asset(&entry.record) => entry,
+            _ => return immediate_result(Err(format!("视频资源不存在: {id}"))),
+        };
+        let source = match self.ensure_file(id) {
+            Ok(path) => path,
+            Err(error) => return immediate_result(Err(error.to_string())),
+        };
+        let output = self.video_poster_path(id, edge);
+        let asset_id = id.to_string();
+        let width = entry.record.natural_width.max(1);
+        let height = entry.record.natural_height.max(1);
+        let app = self.app.lock().clone();
+        self.jobs.enqueue(format!("video-poster:{id}:{edge}"), priority, move |canceled| {
+            if canceled.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("视频海报任务已取消".into());
+            }
+            if let Some(bytes) = fs::read(&output).ok().filter(|bytes| is_png(bytes)) {
+                return Ok(bytes);
+            }
+            let bytes = video_poster::video_poster_png(&source, edge, width, height).map_err(|error| error.to_string())?;
+            atomic_write(&output, &bytes).map_err(|error| error.to_string())?;
+            emit_derivative_ready_app(app.as_ref(), &asset_id, "video-poster", Some(edge), None, None, None);
+            Ok(bytes)
+        })
     }
 
     fn read_mip(&self, id: &str, edge: u32) -> Option<Vec<u8>> {
@@ -623,22 +965,171 @@ impl AssetService {
         } else {
             return Err(anyhow!("资源缓存缺失: {}", entry.record.id));
         };
+        self.ranged_file_response(request, &source_path, source_offset, length, &entry.record.mime_type, &entry.record.hash)
+    }
+
+    /// Serve the WebView-safe H.264 proxy when ready (Range-capable custom protocol).
+    fn playback_response(&self, request: &http::Request<Vec<u8>>, entry: &AssetEntry) -> Result<http::Response<Vec<u8>>> {
+        if !is_video_asset(&entry.record) {
+            return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Not a video".to_vec()));
+        }
+        if let Some(proxy) = video_proxy::ready_proxy_path(&self.cache_root(), &entry.record.id) {
+            video_proxy::touch_proxy(&proxy);
+            let length = fs::metadata(&proxy)?.len();
+            return self.ranged_file_response(request, &proxy, 0, length, "video/mp4", &entry.record.hash);
+        }
+        self.enqueue_video_proxy(&entry.record.id)?;
+        let mut result = response(http::StatusCode::NOT_FOUND, "text/plain", b"Generating playback proxy".to_vec());
+        result.headers_mut().insert(http::header::CACHE_CONTROL, "no-store".parse()?);
+        Ok(result)
+    }
+
+    fn scrub_index_response(&self, request: &http::Request<Vec<u8>>, entry: &AssetEntry) -> Result<http::Response<Vec<u8>>> {
+        if !is_video_asset(&entry.record) {
+            return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Not a video".to_vec()));
+        }
+        if request.method() == http::Method::HEAD {
+            return Ok(response(http::StatusCode::METHOD_NOT_ALLOWED, "text/plain", Vec::new()));
+        }
+        let Some(index) = video_proxy::ready_source_index(&self.cache_root(), &entry.record.id) else {
+            if video_proxy::source_indexer_available() {
+                self.enqueue_video_index(&entry.record.id)?;
+            }
+            let mut result = response(http::StatusCode::NOT_FOUND, "text/plain", b"Generating frame index".to_vec());
+            result.headers_mut().insert(http::header::CACHE_CONTROL, "no-store".parse()?);
+            return Ok(result);
+        };
+        let mut public_index = index;
+        // Packet offsets stay private to the native protocol. The worker only
+        // needs frame PTS and decoder configuration to choose a bounded batch.
+        public_index.packets.clear();
+        let bytes = serde_json::to_vec(&public_index)?;
+        let mut result = response(http::StatusCode::OK, "application/json", bytes);
+        result.headers_mut().insert(http::header::CACHE_CONTROL, "no-cache".parse()?);
+        Ok(result)
+    }
+
+    fn scrub_frame_response(
+        &self,
+        request: &http::Request<Vec<u8>>,
+        entry: &AssetEntry,
+        url: &Url,
+    ) -> Result<http::Response<Vec<u8>>> {
+        if !is_video_asset(&entry.record) {
+            return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Not a video".to_vec()));
+        }
+        if request.method() == http::Method::HEAD {
+            return Ok(response(http::StatusCode::METHOD_NOT_ALLOWED, "text/plain", Vec::new()));
+        }
+        let (target_frame, start_frame, frame_count, width, height, fallback_time_us, generation) = match scrub_frame_query(url) {
+            Ok(value) => value,
+            Err(_) => return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Invalid scrub frame request".to_vec())),
+        };
+        {
+            let mut generations = self.video_decode_generations.write();
+            let current = generations.entry(entry.record.id.clone()).or_default();
+            if generation < *current {
+                return Ok(response(http::StatusCode::CONFLICT, "text/plain", b"Stale scrub frame request".to_vec()));
+            }
+            *current = generation;
+        }
+        let source = self.ensure_file(&entry.record.id)?;
+        let index = video_proxy::ready_source_index(&self.cache_root(), &entry.record.id);
+        let bytes = video_proxy::decode_source_frame_rgba(
+            &self.cache_root(),
+            &source,
+            index.as_ref(),
+            start_frame,
+            frame_count,
+            width,
+            height,
+            fallback_time_us,
+            &|| self.video_decode_generations.read().get(&entry.record.id).copied() != Some(generation),
+        )?;
+        let mut result = response(http::StatusCode::OK, "application/x-yoiniwa-rgba", bytes);
+        result.headers_mut().insert(http::header::CACHE_CONTROL, "no-store".parse()?);
+        result.headers_mut().insert("x-yoiniwa-width", width.to_string().parse()?);
+        result.headers_mut().insert("x-yoiniwa-height", height.to_string().parse()?);
+        result.headers_mut().insert("x-yoiniwa-target-frame", target_frame.to_string().parse()?);
+        result.headers_mut().insert("x-yoiniwa-start-frame", start_frame.to_string().parse()?);
+        let decoded_count = result.body().len() as u64 / (u64::from(width) * u64::from(height) * 4);
+        result.headers_mut().insert("x-yoiniwa-frame-count", decoded_count.to_string().parse()?);
+        Ok(result)
+    }
+
+    fn scrub_cancel_response(&self, entry: &AssetEntry, url: &Url) -> Result<http::Response<Vec<u8>>> {
+        let generation = query_u64(url, "generation")?;
+        let mut generations = self.video_decode_generations.write();
+        let current = generations.entry(entry.record.id.clone()).or_default();
+        *current = (*current).max(generation);
+        Ok(response(http::StatusCode::NO_CONTENT, "text/plain", Vec::new()))
+    }
+
+    fn scrub_packets_response(
+        &self,
+        request: &http::Request<Vec<u8>>,
+        entry: &AssetEntry,
+        url: &Url,
+    ) -> Result<http::Response<Vec<u8>>> {
+        if !is_video_asset(&entry.record) {
+            return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Not a video".to_vec()));
+        }
+        if request.method() == http::Method::HEAD {
+            return Ok(response(http::StatusCode::METHOD_NOT_ALLOWED, "text/plain", Vec::new()));
+        }
+        let (start, count) = match scrub_packet_query(url) {
+            Ok(value) => value,
+            Err(_) => return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Invalid packet range".to_vec())),
+        };
+        let cache_root = self.cache_root();
+        let index = if let Some(index) = self.video_indexes.read().get(&entry.record.id).cloned() {
+            index
+        } else {
+            let Some(index) = video_proxy::ready_scrub_index(&cache_root, &entry.record.id) else {
+                return Ok(response(http::StatusCode::NOT_FOUND, "text/plain", b"Scrub proxy not ready".to_vec()));
+            };
+            let index = Arc::new(index);
+            self.video_indexes.write().insert(entry.record.id.clone(), index.clone());
+            index
+        };
+        if start >= index.frame_count {
+            return Ok(response(http::StatusCode::BAD_REQUEST, "text/plain", b"Start is outside frame index".to_vec()));
+        }
+        let proxy = video_proxy::ready_proxy_path(&cache_root, &entry.record.id)
+            .ok_or_else(|| anyhow!("逐帧代理不存在"))?;
+        let bytes = video_proxy::packet_batch(&index, &proxy, start, count)?;
+        let mut result = response(http::StatusCode::OK, "application/octet-stream", bytes);
+        result.headers_mut().insert(http::header::CACHE_CONTROL, "no-store".parse()?);
+        Ok(result)
+    }
+
+    fn ranged_file_response(
+        &self,
+        request: &http::Request<Vec<u8>>,
+        source_path: &Path,
+        source_offset: u64,
+        length: u64,
+        mime: &str,
+        etag: &str,
+    ) -> Result<http::Response<Vec<u8>>> {
         let mut file = File::open(source_path)?;
         let range = request.headers().get(http::header::RANGE).and_then(|value| value.to_str().ok());
-        let (status, start, end) = match range {
+        let (mut status, start, mut end) = match range {
             Some(value) => match parse_range(value, length) {
                 Ok(range) => (http::StatusCode::PARTIAL_CONTENT, range.0, range.1),
                 Err(_) => {
-                    let mut result = response(http::StatusCode::RANGE_NOT_SATISFIABLE, &entry.record.mime_type, Vec::new());
+                    let mut result = response(http::StatusCode::RANGE_NOT_SATISFIABLE, mime, Vec::new());
                     result.headers_mut().insert(http::header::CONTENT_RANGE, format!("bytes */{length}").parse()?);
                     result.headers_mut().insert(http::header::ACCEPT_RANGES, "bytes".parse()?);
                     result.headers_mut().insert(http::header::CONTENT_LENGTH, "0".parse()?);
-                    immutable_headers(result.headers_mut(), &entry.record.hash);
+                    immutable_headers(result.headers_mut(), etag);
                     return Ok(result);
                 }
             },
             None => (http::StatusCode::OK, 0, length.saturating_sub(1)),
         };
+        let is_head = request.method() == http::Method::HEAD;
+        (status, end) = bounded_media_range(status, start, end, mime, range.is_some(), is_head, length);
         let body_length = if length == 0 { 0 } else { end - start + 1 };
         let mut body = Vec::new();
         if request.method() != http::Method::HEAD && body_length > 0 {
@@ -647,14 +1138,14 @@ impl AssetService {
             body.resize(body_length as usize, 0);
             file.read_exact(&mut body)?;
         }
-        let mut result = response(status, &entry.record.mime_type, body);
+        let mut result = response(status, mime, body);
         let headers = result.headers_mut();
         headers.insert(http::header::CONTENT_LENGTH, body_length.to_string().parse()?);
         headers.insert(http::header::ACCEPT_RANGES, "bytes".parse()?);
         if status == http::StatusCode::PARTIAL_CONTENT {
             headers.insert(http::header::CONTENT_RANGE, format!("bytes {start}-{end}/{length}").parse()?);
         }
-        immutable_headers(headers, &entry.record.hash);
+        immutable_headers(headers, etag);
         Ok(result)
     }
 
@@ -684,6 +1175,7 @@ impl AssetService {
             copy_directory_if_exists(&source.join("derived-cache"), &target.join("derived-cache"))?;
             copy_directory_if_exists(&source.join("image-cache"), &target.join("image-cache"))?;
             *self.cache_override.write() = parent.clone();
+            self.video_indexes.write().clear();
             self.persist_cache_override(parent.as_deref())?;
             for entry in self.registry.write().values_mut() {
                 entry.cache_path = target.join("asset-cache").join(entry.cache_path.file_name().unwrap_or_default());
@@ -696,6 +1188,8 @@ impl AssetService {
     }
 
     pub fn clear_regenerable_cache(&self) -> Result<CacheInfo> {
+        self.shutdown();
+        self.video_indexes.write().clear();
         let _ = fs::remove_dir_all(self.derived_cache_dir());
         let _ = fs::remove_dir_all(self.image_cache_dir());
         self.cache_info()
@@ -771,23 +1265,94 @@ fn parse_range(value: &str, length: u64) -> Result<(u64, u64)> {
     Ok((start, end))
 }
 
+fn bounded_media_range(
+    mut status: http::StatusCode,
+    start: u64,
+    end: u64,
+    mime: &str,
+    requested_range: bool,
+    is_head: bool,
+    length: u64,
+) -> (http::StatusCode, u64) {
+    if !is_video_mime(mime) || length == 0 || (is_head && !requested_range) { return (status, end); }
+    let capped_end = start.saturating_add(VIDEO_RANGE_CHUNK_BYTES - 1).min(end);
+    if capped_end < end || requested_range { status = http::StatusCode::PARTIAL_CONTENT; }
+    (status, capped_end)
+}
+
 fn query_u32(url: &Url, key: &str) -> Result<u32> {
     url.query_pairs().find(|(name, _)| name == key).ok_or_else(|| anyhow!("缺少参数 {key}"))?.1.parse().map_err(Into::into)
 }
 
-fn image_mime(path: &Path) -> Option<&'static str> {
+fn query_u64(url: &Url, key: &str) -> Result<u64> {
+    url.query_pairs().find(|(name, _)| name == key).ok_or_else(|| anyhow!("缺少参数 {key}"))?.1.parse().map_err(Into::into)
+}
+
+fn scrub_frame_query(url: &Url) -> Result<(u32, u32, u32, u32, u32, u64, u64)> {
+    let frame = query_u32(url, "frame")?;
+    let start = query_u32(url, "start")?;
+    let count = query_u32(url, "count")?;
+    let width = query_u32(url, "width")?;
+    let height = query_u32(url, "height")?;
+    let time_us = query_u64(url, "timeUs")?;
+    let generation = query_u64(url, "generation")?;
+    if count == 0 || count > 7 || frame < start || frame >= start.saturating_add(count) {
+        return Err(anyhow!("Scrub 帧批次范围无效"));
+    }
+    let bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .and_then(|frame_bytes| frame_bytes.checked_mul(u64::from(count)))
+        .ok_or_else(|| anyhow!("Scrub 帧尺寸溢出"))?;
+    if width < 2 || height < 2 || bytes > video_proxy::MAX_SOURCE_FRAME_BYTES {
+        return Err(anyhow!("Scrub 帧尺寸超出范围"));
+    }
+    Ok((frame, start, count, width, height, time_us, generation))
+}
+
+fn scrub_packet_query(url: &Url) -> Result<(u32, usize)> {
+    let start = query_u32(url, "start")?;
+    let count = usize::try_from(query_u32(url, "count")?)?;
+    if count == 0 || count > video_proxy::MAX_PACKET_BATCH_FRAMES {
+        return Err(anyhow!("packet count 超出范围"));
+    }
+    Ok((start, count))
+}
+
+fn media_mime(path: &Path) -> Option<&'static str> {
     match path.extension()?.to_string_lossy().to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "webp" => Some("image/webp"),
         "bmp" => Some("image/bmp"),
         "gif" => Some("image/gif"),
+        "mp4" | "m4v" => Some("video/mp4"),
+        "webm" => Some("video/webm"),
+        "mov" => Some("video/quicktime"),
         _ => None,
     }
 }
 
+fn is_video_mime(mime: &str) -> bool {
+    mime.starts_with("video/")
+}
+
+fn is_video_asset(record: &AssetRecord) -> bool {
+    record.kind.as_deref() == Some("video") || is_video_mime(&record.mime_type)
+}
+
 fn extension_for_mime(mime: &str) -> &'static str {
-    match mime { "image/png" => ".png", "image/jpeg" => ".jpg", "image/webp" => ".webp", "image/bmp" => ".bmp", "image/gif" => ".gif", _ => ".bin" }
+    match mime {
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        "image/bmp" => ".bmp",
+        "image/gif" => ".gif",
+        "video/mp4" => ".mp4",
+        "video/webm" => ".webm",
+        "video/quicktime" => ".mov",
+        _ => ".bin",
+    }
 }
 
 fn install_cache_file(temporary: &Path, target: &Path, expected: u64) -> Result<()> {
@@ -886,3 +1451,78 @@ fn emit_derivative_ready_app(
 }
 
 pub type SharedAssets = Arc<AssetService>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caps_full_video_reads_to_four_megabytes() {
+        let (status, end) = bounded_media_range(
+            http::StatusCode::OK, 0, 20 * 1024 * 1024 - 1, "video/mp4", false, false, 20 * 1024 * 1024,
+        );
+        assert_eq!(status, http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(end + 1, VIDEO_RANGE_CHUNK_BYTES);
+    }
+
+    #[test]
+    fn preserves_seek_start_while_capping_requested_video_range() {
+        let start = 12 * 1024 * 1024;
+        let (status, end) = bounded_media_range(
+            http::StatusCode::PARTIAL_CONTENT, start, 30 * 1024 * 1024, "video/mp4", true, false, 40 * 1024 * 1024,
+        );
+        assert_eq!(status, http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(end - start + 1, VIDEO_RANGE_CHUNK_BYTES);
+    }
+
+    #[test]
+    fn leaves_image_responses_unbounded() {
+        let (status, end) = bounded_media_range(http::StatusCode::OK, 0, 9_999_999, "image/png", false, false, 10_000_000);
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(end, 9_999_999);
+    }
+
+    #[test]
+    fn video_head_without_range_reports_the_full_resource() {
+        let (status, end) = bounded_media_range(
+            http::StatusCode::OK, 0, 20 * 1024 * 1024 - 1, "video/mp4", false, true, 20 * 1024 * 1024,
+        );
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(end, 20 * 1024 * 1024 - 1);
+    }
+
+
+    #[test]
+    fn rejects_malicious_scrub_packet_ranges() {
+        let valid = Url::parse("http://localhost/asset/id?start=7&count=32").unwrap();
+        assert_eq!(scrub_packet_query(&valid).unwrap(), (7, 32));
+        for query in [
+            "start=-1&count=1",
+            "start=4294967296&count=1",
+            "start=0&count=0",
+            "start=0&count=33",
+            "start=0&count=999999999999999999999",
+        ] {
+            let url = Url::parse(&format!("http://localhost/asset/id?{query}")).unwrap();
+            assert!(scrub_packet_query(&url).is_err(), "accepted {query}");
+        }
+    }
+
+    #[test]
+    fn validates_source_scrub_frame_requests() {
+        let valid = Url::parse(
+            "http://localhost/asset/id?frame=7&start=4&count=7&width=320&height=180&timeUs=133333&generation=42",
+        ).unwrap();
+        assert_eq!(scrub_frame_query(&valid).unwrap(), (7, 4, 7, 320, 180, 133_333, 42));
+        for query in [
+            "frame=0&start=0&count=1&width=0&height=180&timeUs=0&generation=1",
+            "frame=0&start=0&count=7&width=999999&height=999999&timeUs=0&generation=1",
+            "frame=-1&start=0&count=1&width=320&height=180&timeUs=0&generation=1",
+            "frame=0&start=0&count=1&width=320&height=180&timeUs=-1&generation=1",
+            "frame=7&start=0&count=7&width=320&height=180&timeUs=0&generation=1",
+        ] {
+            let url = Url::parse(&format!("http://localhost/asset/id?{query}")).unwrap();
+            assert!(scrub_frame_query(&url).is_err(), "accepted {query}");
+        }
+    }
+}

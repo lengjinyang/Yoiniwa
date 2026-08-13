@@ -4,6 +4,7 @@ import { performanceMonitor } from './performanceMonitor';
 import { boundedCpuImageBudget } from './shared/imagePipelineConfig';
 import { calculateDesiredMip, rotatedScreenBounds } from './rendering/textureSelection';
 import { assetResourceUrl, isAssetResourceUrl } from './assetResourceUrl';
+import { displayAssetId } from './media';
 
 export type ImageVariant = 'thumb128' | 'thumb256' | 'thumb512' | 'thumb768' | 'thumb1024' | 'original';
 
@@ -99,14 +100,21 @@ export function imageVariantCandidates(hasDataUrl: boolean, variant: ImageVarian
 }
 
 export function imageSource(
-  item: Pick<ImageItem, 'assetId' | 'dataUrl'>,
+  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'posterAssetId' | 'mediaKind'>,
   variant: ImageVariant = 'original',
   revision = 0,
 ) {
   if (item.dataUrl) return item.dataUrl;
+  const assetId = displayAssetId(item) ?? '';
+  if (item.mediaKind === 'video' && !item.posterAssetId) {
+    const edge = variant === 'original' ? 2048 : Number(variant.replace('thumb', '')) || 512;
+    const query = new URLSearchParams({ variant: 'video-poster', edge: String(edge) });
+    if (revision > 0) query.set('v', String(revision));
+    return assetResourceUrl(assetId, query);
+  }
   const query = new URLSearchParams({ variant });
   if (revision > 0) query.set('v', String(revision));
-  return assetResourceUrl(item.assetId ?? '', query);
+  return assetResourceUrl(assetId, query);
 }
 
 function useSettledVariant(variant: ImageVariant) {
@@ -277,7 +285,7 @@ function preloadImageSource(src: string) {
 }
 
 export async function preloadImagePreview(
-  item: Pick<ImageItem, 'assetId' | 'dataUrl'>,
+  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'posterAssetId' | 'mediaKind'>,
   revision = 0,
   _maximumEdge = 128,
 ) {
@@ -289,21 +297,22 @@ export async function preloadImagePreview(
 }
 
 export function useImageResource(
-  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'width' | 'height'>,
+  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'posterAssetId' | 'mediaKind' | 'width' | 'height'>,
   viewportScale: number,
   enabled = true,
   maximumVariant: ImageVariant = 'original',
   exactVariant?: ImageVariant,
 ) {
+  const displayId = displayAssetId(item);
   const targetVariant = cappedImageVariant(exactVariant ?? chooseImageVariant(item, viewportScale), maximumVariant);
   const settledVariant = useSettledVariant(targetVariant);
   // Upgrades keep the previous decoded image visible until the new resource is
   // ready; downgrades are delayed to avoid churn around an LOD boundary.
   const variant = exactVariant ? targetVariant : cappedImageVariant(settledVariant, maximumVariant);
-  const targetRevision = useThumbnailRevision(item.assetId, variant);
-  const previewRevision = useThumbnailRevision(item.assetId, 'thumb128');
-  const src = useMemo(() => imageSource(item, variant, targetRevision), [item.assetId, item.dataUrl, targetRevision, variant]);
-  const assetKey = item.dataUrl || item.assetId || '';
+  const targetRevision = useThumbnailRevision(displayId, variant);
+  const previewRevision = useThumbnailRevision(displayId, 'thumb128');
+  const src = useMemo(() => imageSource(item, variant, targetRevision), [displayId, item.dataUrl, item.mediaKind, item.posterAssetId, targetRevision, variant]);
+  const assetKey = item.dataUrl || displayId || '';
   const [resource, setResource] = useState<{ assetKey: string; rank: number; image: HTMLImageElement } | undefined>(() => {
     const targetImage = readyCachedImage(src);
     if (targetImage) return { assetKey, rank: VARIANT_RANK[variant], image: targetImage };
@@ -313,15 +322,15 @@ export function useImageResource(
   });
   const [originalFallbackAssetKey, setOriginalFallbackAssetKey] = useState<string>();
   const reportResourceError = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('refcanvas-resource-error', { detail: item.assetId ?? 'unknown' }));
-  }, [item.assetId]);
+    window.dispatchEvent(new CustomEvent('refcanvas-resource-error', { detail: displayId ?? item.assetId ?? 'unknown' }));
+  }, [displayId, item.assetId]);
 
   useEffect(() => {
-    if (!enabled || originalFallbackAssetKey !== assetKey || !item.assetId || item.dataUrl) return undefined;
+    if (!enabled || originalFallbackAssetKey !== assetKey || !displayId || item.dataUrl || item.mediaKind === 'video') return undefined;
     let canceled = false;
     let release: (() => void) | undefined;
     const timer = window.setTimeout(() => {
-      release = retainImage(imageSource({ assetId: item.assetId, dataUrl: item.dataUrl }, 'original'), (nextImage) => {
+      release = retainImage(imageSource({ assetId: displayId, dataUrl: item.dataUrl }, 'original'), (nextImage) => {
         if (canceled) return;
         setResource((current) => current?.assetKey === assetKey && current.rank > VARIANT_RANK.original
           ? current
@@ -333,7 +342,7 @@ export function useImageResource(
       window.clearTimeout(timer);
       release?.();
     };
-  }, [assetKey, enabled, item.assetId, item.dataUrl, originalFallbackAssetKey, reportResourceError]);
+  }, [assetKey, displayId, enabled, item.dataUrl, item.mediaKind, originalFallbackAssetKey, reportResourceError]);
 
   useEffect(() => {
     if (!enabled) {
@@ -355,7 +364,7 @@ export function useImageResource(
     const fail = () => {
       failed += 1;
       if (failed < uniqueCandidates.length || canceled) return;
-      if (exactVariant === 'thumb128' && item.assetId && !item.dataUrl) {
+      if (exactVariant === 'thumb128' && displayId && !item.dataUrl) {
         // Some valid WebP/GIF files are decoded by Chromium but not by the
         // native image pipeline. Decode the original once in the
         // renderer and cache only a bounded preview so the object cannot remain
@@ -372,7 +381,7 @@ export function useImageResource(
       // plane. Do not decode the original or duplicate the 128px preview under
       // the detail command; thumbnail-ready will retry this exact URL.
       if (exactVariant && exactVariant !== 'original') return;
-      if (variant !== 'original' && item.assetId && !item.dataUrl) {
+      if (variant !== 'original' && displayId && !item.dataUrl && item.mediaKind !== 'video') {
         // Cold derivatives fail quickly while the worker creates them. Give
         // thumbnail-ready a short window before decoding originals as a
         // fallback, otherwise a batch import can decode every full source.
@@ -387,6 +396,6 @@ export function useImageResource(
       canceled = true;
       releases.forEach((release) => release());
     };
-  }, [assetKey, enabled, exactVariant, item, previewRevision, reportResourceError, src, targetRevision, variant]);
+  }, [assetKey, displayId, enabled, exactVariant, item, previewRevision, reportResourceError, src, targetRevision, variant]);
   return resource?.assetKey === assetKey ? resource.image : undefined;
 }

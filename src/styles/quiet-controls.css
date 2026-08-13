@@ -68,6 +68,20 @@ input[type="range"] { height: 4px; border: 0; border-radius: 2px; accent-color: 
 input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 .check-row { min-height: 28px; gap: 8px; color: var(--text-secondary) !important; }
 
+.video-scrub-speed {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.video-scrub-speed-track {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.video-scrub-speed-track input { width: 100%; margin: 0; }
+
 .color-control-trigger {
   min-height: 32px;
   padding: 4px 7px !important;

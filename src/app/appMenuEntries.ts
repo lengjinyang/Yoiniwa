@@ -4,6 +4,7 @@ import type { ImageGroup, ImageItem, RecentScene, Scene, WindowState } from '../
 import { shortcutDisplayName, type ShortcutPreferences } from '../keyboardShortcuts';
 import { imageGrayscaleContrast, setImageGrayscaleContrast } from '../imageAdjustments';
 import { appCommand, type AppCommandRegistry } from './AppCommand';
+import { isVideoItem } from '../media';
 
 interface BuildAppMenuEntriesOptions {
   scene: Scene;
@@ -128,6 +129,8 @@ export function buildAppMenuEntries({
   const createGroupCommand = appCommand(commands, 'group.create');
   const grayscale = Boolean(selection.primary?.grayscale);
   const grayscaleContrast = selection.primary ? imageGrayscaleContrast(selection.primary) : 1;
+  const primaryIsVideo = selection.primary ? isVideoItem(selection.primary, scene.assets) : false;
+  const selectedVideos = selection.selectedItems.filter((item) => isVideoItem(item, scene.assets));
 
   return [
     { type: 'item', label: `${scene.name}${dirty ? '  • 未保存' : ''}`, disabled: true },
@@ -193,15 +196,34 @@ export function buildAppMenuEntries({
         { type: 'separator' },
         { type: 'item', label: '移到顶层', shortcut: displayShortcut('moveFront'), action: () => images.moveLayer(true) },
         { type: 'item', label: '移到底层', shortcut: displayShortcut('moveBack'), action: () => images.moveLayer(false) },
-        { type: 'item', label: '恢复裁剪区域', shortcut: displayShortcut('restoreCrop'), action: images.restoreFull },
-        { type: 'item', label: grayscale ? '恢复彩色' : '灰度去色',
+        { type: 'item', label: '恢复裁剪区域', shortcut: displayShortcut('restoreCrop'), action: images.restoreFull, disabled: primaryIsVideo },
+        { type: 'item', label: grayscale ? '恢复彩色' : '灰度去色', disabled: primaryIsVideo,
           action: () => images.mutate((item) => { item.grayscale = !item.grayscale; }) },
-        ...(grayscale ? [{
+        ...(grayscale && !primaryIsVideo ? [{
           type: 'range' as const, label: '灰度对比度', min: 0, max: 200, step: 5, value: grayscaleContrast * 100,
           onInteractionStart: images.beginAdjustment,
           onChange: (contrast: number) => images.preview((item) => setImageGrayscaleContrast(item, contrast / 100)),
           onInteractionEnd: images.commitAdjustment,
         }] : []),
+        ...(selectedVideos.length ? [
+          { type: 'separator' as const },
+          {
+            type: 'item' as const,
+            label: selection.primary?.muted === false ? '静音' : '取消静音',
+            action: () => images.mutate((item) => {
+              if (!isVideoItem(item, scene.assets)) return;
+              item.muted = item.muted === false;
+            }),
+          },
+          {
+            type: 'item' as const,
+            label: selection.primary?.loop === false ? '循环播放' : '关闭循环',
+            action: () => images.mutate((item) => {
+              if (!isVideoItem(item, scene.assets)) return;
+              item.loop = item.loop === false;
+            }),
+          },
+        ] : []),
         { type: 'item', label: '打开源文件位置', disabled: !selection.primary?.sourcePath, action: images.showSource },
       ] : undefined,
     },

@@ -1043,7 +1043,8 @@ fn materialize_blob(source: &PackageAssetSource, target: &Path) -> Result<()> {
 }
 
 fn reachable_blob_ids(scene: &Scene, metadata: &PhotoshopProjectMetadata) -> HashSet<String> {
-    scene.items.iter().filter_map(|item| item.asset_id.clone())
+    scene.items.iter()
+        .flat_map(|item| [item.asset_id.clone(), item.poster_asset_id.clone()].into_iter().flatten())
         .chain(metadata.versions.iter().flat_map(|version| [Some(version.preview_asset_id.clone()), Some(version.blob_id.clone().unwrap_or_else(|| version.sha256.clone()))].into_iter().flatten()))
         .collect()
 }
@@ -1104,7 +1105,19 @@ fn install_project_file(temporary: &Path, target: &Path, preserve_legacy: bool) 
 }
 
 fn extension_eq(path: &Path, extension: &str) -> bool { path.extension().and_then(|value| value.to_str()).is_some_and(|value| value.eq_ignore_ascii_case(extension)) }
-fn extension_for_mime(mime: &str) -> &'static str { match mime { "image/png" => ".png", "image/jpeg" => ".jpg", "image/webp" => ".webp", "image/bmp" => ".bmp", "image/gif" => ".gif", _ => ".bin" } }
+fn extension_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        "image/bmp" => ".bmp",
+        "image/gif" => ".gif",
+        "video/mp4" => ".mp4",
+        "video/webm" => ".webm",
+        "video/quicktime" => ".mov",
+        _ => ".bin",
+    }
+}
 fn valid_png(bytes: &[u8]) -> bool { bytes.len() <= MAX_PREVIEW_BYTES && bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) }
 fn validate_hash(value: &str) -> Result<()> { if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) { Ok(()) } else { Err(anyhow!("SHA-256 标识无效")) } }
 fn hex_bytes(value: &str) -> Result<[u8; 32]> { validate_hash(value)?; let mut bytes = [0_u8; 32]; for index in 0..32 { bytes[index] = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)?; } Ok(bytes) }

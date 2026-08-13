@@ -45,6 +45,12 @@ pub struct ImageJobStats {
     pub concurrency: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageJobStatus {
+    pub running: bool,
+    pub queue_position: Option<usize>,
+}
+
 pub struct ImageJobQueue {
     state: Arc<Mutex<QueueState>>,
     concurrency: usize,
@@ -184,6 +190,22 @@ impl ImageJobQueue {
         }
     }
 
+    pub fn job_status(&self, key: &str) -> Option<ImageJobStatus> {
+        let state = self.state.lock();
+        let meta = state.inflight.get(key)?;
+        if meta.running {
+            return Some(ImageJobStatus { running: true, queue_position: None });
+        }
+        let mut pending = state.pending.iter()
+            .filter(|job| !job.canceled.load(Ordering::SeqCst))
+            .collect::<Vec<_>>();
+        pending.sort_by(|left, right| {
+            right.priority.cmp(&left.priority).then(left.sequence.cmp(&right.sequence))
+        });
+        let position = pending.iter().position(|job| job.key == key).map(|index| index + 1);
+        Some(ImageJobStatus { running: false, queue_position: position })
+    }
+
     pub fn completed(&self) -> u64 { self.completed.load(Ordering::Relaxed) }
 
     fn pump(self: &Arc<Self>) {
@@ -239,5 +261,80 @@ fn notify_waiters(waiters: &[Waiter], result: &Result<Vec<u8>, String>) {
             Err(error) => Err(error.clone()),
         };
         let _ = waiter.send(payload);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{sync::atomic::AtomicUsize, time::Duration};
+
+    #[test]
+    fn single_worker_queue_never_runs_two_proxy_jobs_at_once() {
+        let queue = ImageJobQueue::new(1);
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let make_task = || {
+            let active = active.clone();
+            let peak = peak.clone();
+            move |_canceled: Arc<AtomicBool>| {
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(20));
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok(Vec::new())
+            }
+        };
+        let first = queue.enqueue("video-proxy:first".into(), 1, make_task());
+        let second = queue.enqueue("video-proxy:second".into(), 2, make_task());
+        assert!(first.recv_timeout(Duration::from_secs(2)).expect("first").is_ok());
+        assert!(second.recv_timeout(Duration::from_secs(2)).expect("second").is_ok());
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn shared_proxy_asset_uses_one_single_flight_job() {
+        let queue = ImageJobQueue::new(1);
+        let executions = Arc::new(AtomicUsize::new(0));
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let first_executions = executions.clone();
+        let first = queue.enqueue("video-proxy:shared".into(), 1, move |_canceled| {
+            first_executions.fetch_add(1, Ordering::SeqCst);
+            let _ = started_sender.send(());
+            let _ = release_receiver.recv_timeout(Duration::from_secs(2));
+            Ok(vec![7])
+        });
+        started_receiver.recv_timeout(Duration::from_secs(2)).expect("started");
+        let joined_executions = executions.clone();
+        let joined = queue.enqueue("video-proxy:shared".into(), 9, move |_canceled| {
+            joined_executions.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![9])
+        });
+        let _ = release_sender.send(());
+        assert_eq!(first.recv_timeout(Duration::from_secs(2)).expect("first"), Ok(vec![7]));
+        assert_eq!(joined.recv_timeout(Duration::from_secs(2)).expect("joined"), Ok(vec![7]));
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cancel_removes_a_queued_proxy_job() {
+        let queue = ImageJobQueue::new(1);
+        let (release_sender, release_receiver) = mpsc::channel();
+        let active = queue.enqueue("video-proxy:active".into(), 1, move |_canceled| {
+            let _ = release_receiver.recv_timeout(Duration::from_secs(2));
+            Ok(Vec::new())
+        });
+        let executions = Arc::new(AtomicUsize::new(0));
+        let queued_executions = executions.clone();
+        let queued = queue.enqueue("video-proxy:queued".into(), 1, move |_canceled| {
+            queued_executions.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        });
+        assert_eq!(queue.cancel(|key| key == "video-proxy:queued"), 1);
+        assert!(queued.recv_timeout(Duration::from_secs(2)).expect("queued result").is_err());
+        let _ = release_sender.send(());
+        assert!(active.recv_timeout(Duration::from_secs(2)).expect("active result").is_ok());
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
     }
 }

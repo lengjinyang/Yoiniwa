@@ -25,13 +25,16 @@
         "visible": false,
         "resizable": true,
         "focus": false,
-        "dragDropEnabled": true,
+        "dragDropEnabled": false,
         "backgroundColor": "#00000000"
       }
     ],
     "security": {
       "csp": null,
-      "assetProtocol": { "enable": true, "scope": ["$APPDATA/Yoiniwa/**", "$TEMP/**"] }
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/Yoiniwa/**", "$APPDATA/**/RefCanvas/**", "$TEMP/**", "$RESOURCE/**"]
+      }
     }
   },
   "bundle": {

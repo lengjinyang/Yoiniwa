@@ -11,6 +11,9 @@ mod photoshop;
 mod project;
 mod state;
 mod types;
+mod video_meta;
+mod video_poster;
+mod video_proxy;
 
 pub fn run() {
     app::run();

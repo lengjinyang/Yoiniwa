@@ -27,7 +27,11 @@ fn command_result<T>(value: Result<T>) -> CommandResult<T> { value.map_err(|erro
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn images_import(app: AppHandle, state: State<'_, AppState>, request_id: Option<String>) -> CommandResult<Vec<ImportedImage>> {
-    let Some(paths) = rfd::AsyncFileDialog::new().add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp", "gif"]).pick_files().await else { return Ok(Vec::new()); };
+    let Some(paths) = rfd::AsyncFileDialog::new()
+        .add_filter("图片与视频", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "webm", "mov", "m4v"])
+        .add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp", "gif"])
+        .add_filter("视频", &["mp4", "webm", "mov", "m4v"])
+        .pick_files().await else { return Ok(Vec::new()); };
     let assets = state.assets.clone();
     let app_handle = app.clone();
     let raw_paths = paths.into_iter().map(|file| file.path().to_path_buf()).collect::<Vec<_>>();
@@ -47,11 +51,39 @@ pub async fn images_import(app: AppHandle, state: State<'_, AppState>, request_i
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn images_register_paths(state: State<'_, AppState>, paths: Vec<String>, source_type: String) -> CommandResult<Vec<ImportedImage>> {
+pub async fn images_register_paths(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+    source_type: String,
+    request_id: Option<String>,
+) -> CommandResult<Vec<ImportedImage>> {
     if paths.len() > 2000 { return Err("一次拖入的图片数量无效".into()); }
     let assets = state.assets.clone();
-    tauri::async_runtime::spawn_blocking(move || Ok(paths.into_iter().filter_map(|path| assets.register_path(Path::new(&path), &source_type).ok()).collect()))
-        .await.map_err(|error| error.to_string())?.map_err(|error: anyhow::Error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut imported = Vec::new();
+        let mut last_error: Option<String> = None;
+        let total = paths.len();
+        for (index, path) in paths.into_iter().enumerate() {
+            match assets.register_path(Path::new(&path), &source_type) {
+                Ok(image) => imported.push(image),
+                Err(error) => last_error = Some(format!("{path}: {error}")),
+            }
+            if let Some(request_id) = request_id.as_deref() {
+                let _ = tauri::Emitter::emit(&app, "images:prewarm-progress", serde_json::json!({
+                    "requestId": request_id, "completed": index + 1, "total": total,
+                    "stage": "metadata", "fraction": if total == 0 { 1.0 } else { (index + 1) as f64 / total as f64 },
+                }));
+            }
+        }
+        if imported.is_empty() {
+            return Err(anyhow!(last_error.unwrap_or_else(|| "没有可导入的媒体".into())));
+        }
+        Ok(imported)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error: anyhow::Error| error.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -64,6 +96,38 @@ pub async fn images_register_urls(state: State<'_, AppState>, urls: Vec<String>)
 
 #[tauri::command]
 pub fn images_register_clipboard(state: State<'_, AppState>) -> CommandResult<Vec<ImportedImage>> { command_result(state.assets.register_clipboard()) }
+
+#[tauri::command]
+pub fn images_register_bytes(state: State<'_, AppState>, request: Request<'_>) -> CommandResult<ImportedImage> {
+    let data = raw_body(&request)?;
+    let name = decoded_header(&request, "x-yoiniwa-name")?;
+    let source_type = decoded_header(&request, "x-yoiniwa-source-type").unwrap_or_else(|_| "drop".into());
+    command_result(state.assets.register_bytes(name, data, None, &source_type))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn videos_ensure_playback(state: State<'_, AppState>, asset_id: String) -> CommandResult<Value> {
+    command_result(state.assets.ensure_video_playback(&asset_id))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn videos_ensure_scrub(state: State<'_, AppState>, asset_id: String) -> CommandResult<Value> {
+    command_result(state.assets.ensure_video_scrub(&asset_id))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn videos_cancel_playback(state: State<'_, AppState>, asset_id: String) -> CommandResult<()> {
+    state.assets.cancel_video_playback(&asset_id);
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn images_asset_path(state: State<'_, AppState>, asset_id: String) -> CommandResult<String> {
+    if asset_id.len() != 64 || !asset_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("资源标识无效".into());
+    }
+    command_result(state.assets.ensure_file(&asset_id).map(|path| path.to_string_lossy().into_owned()))
+}
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn images_start_native_drag(window: WebviewWindow, state: State<'_, AppState>, asset_ids: Vec<String>) -> CommandResult<()> {

@@ -1,8 +1,9 @@
 import type {
-  CacheInfo, ImageItem, ImagePipelinePerformanceStats, ImagePrewarmProgress, ImageThumbnailReady, ImportedImage,
+  CacheInfo, ImageDerivativeReady, ImageItem, ImagePipelinePerformanceStats, ImagePrewarmProgress, ImageThumbnailReady, ImportedImage,
   NativePointerInput, PhotoshopColorSyncResult, PhotoshopDocumentPreviewResult, PhotoshopDocumentResult, PhotoshopProjectMetadata, PhotoshopVersionRecord,
   PickedColor, ProjectCommitRequest, ProjectCommitResult, ProjectOpenResult, ProjectStorageStats, RecentScene, Scene,
   WindowState, PhotoshopDocumentInfoResult,
+  VideoPreparationProgress, VideoPreparationResult, VideoProxyFailed, VideoProxyReady,
 } from '../types.js';
 
 export interface IpcContract<Args extends unknown[], Result> {
@@ -12,9 +13,14 @@ export interface IpcContract<Args extends unknown[], Result> {
 
 export interface IpcContractMap {
   'images:import': IpcContract<[requestId?: string], ImportedImage[]>;
-  'images:register-paths': IpcContract<[paths: string[], sourceType: ImageItem['sourceType']], ImportedImage[]>;
+  'images:register-paths': IpcContract<[paths: string[], sourceType: ImageItem['sourceType'], requestId?: string], ImportedImage[]>;
   'images:register-urls': IpcContract<[urls: string[]], ImportedImage[]>;
   'images:register-clipboard': IpcContract<[], ImportedImage[]>;
+  'images:register-bytes': IpcContract<[name: string, data: ArrayBuffer, sourceType?: ImageItem['sourceType']], ImportedImage>;
+  'images:asset-path': IpcContract<[assetId: string], string>;
+  'videos:ensure-playback': IpcContract<[assetId: string], VideoPreparationResult>;
+  'videos:ensure-scrub': IpcContract<[assetId: string], VideoPreparationResult>;
+  'videos:cancel-playback': IpcContract<[assetId: string], void>;
   'images:prewarm': IpcContract<[ids: string[], requestId: string], { canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   'images:performance-stats': IpcContract<[], ImagePipelinePerformanceStats>;
   'images:sample-pixel': IpcContract<[assetId: string, x: number, y: number], { r: number; g: number; b: number; a: number }>;
@@ -74,6 +80,10 @@ export interface IpcContractMap {
 export interface IpcEventMap {
   'images:prewarm-progress': ImagePrewarmProgress;
   'images:thumbnail-ready': ImageThumbnailReady;
+  'images:derivative-ready': ImageDerivativeReady;
+  'videos:proxy-ready': VideoProxyReady;
+  'videos:proxy-failed': VideoProxyFailed;
+  'videos:preparation-progress': VideoPreparationProgress;
   'scene:external-open': string;
   'window:move-finished': void;
   'window:close-requested': void;
