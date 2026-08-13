@@ -297,7 +297,10 @@ export function AppOverlays({
         </button>
         <button title="最小化" onClick={() => api?.minimize()}><UiIcon name="minimize" /></button>
         <button title="最大化 / 还原" onClick={() => api?.toggleMaximize()}><UiIcon name="maximize" /></button>
-        <button className="close" title="关闭" onClick={() => api?.close()}><UiIcon name="close" /></button>
+        <button className="close" title="关闭" onClick={() => api?.close()}
+          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); }}>
+          <UiIcon name="close" />
+        </button>
       </div>
     </div>}
 

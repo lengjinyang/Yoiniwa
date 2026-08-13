@@ -150,7 +150,7 @@ impl NativeWindowManager {
             let _ = std::process::Command::new("powershell.exe")
                 .args([
                     "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-                    "Add-Type -Name YoiniwaMouseFix -Namespace Yoiniwa -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void mouse_event(uint f,uint x,uint y,uint d,System.UIntPtr e);'; [Yoiniwa.YoiniwaMouseFix]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero); [Yoiniwa.YoiniwaMouseFix]::mouse_event(0x0010,0,0,0,[UIntPtr]::Zero)",
+                    "Add-Type -Name YoiniwaMouseFix -Namespace Yoiniwa -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void mouse_event(uint f,uint x,uint y,uint d,System.UIntPtr e); [DllImport(\"user32.dll\")] public static extern short GetAsyncKeyState(int k);'; [Yoiniwa.YoiniwaMouseFix]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero); if (([Yoiniwa.YoiniwaMouseFix]::GetAsyncKeyState(2) -band 0x8000) -ne 0) { [Yoiniwa.YoiniwaMouseFix]::mouse_event(0x0010,0,0,0,[UIntPtr]::Zero) }",
                 ])
                 .creation_flags(CREATE_NO_WINDOW.0)
                 .status();

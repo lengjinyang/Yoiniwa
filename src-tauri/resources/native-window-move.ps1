@@ -493,12 +493,15 @@ public static class RefCanvasNativeWindowMove
 
     private static void ReleaseStuckButtons()
     {
-        // Process-exit recovery only. Normal collab disable never swallows buttons,
-        // and mouse_event here made exit feel like a stuck cursor hitch.
+        // Process-exit recovery only. Normal collab disable never swallows buttons.
+        // Always lift LEFT to unstick a swallowed LBUTTON after HWND teardown.
+        // RIGHTUP with no matching down is delivered to whatever is under the
+        // cursor after our window is gone and opens Explorer's context menu.
         try
         {
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
-            mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
+            if ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0)
+                mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, UIntPtr.Zero);
         }
         catch { }
     }
