@@ -20,6 +20,17 @@ import { groupHeaderScreenWidth, groupHeaderWorldY } from '../groups/GroupPresen
 import { VisualNotesController, type VisualNotesToolState } from '../interaction/VisualNotesController';
 import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../interactions';
 import { resolveImageChanges } from '../../domain/sceneCommands';
+import { isVideoItem } from '../../media';
+import type { VideoTransportState } from '../renderer/VideoRenderer';
+import { cachedVideoFrameCount } from '../../videoUrl';
+import {
+  VIDEO_SCRUB_IDLE_RESET_MS,
+  resolvedVideoDuration,
+  videoFrameScrubState,
+  videoScrubFrameAtDelta,
+  VIDEO_SCRUB_PIXELS_PER_FRAME,
+  clampVideoScrubPixelsPerFrame,
+} from '../renderer/VideoPerformancePolicy';
 
 export interface CanvasRuntimeOptions {
   background: string;
@@ -69,6 +80,7 @@ export class CanvasRuntime {
   private altPointerArmed = false;
   private windowLocked = false;
   private drawingCollaborationMode = false;
+  private videoScrubPixelsPerFrame = VIDEO_SCRUB_PIXELS_PER_FRAME;
   private visualNotesController?: VisualNotesController;
   private visualNotesState: VisualNotesToolState;
   private colorPickerHud?: HTMLDivElement;
@@ -133,6 +145,22 @@ export class CanvasRuntime {
       window.removeEventListener('keyup', updateAltFromKeyboard, true);
     });
     const input = new InputRouter(this.container, this.lifecycle);
+    const updateVideoHover = (event: PointerEvent) => {
+      const bounds = this.container.getBoundingClientRect();
+      const world = this.camera.screenToWorld({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+      const hit = topmostImageAtPoint(this.sceneStore?.images() ?? [], world);
+      const videoId = hit && isVideoItem(hit, this.sceneStore?.snapshot().assets) ? hit.id : undefined;
+      if (this.renderer.setHoveredVideo(videoId)) this.scheduleRender();
+    };
+    const clearVideoHover = () => {
+      if (this.renderer.setHoveredVideo()) this.scheduleRender();
+    };
+    const disposeVideoHover = input.onPointerMove(updateVideoHover);
+    this.container.addEventListener('pointerleave', clearVideoHover);
+    this.lifecycle.add(() => {
+      disposeVideoHover();
+      this.container.removeEventListener('pointerleave', clearVideoHover);
+    });
     const cameraController = new CameraController(this.container, input, this.camera, this.lifecycle, (committed) => {
       this.cameraChangedAt = performance.now();
       this.renderer.setGroupHeaderHover();
@@ -198,6 +226,91 @@ export class CanvasRuntime {
         || (this.drawingCollaborationMode && Boolean(event?.ctrlKey && event.button === 0))
         || (this.drawingCollaborationMode && Boolean((event as (PointerEvent & { spaceKey?: boolean }) | undefined)?.spaceKey && event?.button === 0)),
       documentInteractionBlocked: () => this.drawingCollaborationMode || this.windowLocked,
+      beginVideoScrub: (item) => {
+        if (this.drawingCollaborationMode || this.windowLocked) return undefined;
+        const scene = this.sceneStore?.snapshot();
+        if (!scene || !isVideoItem(item, scene.assets)) return undefined;
+        const timing = () => {
+          const transport = this.renderer.getVideoTransport(item.id);
+          const asset = item.assetId ? scene.assets[item.assetId] : undefined;
+          const duration = resolvedVideoDuration(
+            item.durationSec,
+            transport?.duration,
+            asset?.durationSec,
+          );
+          const state = videoFrameScrubState(
+            transport?.currentTime ?? 0,
+            duration,
+            transport?.fps ?? 30,
+            transport?.frameCount ?? (item.assetId ? cachedVideoFrameCount(item.assetId) : undefined),
+          );
+          return {
+            ...state,
+            currentFrame: Math.max(0, Math.min(state.maxFrame, transport?.displayedFrame ?? state.currentFrame)),
+          };
+        };
+        const startFrames = timing();
+        let lastFrame = startFrames.currentFrame;
+        let latestDelta = 0;
+        let started = false;
+        let frameRequest: number | undefined;
+        let idleTimer: number | undefined;
+        const start = () => {
+          if (!started) started = this.renderer.beginVideoScrub(item.id);
+          return started;
+        };
+        start();
+        const pixelsPerFrame = () => this.videoScrubPixelsPerFrame;
+        const display = (desiredFrame: number, final = false) => {
+          if (desiredFrame === lastFrame && !final) return;
+          if (!start()) return;
+          this.renderer.seekVideoFrame(item.id, desiredFrame, false, final);
+          lastFrame = desiredFrame;
+        };
+        const scheduleDisplay = () => {
+          if (frameRequest !== undefined) return;
+          frameRequest = requestAnimationFrame(() => {
+            frameRequest = undefined;
+            display(videoScrubFrameAtDelta(
+              startFrames.currentFrame,
+              latestDelta,
+              timing().maxFrame,
+              pixelsPerFrame(),
+            ));
+          });
+        };
+        const displayExact = (final = false) => {
+          display(videoScrubFrameAtDelta(
+            startFrames.currentFrame,
+            latestDelta,
+            timing().maxFrame,
+            pixelsPerFrame(),
+          ), final);
+        };
+        return {
+          update: (deltaX: number) => {
+            latestDelta = deltaX;
+            scheduleDisplay();
+            if (idleTimer !== undefined) window.clearTimeout(idleTimer);
+            idleTimer = window.setTimeout(() => {
+              idleTimer = undefined;
+              if (frameRequest !== undefined) {
+                cancelAnimationFrame(frameRequest);
+                frameRequest = undefined;
+              }
+              displayExact();
+            }, VIDEO_SCRUB_IDLE_RESET_MS);
+          },
+          end: () => {
+            if (frameRequest !== undefined) cancelAnimationFrame(frameRequest);
+            if (idleTimer !== undefined) window.clearTimeout(idleTimer);
+            frameRequest = undefined;
+            idleTimer = undefined;
+            displayExact(true);
+            if (started) this.renderer.endVideoScrub(item.id);
+          },
+        };
+      },
       externalDrag: (items) => this.options.onExternalImageDrag?.(items),
       cameraChanged: (committed) => {
         this.cameraChangedAt = performance.now(); this.scheduleRender();
@@ -302,7 +415,11 @@ export class CanvasRuntime {
         return;
       }
       const item = topmostImageAtPoint(this.sceneStore?.images() ?? [], point);
-      if (item) this.options.onFocusItem?.(item);
+      if (!item) return;
+      if (isVideoItem(item, this.sceneStore?.snapshot().assets) && this.renderer.toggleVideoPlayback(item.id)) {
+        return;
+      }
+      this.options.onFocusItem?.(item);
     });
     this.lifecycle.add(() => { disposeContext(); disposeDouble(); });
     const observer = new ResizeObserver(() => this.scheduleRender());
@@ -396,6 +513,54 @@ export class CanvasRuntime {
   }
   setBackground(background: string, opacity: number) { this.renderer.setBackground(background, opacity); }
   getViewport() { return this.camera.snapshot(); }
+
+  getVideoTransport(id: string) { return this.renderer.getVideoTransport(id); }
+  onVideoTransportChange(listener?: (state: VideoTransportState) => void) {
+    this.renderer.onVideoTransportChange(listener);
+  }
+  playVideo(id: string) { return this.renderer.playVideo(id); }
+  pauseVideo(id: string) { return this.renderer.pauseVideo(id); }
+  beginVideoScrub(id: string) {
+    if (this.drawingCollaborationMode || this.windowLocked) return false;
+    return this.renderer.beginVideoScrub(id);
+  }
+  endVideoScrub(id: string) { return this.renderer.endVideoScrub(id); }
+  toggleVideoPlayback(id: string) { return this.renderer.toggleVideoPlayback(id); }
+  seekVideo(id: string, time: number) { return this.renderer.seekVideo(id, time); }
+  seekVideoFrame(id: string, frameIndex: number, sequential = false, final = false) {
+    if (this.drawingCollaborationMode || this.windowLocked) return false;
+    return this.renderer.seekVideoFrame(id, frameIndex, sequential, final);
+  }
+  stepVideoFrames(id: string, frames: number) {
+    if (this.drawingCollaborationMode || this.windowLocked) return false;
+    return this.renderer.stepVideoFrames(id, frames);
+  }
+  setVideoRate(id: string, rate: number) { return this.renderer.setVideoRate(id, rate); }
+  setVideoMuted(id: string, muted: boolean) { return this.renderer.setVideoMuted(id, muted); }
+  resumeVideoWhenProxyReady(assetId: string) { this.renderer.resumeVideoWhenProxyReady(assetId); }
+  refreshVideoScrubIndex(assetId: string) { this.renderer.refreshVideoScrubIndex(assetId); }
+  failVideoProxy(assetId: string) { this.renderer.failVideoProxy(assetId); }
+  setVideoPreparation(assetId: string, stage: string, fraction: number) {
+    this.renderer.setVideoPreparation(assetId, stage, fraction);
+  }
+  setSelectedVideo(id?: string) { this.renderer.setSelectedVideo(id); }
+  setVideoScrubPixelsPerFrame(value: number) {
+    this.videoScrubPixelsPerFrame = clampVideoScrubPixelsPerFrame(value);
+  }
+
+  /** Screen-space rect of an item relative to the canvas container. */
+  itemScreenRect(id: string): { left: number; top: number; width: number; height: number } | undefined {
+    const item = this.sceneStore?.images().find((candidate) => candidate.id === id);
+    if (!item) return undefined;
+    const viewport = this.camera.snapshot();
+    const scale = Math.max(viewport.scale, 0.0001);
+    return {
+      left: viewport.x + item.x * scale,
+      top: viewport.y + item.y * scale,
+      width: item.width * scale,
+      height: item.height * scale,
+    };
+  }
 
   private isColorPickerPointer(event: PointerEvent) {
     this.updateColorPickerVisibleBounds(event);

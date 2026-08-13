@@ -1,5 +1,7 @@
 export type CropRect = { x: number; y: number; width: number; height: number };
 
+export type MediaKind = 'image' | 'video';
+
 export interface AssetRecord {
   id: string;
   /** Canonical identity. `id` remains serialized for version-2 scene compatibility. */
@@ -17,6 +19,9 @@ export interface AssetRecord {
   cacheVersion?: number;
   originalName: string;
   sourcePath?: string;
+  /** Defaults to image when omitted (legacy scenes). */
+  kind?: MediaKind;
+  durationSec?: number;
 }
 
 export interface ImageItem {
@@ -25,6 +30,13 @@ export interface ImageItem {
   sourcePath?: string;
   sourceType: 'file' | 'clipboard' | 'drop';
   assetId?: string;
+  /** Still-frame image asset used for board LOD, outline thumbs, and export. */
+  posterAssetId?: string;
+  /** Defaults to image when omitted (legacy scenes). */
+  mediaKind?: MediaKind;
+  durationSec?: number;
+  muted?: boolean;
+  loop?: boolean;
   /** Only used by small unit-test fixtures. Version 2 scene files never persist data URLs. */
   dataUrl?: string;
   naturalWidth: number;
@@ -161,6 +173,8 @@ export interface ImportedImage {
   asset: AssetRecord;
   dataUrl?: string;
   sourceType?: ImageItem['sourceType'];
+  /** Still poster registered alongside a video import. */
+  poster?: ImportedImage;
 }
 
 export interface PickedColor { r: number; g: number; b: number; a: number; hex: string }
@@ -282,6 +296,13 @@ export interface ImagePipelinePerformanceStats {
   thumbnailCount: number;
   thumbnailMs: number;
   thumbnailFailures: number;
+  jobsActive?: number;
+  jobsPending?: number;
+  jobsInflight?: number;
+  jobsConcurrency?: number;
+  jobsCompleted?: number;
+  proxyActive?: number;
+  proxyQueued?: number;
 }
 export interface ImagePrewarmProgress {
   requestId: string;
@@ -303,7 +324,7 @@ export interface ImageThumbnailReady {
 
 export interface ImageDerivativeReady {
   assetId: string;
-  kind: 'mip' | 'tile' | 'thumb';
+  kind: 'mip' | 'tile' | 'thumb' | 'video-poster';
   edge?: number;
   level?: number;
   column?: number;
@@ -329,11 +350,64 @@ export interface NativePointerInput {
   visibleBounds?: { left: number; top: number; right: number; bottom: number };
 }
 
+export interface VideoPreparationResult {
+  assetId: string;
+  path?: string | null;
+  fps: number;
+  frameCount?: number | null;
+  ready: boolean;
+  indexReady: boolean;
+  playbackReady: boolean;
+  scrubReady: boolean;
+  frameAccurate?: boolean;
+  vfr: boolean;
+  unsupportedReason?: string | null;
+  state: 'ready' | 'queued' | 'running';
+  queuePosition?: number | null;
+}
+
+export interface VideoPreparationProgress {
+  assetId: string;
+  stage: 'indexing' | 'index-ready' | 'transcoding' | 'validating' | 'ready' | 'failed';
+  fraction: number;
+  fps?: number;
+  frameCount?: number;
+  vfr?: boolean;
+  frameAccurate?: boolean;
+  message?: string;
+}
+
+export interface VideoProxyReady {
+  assetId: string;
+  path: string;
+  fps?: number;
+  frameCount?: number;
+  indexReady?: boolean;
+  playbackReady?: boolean;
+  scrubReady?: boolean;
+  vfr?: boolean;
+}
+
+export interface VideoProxyFailed {
+  assetId: string;
+  message: string;
+  indexReady?: boolean;
+  unsupportedReason?: string | null;
+}
+
 export interface RefCanvasAPI {
   importImages(requestId?: string): Promise<ImportedImage[]>;
-  registerImagePaths(paths: string[], sourceType: ImageItem['sourceType']): Promise<ImportedImage[]>;
+  registerImagePaths(paths: string[], sourceType: ImageItem['sourceType'], requestId?: string): Promise<ImportedImage[]>;
   registerImageUrls(urls: string[]): Promise<ImportedImage[]>;
   registerClipboardImage(): Promise<ImportedImage[]>;
+  registerImageBytes?(name: string, data: ArrayBuffer, sourceType?: ImageItem['sourceType']): Promise<ImportedImage>;
+  assetFilePath?(assetId: string): Promise<string>;
+  ensureVideoPlayback?(assetId: string): Promise<VideoPreparationResult>;
+  ensureVideoScrub?(assetId: string): Promise<VideoPreparationResult>;
+  cancelVideoPlayback?(assetId: string): void;
+  onVideoProxyReady?(callback: (payload: VideoProxyReady) => void): () => void;
+  onVideoProxyFailed?(callback: (payload: VideoProxyFailed) => void): () => void;
+  onVideoPreparationProgress?(callback: (payload: VideoPreparationProgress) => void): () => void;
   startImageDrag(assetIds: string[]): void;
   prewarmImages(ids: string[], requestId: string): Promise<{ canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   boostImageResource(key: string, priority: number): void;

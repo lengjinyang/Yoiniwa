@@ -1,4 +1,5 @@
 import type { ImagePipelinePerformanceStats } from './types';
+import type { VideoRuntimeStats } from './canvas/renderer/VideoRenderer';
 
 interface ImageRenderStats {
   drawCalls: number; instances: number; gpuBytes: number; textureUploads: number; textureCount: number;
@@ -38,6 +39,17 @@ export interface PerformanceSnapshot {
   frameUploadBytes: number;
   cacheHitRate: number;
   currentMip: string;
+  videoPlaybackIntents: number;
+  activeVideoDecoders: number;
+  suspendedVideos: number;
+  videoPosterTextures: number;
+  videoFrameUploads: number;
+  videoFrameUploadBytes: number;
+  droppedVideoFrames: number;
+  videoUploadFps: number;
+  droppedVideoFps: number;
+  proxyActive: number;
+  proxyQueued: number;
 }
 
 const initiallyEnabled = typeof window !== 'undefined'
@@ -71,6 +83,10 @@ class PerformanceMonitor {
   private runtimeStats = {
     cpuImageBytes: 0, preloadImages: 0, decodeQueueLength: 0, uploadQueueLength: 0,
     frameUploadBytes: 0, cacheHitRate: 0, currentMip: '-',
+  };
+  private videoStats: VideoRuntimeStats = {
+    playbackIntents: 0, activeDecoders: 0, suspendedVideos: 0, posterTextures: 0,
+    frameUploads: 0, frameUploadBytes: 0, droppedFrames: 0, uploadFps: 0, droppedFps: 0,
   };
   private rendererStats: ImageRenderStats = {
     drawCalls: 0, instances: 0, gpuBytes: 0, textureUploads: 0, textureCount: 0,
@@ -148,6 +164,9 @@ class PerformanceMonitor {
   setImageRuntimeStats(stats: Partial<typeof this.runtimeStats>) {
     if (this.active) this.runtimeStats = { ...this.runtimeStats, ...stats };
   }
+  setVideoRuntimeStats(stats: VideoRuntimeStats) {
+    if (this.active) this.videoStats = stats;
+  }
 
   snapshot(): PerformanceSnapshot {
     const now = performance.now();
@@ -186,6 +205,17 @@ class PerformanceMonitor {
       thumbnailMs: this.pipelineStats.thumbnailCount ? this.pipelineStats.thumbnailMs / this.pipelineStats.thumbnailCount : 0,
       thumbnailCount: this.pipelineStats.thumbnailCount,
       thumbnailFailures: this.pipelineStats.thumbnailFailures,
+      videoPlaybackIntents: this.videoStats.playbackIntents,
+      activeVideoDecoders: this.videoStats.activeDecoders,
+      suspendedVideos: this.videoStats.suspendedVideos,
+      videoPosterTextures: this.videoStats.posterTextures,
+      videoFrameUploads: this.videoStats.frameUploads,
+      videoFrameUploadBytes: this.videoStats.frameUploadBytes,
+      droppedVideoFrames: this.videoStats.droppedFrames,
+      videoUploadFps: this.videoStats.uploadFps,
+      droppedVideoFps: this.videoStats.droppedFps,
+      proxyActive: this.pipelineStats.proxyActive ?? 0,
+      proxyQueued: this.pipelineStats.proxyQueued ?? 0,
       ...this.runtimeStats,
     };
   }

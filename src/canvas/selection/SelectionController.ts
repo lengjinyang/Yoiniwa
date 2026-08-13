@@ -23,6 +23,10 @@ const ROTATE_CURSORS = {
 
 type ImageChange = Partial<ImageItem> & { id: string };
 export type LassoPoint = { x: number; y: number };
+interface VideoScrubSession {
+  update(deltaX: number, timeStamp: number): void;
+  end(): void;
+}
 type Drag =
   | { kind: 'move'; start: { x: number; y: number }; originals: ImageItem[] }
   | { kind: 'box'; start: { x: number; y: number }; additive: string[] }
@@ -30,7 +34,8 @@ type Drag =
   | { kind: 'transform'; start: { x: number; y: number }; originals: ImageItem[]; bounds: NonNullable<ReturnType<typeof unionImageBounds>>; handle: TransformHandle }
   | { kind: 'group-rotate'; start: { x: number; y: number }; originals: ImageItem[]; bounds: GroupFrameBounds }
   | { kind: 'group'; start: { x: number; y: number }; last: { x: number; y: number }; id: string }
-  | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds };
+  | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds }
+  | { kind: 'video-scrub'; startX: number; session: VideoScrubSession };
 
 interface SelectionControllerOptions {
   element: HTMLElement;
@@ -56,6 +61,7 @@ interface SelectionControllerOptions {
   hitGroupHandle(point: { x: number; y: number }): GroupResizeHandle | undefined;
   interactionBlocked(event?: PointerEvent): boolean;
   documentInteractionBlocked(): boolean;
+  beginVideoScrub(item: ImageItem): VideoScrubSession | undefined;
   externalDrag(items: ImageItem[]): (() => void) | undefined;
   cameraChanged(committed: boolean): void;
 }
@@ -216,6 +222,14 @@ export class SelectionController {
     }
     const hit = topmostImageAtPoint(scene.images(), world);
     if (hit) {
+      const scrubSession = isVideoScrubPointer(event) && this.selection.has(hit.id)
+        ? this.options.beginVideoScrub(hit)
+        : undefined;
+      if (scrubSession) {
+        this.drag = { kind: 'video-scrub', startX: event.clientX, session: scrubSession };
+        this.options.element.style.cursor = 'ew-resize';
+        return;
+      }
       this.selectedGroupId = undefined;
       this.options.groupSelectionChanged(undefined);
       if (event.shiftKey || event.ctrlKey || event.metaKey) this.selection.toggle(hit.id);
@@ -285,6 +299,12 @@ export class SelectionController {
     }
     if (!this.pointer.update(event)) return;
     if (this.tryStartExternalDrag(event)) return;
+    if (this.drag.kind === 'video-scrub') {
+      for (const sample of pointerSamples(event)) {
+        this.drag.session.update(sample.clientX - this.drag.startX, sample.timeStamp);
+      }
+      return;
+    }
     if (this.drag.kind === 'move' || this.drag.kind === 'transform' || this.drag.kind === 'group'
       || this.drag.kind === 'group-resize' || this.drag.kind === 'group-rotate') this.setTransformOverlaysHidden(true);
     if (this.drag.kind === 'box' || this.drag.kind === 'lasso') {
@@ -341,6 +361,7 @@ export class SelectionController {
 
   private pointerUp(event: PointerEvent) {
     if (!this.drag || !this.pointer.end(event)) return;
+    if (this.drag.kind === 'video-scrub') this.drag.session.end();
     this.setTransformOverlaysHidden(false);
     if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);
     if (this.drag.kind === 'box' || this.drag.kind === 'lasso') this.options.cameraChanged(true);
@@ -410,6 +431,16 @@ export class SelectionController {
     this.overlaysHidden = hidden;
     this.options.transformOverlaysHidden(hidden);
   }
+}
+
+function isVideoScrubPointer(event: PointerEvent) {
+  if (event.shiftKey || event.ctrlKey || event.metaKey) return false;
+  return event.pointerType === 'mouse' || event.pointerType === 'pen' || event.pointerType === '';
+}
+
+function pointerSamples(event: PointerEvent) {
+  const coalesced = event.getCoalescedEvents?.();
+  return coalesced?.length ? coalesced : [event];
 }
 
 function lassoBounds(points: LassoPoint[]) {

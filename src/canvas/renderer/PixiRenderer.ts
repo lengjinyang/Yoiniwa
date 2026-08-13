@@ -2,6 +2,7 @@ import { Application } from 'pixi.js';
 import type { PickedColor, Scene, Viewport, VisualNotesState } from '../../types';
 import { boundedDevicePixelRatio } from '../runtime/CanvasConfig';
 import { ImageRenderer } from './ImageRenderer';
+import { VideoRenderer, type VideoTransportState } from './VideoRenderer';
 import { RenderLayers } from './RenderLayers';
 import { SelectionOverlay, type TransformHandle } from '../selection/SelectionOverlay';
 import type { LassoPoint } from '../selection/SelectionController';
@@ -27,6 +28,7 @@ export class PixiRenderer {
   private readonly app = new Application();
   private layers?: RenderLayers;
   private images?: ImageRenderer;
+  private videos?: VideoRenderer;
   private selection?: SelectionOverlay;
   private groupResize?: GroupResizeOverlay;
   private textures?: TextureManager;
@@ -67,7 +69,14 @@ export class PixiRenderer {
       this.pendingColorReadback = undefined;
       this.advanceTextureGeneration();
     };
-    const restored = () => { if (this.pendingScene) this.images?.sync(this.pendingScene); this.requestRender(); };
+    const restored = () => {
+      if (this.pendingScene) {
+        this.images?.sync(this.pendingScene);
+        this.videos?.sync(this.pendingScene);
+      }
+      this.videos?.restoreTextures();
+      this.requestRender();
+    };
     this.app.canvas.addEventListener('webglcontextlost', lost);
     this.app.canvas.addEventListener('webglcontextrestored', restored);
     this.contextDisposer = () => {
@@ -79,6 +88,8 @@ export class PixiRenderer {
       deviceMemoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
     });
     this.images = new ImageRenderer(this.layers.images, this.textures, this.requestRender);
+    this.videos = new VideoRenderer(this.layers.images, this.textures, this.requestRender);
+    if (gl) this.videos.setMaxTextureSize(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
     this.groups = new GroupRenderer(this.layers.groups, this.layers.groupHeaderSurfaces, this.layers.groupHeaders, container);
     this.visualNotes = new VisualNotesRenderer(this.layers.marks);
     this.selection = new SelectionOverlay(this.layers.overlay);
@@ -89,6 +100,7 @@ export class PixiRenderer {
   setScene(scene: Scene) {
     this.pendingScene = scene;
     this.images?.sync(scene);
+    this.videos?.sync(scene);
     this.groups?.sync(scene.groups);
     this.visualNotes?.sync(scene.visualNotes, scene.items);
     this.syncGroupResizeOverlay();
@@ -99,6 +111,8 @@ export class PixiRenderer {
     this.requestRender();
   }
   setSelectedImageCount(count: number) { this.selectedImages = count; }
+  setSelectedVideo(id?: string) { this.videos?.setSelected(id); }
+  setHoveredVideo(id?: string) { return this.videos?.setHoveredVideo(id) ?? false; }
   setSelectedGroup(id?: string) {
     this.selectedGroupId = id;
     this.groups?.setSelected(id);
@@ -127,6 +141,37 @@ export class PixiRenderer {
     this.selection?.draw(items, scale, box, lasso, controlsVisible);
     this.requestRender();
   }
+  toggleVideoPlayback(id: string) {
+    const toggled = this.videos?.togglePlayback(id) ?? false;
+    if (toggled) this.requestRender();
+    return toggled;
+  }
+  isVideoPlaying(id: string) {
+    return this.videos?.isPlaying(id) ?? false;
+  }
+  getVideoTransport(id: string) {
+    return this.videos?.transportState(id);
+  }
+  onVideoTransportChange(listener?: (state: VideoTransportState) => void) {
+    this.videos?.onTransportChange(listener);
+  }
+  playVideo(id: string) { return this.videos?.play(id) ?? Promise.resolve(false); }
+  pauseVideo(id: string) { return this.videos?.pause(id) ?? false; }
+  beginVideoScrub(id: string) { return this.videos?.beginScrub(id) ?? false; }
+  endVideoScrub(id: string) { return this.videos?.endScrub(id) ?? false; }
+  seekVideo(id: string, time: number) { return this.videos?.seek(id, time) ?? false; }
+  seekVideoFrame(id: string, frameIndex: number, sequential = false, final = false) {
+    return this.videos?.seekFrame(id, frameIndex, sequential, final) ?? false;
+  }
+  stepVideoFrames(id: string, frames: number) { return this.videos?.stepFrames(id, frames) ?? false; }
+  setVideoRate(id: string, rate: number) { return this.videos?.setRate(id, rate) ?? false; }
+  setVideoMuted(id: string, muted: boolean) { return this.videos?.setMuted(id, muted) ?? false; }
+  resumeVideoWhenProxyReady(assetId: string) { this.videos?.resumeWhenProxyReady(assetId); }
+  refreshVideoScrubIndex(assetId: string) { this.videos?.refreshSourceIndex(assetId); }
+  failVideoProxy(assetId: string) { this.videos?.failProxy(assetId); }
+  setVideoPreparation(assetId: string, stage: string, fraction: number) {
+    this.videos?.setPreparation(assetId, stage, fraction);
+  }
   hitSelectionHandle(point: { x: number; y: number }): TransformHandle | undefined { return this.selection?.hit(point); }
   hitGroupResizeHandle(point: { x: number; y: number }): GroupResizeHandle | undefined { return this.groupResize?.hit(point); }
   render(viewport: Viewport, workset?: {
@@ -142,18 +187,41 @@ export class PixiRenderer {
     this.groups?.setViewport(viewport);
     this.syncGroupResizeOverlay();
     this.textures?.processFrame();
-    if (workset) this.images?.updateQuality({
-      viewport, visible: workset.visible, prefetch: workset.prefetch,
-      visibleBounds: workset.visibleBounds, prefetchBounds: workset.prefetchBounds,
-      cameraMoving: workset.cameraMoving, now: workset.now,
-      devicePixelRatio: boundedDevicePixelRatio(),
-    });
+    if (workset) {
+      this.images?.updateQuality({
+        viewport, visible: workset.visible, prefetch: workset.prefetch,
+        visibleBounds: workset.visibleBounds, prefetchBounds: workset.prefetchBounds,
+        cameraMoving: workset.cameraMoving, now: workset.now,
+        devicePixelRatio: boundedDevicePixelRatio(),
+      });
+      try {
+        this.videos?.updateQuality({
+          visible: workset.visible,
+          prefetch: workset.prefetch,
+          viewport,
+          cameraMoving: workset.cameraMoving,
+          now: workset.now,
+          devicePixelRatio: boundedDevicePixelRatio(),
+        });
+      } catch {
+        this.videos?.recoverAfterRenderError();
+      }
+    }
     this.images?.commitPendingSwaps();
     this.layers.world.position.set(viewport.x, viewport.y);
     this.layers.world.scale.set(viewport.scale);
     this.layers.overlay.position.set(viewport.x, viewport.y);
     this.layers.overlay.scale.set(viewport.scale);
-    this.app.render();
+    try {
+      this.app.render();
+      this.videos?.afterRender();
+    } catch {
+      this.videos?.recoverAfterRenderError();
+      try {
+        this.app.render();
+        this.videos?.afterRender();
+      } catch { /* keep the last good frame instead of freezing the canvas */ }
+    }
     const textureStats = this.textures?.stats();
     if (textureStats) performanceMonitor.setImageRuntimeStats({
       cpuImageBytes: textureStats.cpuBytes,
@@ -166,6 +234,8 @@ export class PixiRenderer {
       currentMip: this.images?.displayedMips() ?? '-',
     });
     if (textureStats) performanceMonitor.setCanvasGpuStats(textureStats.gpuTextures, textureStats.gpuBytes);
+    const videoStats = this.videos?.stats();
+    if (videoStats) performanceMonitor.setVideoRuntimeStats(videoStats);
     performanceMonitor.setSceneCounts(workset?.visible.size ?? 0, this.pendingScene?.items.length ?? 0, 'pixi-v8');
     performanceMonitor.recordCanvasRuntimeFrame(performance.now() - startedAt, 'pixi-v8');
     this.app.canvas.dataset.totalImages = String(this.pendingScene?.items.length ?? 0);
@@ -176,6 +246,8 @@ export class PixiRenderer {
       textureStats?.decodeQueueLength || textureStats?.uploadQueueLength ? 0 : workset?.visible.size ?? 0,
     );
     this.app.canvas.dataset.selectedImages = String(this.selectedImages);
+    this.app.canvas.dataset.videoPlaybackIntents = String(videoStats?.playbackIntents ?? 0);
+    this.app.canvas.dataset.videoActiveDecoders = String(videoStats?.activeDecoders ?? 0);
     this.app.canvas.dataset.renderBackend = 'pixi-webgl';
     this.app.canvas.dataset.viewportX = String(viewport.x);
     this.app.canvas.dataset.viewportY = String(viewport.y);
@@ -320,7 +392,11 @@ export class PixiRenderer {
     this.pendingColorReadback = undefined;
   }
 
-  advanceTextureGeneration() { this.images?.invalidateTextures(); this.textures?.advanceGeneration(); }
+  advanceTextureGeneration() {
+    this.images?.invalidateTextures();
+    this.videos?.invalidateTextures();
+    this.textures?.advanceGeneration();
+  }
 
   destroy() {
     const gl = (this.app.renderer as typeof this.app.renderer & { gl?: WebGL2RenderingContext }).gl;
@@ -328,6 +404,7 @@ export class PixiRenderer {
     this.contextDisposer?.();
     this.contextDisposer = undefined;
     this.images?.destroy();
+    this.videos?.destroy();
     this.selection?.destroy();
     this.groupResize?.destroy();
     this.textures?.destroy();
@@ -335,6 +412,7 @@ export class PixiRenderer {
     this.visualNotes?.destroy();
     this.app.destroy({ removeView: true }, { children: true, texture: false, textureSource: false });
     this.images = undefined;
+    this.videos = undefined;
     this.selection = undefined;
     this.groupResize = undefined;
     this.textures = undefined;

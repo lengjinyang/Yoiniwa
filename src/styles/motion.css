@@ -177,6 +177,11 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
   animation: motion-toolbar-in var(--duration-slow) var(--ease-emphasized) both;
 }
 
+.video-transport-bar {
+  transform-origin: bottom center;
+  animation: motion-content-in var(--duration-normal) var(--ease-standard) both;
+}
+
 .status-toast {
   transform-origin: bottom center;
   animation: motion-toast-in var(--duration-normal) var(--ease-emphasized) both;
@@ -245,6 +250,7 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .video-transport-status::before { animation: none; }
   html:focus-within { scroll-behavior: auto; }
   button:not(:disabled):active,
   button:not(:disabled):hover > .ui-icon,

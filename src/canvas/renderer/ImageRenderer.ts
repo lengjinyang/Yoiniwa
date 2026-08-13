@@ -1,5 +1,6 @@
 import { ColorMatrixFilter, Rectangle, Sprite, Texture, type Container } from 'pixi.js';
 import type { ImageItem, Scene, Viewport } from '../../types';
+import { isVideoItem } from '../../media';
 import { imageRequestKey, IMAGE_WHOLE_TEXTURE_EDGE } from '../../shared/imagePipelineConfig';
 import { resolveCanvasMipUrl } from '../assets/AssetPathResolver';
 import { desiredImageMip, mipWithHysteresis, requiredImageEdge, type MipSelectionState } from '../textures/MipSelector';
@@ -66,11 +67,11 @@ export class ImageRenderer {
   sync(scene: Scene) {
     this.scene = scene;
     this.items.clear();
-    scene.items.forEach((item) => this.items.set(item.id, item));
-    this.tiles.sync(scene);
+    scene.items.filter((item) => !isVideoItem(item, scene.assets)).forEach((item) => this.items.set(item.id, item));
+    this.tiles.sync({ ...scene, items: [...this.items.values()] });
     const retained = new Set(this.items.keys());
     this.objects.retain(retained);
-    scene.items.forEach((item) => this.syncItem(item));
+    this.items.forEach((item) => this.syncItem(item));
   }
 
   updateQuality(options: {
