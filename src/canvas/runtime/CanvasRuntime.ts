@@ -390,6 +390,7 @@ export class CanvasRuntime {
   setVideoRate(id: string, rate: number) { return this.renderer.setVideoRate(id, rate); }
   setVideoMuted(id: string, muted: boolean) { return this.renderer.setVideoMuted(id, muted); }
   resumeVideoWhenProxyReady(assetId: string) { this.renderer.resumeVideoWhenProxyReady(assetId); }
+  refreshVideoTiming(assetId: string) { this.renderer.refreshVideoTiming(assetId); }
   failVideoProxy(assetId: string) { this.renderer.failVideoProxy(assetId); }
   setVideoPreparation(assetId: string, stage: string, fraction: number) {
     this.renderer.setVideoPreparation(assetId, stage, fraction);

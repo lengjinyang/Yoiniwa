@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isVideoItem } from '../../domain/media';
 import type { Scene } from '../../types';
-import { isVideoProxyPending, rememberVideoProxy } from '../../runtime/videoUrl';
+import { isVideoProxyPending, rememberVideoProxy, rememberVideoTiming } from '../../runtime/videoUrl';
 import type { CanvasRuntime } from '../runtime/CanvasRuntime';
 import type { VideoTransportState } from '../renderer/VideoRenderer';
 import type { VideoPlaybackHost } from './videoPlaybackHost';
@@ -45,7 +45,12 @@ export function useVideoTransportSession({
     runtimeRef.current?.setSelectedVideo(selectedVideo.id);
     setTransport(runtimeRef.current?.getVideoTransport(selectedVideo.id));
     setPreparing(false);
-  }, [runtimeRef, selectedVideo]);
+    // Build the source frame index in the background. Videos the WebView can
+    // decode natively never reach ensurePlayback, so without this their fps
+    // stays at the 30 fps fallback and frame jogging lands on the wrong frame
+    // until playback has run long enough to measure the real rate.
+    if (selectedVideo.assetId) host?.prepareIndex?.(selectedVideo.assetId);
+  }, [host, runtimeRef, selectedVideo]);
 
   useEffect(() => {
     if (!host) return undefined;
@@ -64,8 +69,12 @@ export function useVideoTransportSession({
         ? `视频代理不可用：${unsupportedReason}；将尝试使用原片播放`
         : `视频代理准备失败，将尝试使用原片播放：${message}`);
     });
-    const disposeProgress = host.onPreparationProgress?.(({ assetId, stage, fraction }) => {
+    const disposeProgress = host.onPreparationProgress?.(({ assetId, stage, fraction, fps, frameCount }) => {
       runtimeRef.current?.setVideoPreparation(assetId, stage, fraction);
+      if (stage === 'index-ready' && fps) {
+        rememberVideoTiming(assetId, fps, frameCount);
+        runtimeRef.current?.refreshVideoTiming(assetId);
+      }
       if (assetId === selectedVideoAssetIdRef.current && stage === 'failed') setPreparing(false);
     });
     return () => {

@@ -95,6 +95,9 @@ export function installTauriRefCanvasApi() {
     assetFilePath: (assetId) => command('images_asset_path', { assetId }),
     ensureVideoPlayback: (assetId) => command('videos_ensure_playback', { assetId }),
     cancelVideoPlayback: (assetId) => { void command('videos_cancel_playback', { assetId }); },
+    // Best-effort background work: a missing or unreadable asset must not surface
+    // as an unhandled rejection every time the user selects a video.
+    prepareVideoIndex: (assetId) => { void command('videos_prepare_index', { assetId }).catch(() => undefined); },
     onVideoProxyReady: (callback) => onEvent('videos:proxy-ready', callback),
     onVideoProxyFailed: (callback) => onEvent('videos:proxy-failed', callback),
     onVideoPreparationProgress: (callback) => onEvent('videos:preparation-progress', callback),

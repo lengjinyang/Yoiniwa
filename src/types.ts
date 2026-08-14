@@ -433,6 +433,7 @@ export interface RefCanvasAPI {
   assetFilePath?(assetId: string): Promise<string>;
   ensureVideoPlayback?(assetId: string): Promise<VideoPreparationResult>;
   cancelVideoPlayback?(assetId: string): void;
+  prepareVideoIndex?(assetId: string): void;
   onVideoProxyReady?(callback: (payload: VideoProxyReady) => void): () => void;
   onVideoProxyFailed?(callback: (payload: VideoProxyFailed) => void): () => void;
   onVideoPreparationProgress?(callback: (payload: VideoPreparationProgress) => void): () => void;

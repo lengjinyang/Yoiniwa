@@ -116,6 +116,15 @@ pub fn videos_cancel_playback(state: State<'_, AppState>, asset_id: String) -> C
     Ok(())
 }
 
+/// Build the source frame index ahead of playback so frame-accurate jogging has
+/// real fps and frame counts instead of the 30 fps fallback. ensure_video_playback
+/// cancels this job when the user actually hits play, since the proxy task builds
+/// the same index as its first stage.
+#[tauri::command(rename_all = "camelCase")]
+pub fn videos_prepare_index(state: State<'_, AppState>, asset_id: String) -> CommandResult<()> {
+    command_result(state.assets.enqueue_video_index(&asset_id))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn images_asset_path(state: State<'_, AppState>, asset_id: String) -> CommandResult<String> {
     if asset_id.len() != 64 || !asset_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {

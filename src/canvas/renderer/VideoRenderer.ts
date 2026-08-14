@@ -309,12 +309,25 @@ export class VideoRenderer {
     return this.endSeekInteraction(id, 'canvas-jog');
   }
 
-  resumeWhenProxyReady(assetId: string) {
+  /**
+   * Adopt freshly indexed timing. Objects activated before the index landed hold
+   * the 30 fps fallback, and jogCanvasFrames prefers object.fps over the cache,
+   * so frame math stays wrong until this overwrites them.
+   */
+  refreshTiming(assetId: string) {
     this.objects.forEach((object, id) => {
       const item = this.items.get(id);
       if (!item || item.assetId !== assetId) return;
       object.fps = cachedVideoFps(assetId);
       object.frameCount = cachedVideoFrameCount(assetId);
+    });
+  }
+
+  resumeWhenProxyReady(assetId: string) {
+    this.refreshTiming(assetId);
+    this.objects.forEach((object, id) => {
+      const item = this.items.get(id);
+      if (!item || item.assetId !== assetId) return;
       if (object.phase !== 'proxy-pending') return;
       if (object.pendingSeekTime !== undefined) {
         this.scheduleInteractionSeek(object, item);

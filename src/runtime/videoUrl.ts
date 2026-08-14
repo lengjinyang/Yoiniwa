@@ -108,7 +108,7 @@ export function isOriginalVideoPlayback(assetId: string) {
   return playbackUrlCache.get(assetId)?.kind === 'original';
 }
 
-function rememberVideoTiming(assetId: string, fps = 30, frameCount?: number) {
+export function rememberVideoTiming(assetId: string, fps = 30, frameCount?: number) {
   if (Number.isFinite(fps) && fps > 0) fpsHints.set(assetId, fps);
   if (frameCount !== undefined && Number.isFinite(frameCount) && frameCount > 0) {
     frameCountHints.set(assetId, Math.round(frameCount));

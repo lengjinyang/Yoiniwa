@@ -60,7 +60,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             bridge::images_import, bridge::images_register_paths, bridge::images_register_urls,
             bridge::images_register_clipboard, bridge::images_register_bytes, bridge::images_asset_path,
-            bridge::videos_ensure_playback, bridge::videos_cancel_playback,
+            bridge::videos_ensure_playback, bridge::videos_cancel_playback, bridge::videos_prepare_index,
             bridge::images_start_native_drag, bridge::images_prewarm,
             bridge::images_cancel_prewarm, bridge::images_boost_resource, bridge::images_performance_stats,
             bridge::images_sample_pixel, bridge::project_open, bridge::project_commit, bridge::project_save_as,

@@ -173,6 +173,7 @@ export class PixiRenderer {
   setVideoRate(id: string, rate: number) { return this.videos?.setRate(id, rate) ?? false; }
   setVideoMuted(id: string, muted: boolean) { return this.videos?.setMuted(id, muted) ?? false; }
   resumeVideoWhenProxyReady(assetId: string) { this.videos?.resumeWhenProxyReady(assetId); }
+  refreshVideoTiming(assetId: string) { this.videos?.refreshTiming(assetId); }
   failVideoProxy(assetId: string) { this.videos?.failProxy(assetId); }
   setVideoPreparation(assetId: string, stage: string, fraction: number) {
     this.videos?.setPreparation(assetId, stage, fraction);

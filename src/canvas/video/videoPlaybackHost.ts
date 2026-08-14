@@ -9,6 +9,8 @@ import type {
 export interface VideoPlaybackHost {
   ensurePlayback(assetId: string): Promise<VideoPreparationResult>;
   cancelPlayback?(assetId: string): void;
+  /** Fire-and-forget background index so jogging gets real fps before first play. */
+  prepareIndex?(assetId: string): void;
   onProxyReady(callback: (payload: VideoProxyReady) => void): () => void;
   onProxyFailed?(callback: (payload: VideoProxyFailed) => void): () => void;
   onPreparationProgress?(callback: (payload: VideoPreparationProgress) => void): () => void;
@@ -19,6 +21,7 @@ export function videoPlaybackHostFromApi(api: Window['refCanvas'] | undefined): 
   return {
     ensurePlayback: (assetId) => api.ensureVideoPlayback!(assetId),
     cancelPlayback: api.cancelVideoPlayback?.bind(api),
+    prepareIndex: api.prepareVideoIndex?.bind(api),
     onProxyReady: api.onVideoProxyReady
       ? (callback) => api.onVideoProxyReady!(callback)
       : () => () => undefined,
