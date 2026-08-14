@@ -13,3 +13,4 @@ performance-results/
 .dev-runtime/*.jsonl
 .dev-runtime/*.log
 未命名画板.refcanvas
+tmp/
