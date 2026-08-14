@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Camera } from '../camera/Camera';
 import { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
 import { SceneStore } from '../scene/SceneStore';
-import { createScene } from '../../scene';
+import { createScene } from '../../domain/scene';
 import type { ImageItem, PickedColor } from '../../types';
 import { ColorPickerController } from './ColorPickerController';
 

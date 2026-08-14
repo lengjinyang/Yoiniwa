@@ -5,6 +5,8 @@ import { GpuTextureCache, type GpuTextureEntry } from './GpuTextureCache';
 import { GpuUploadQueue } from './GpuUploadQueue';
 import { StaleTextureRequestError, TextureRequestScheduler } from './TextureRequestScheduler';
 
+import type { ImageResourceBoost } from './imageResourceBoost';
+
 interface TextureUploadRenderer { texture: { initSource(source: Texture['source']): void } }
 interface TextureRequest { assetId: string; mip: number; tileX?: number; tileY?: number; url: string; priority: number }
 
@@ -14,6 +16,7 @@ export class TextureManager {
   readonly cpu: CpuImageCache;
   readonly gpu: GpuTextureCache;
   private readonly inFlight = new Map<string, Promise<GpuTextureEntry>>();
+  private readonly boostImageResource?: ImageResourceBoost;
   private destroyed = false;
   cacheHits = 0;
   cacheMisses = 0;
@@ -23,10 +26,11 @@ export class TextureManager {
   constructor(
     private readonly renderer: TextureUploadRenderer,
     private readonly requestFrame: () => void,
-    options: { deviceMemoryGb?: number; gpuBudgetBytes?: number } = {},
+    options: { deviceMemoryGb?: number; gpuBudgetBytes?: number; boostImageResource?: ImageResourceBoost } = {},
   ) {
     this.cpu = new CpuImageCache(options.deviceMemoryGb);
     this.gpu = new GpuTextureCache(options.gpuBudgetBytes);
+    this.boostImageResource = options.boostImageResource;
   }
 
   request(request: TextureRequest): Promise<GpuTextureEntry> {
@@ -34,7 +38,7 @@ export class TextureManager {
     const cached = this.gpu.pin(key);
     if (cached) { this.cacheHits += 1; return Promise.resolve(cached); }
     this.cacheMisses += 1;
-    if (typeof window !== 'undefined') window.refCanvas?.boostImageResource(request.url, request.priority);
+    this.boostImageResource?.(request.url, request.priority);
     let pending = this.inFlight.get(key);
     if (!pending) {
       const generation = this.requests.currentGeneration;
@@ -96,7 +100,7 @@ export class TextureManager {
   }
 
   private async fetchDerivative(request: TextureRequest) {
-    if (typeof window !== 'undefined') window.refCanvas?.boostImageResource(request.url, request.priority);
+    this.boostImageResource?.(request.url, request.priority);
     // Native protocol waits for mip/tile generation and returns 200 (Electron contract).
     const response = await fetch(request.url);
     if (this.destroyed) throw new StaleTextureRequestError('Texture manager is destroyed');

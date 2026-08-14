@@ -1,4 +1,4 @@
-import type { ImageItem } from '../../types';
+import type { BoardItem } from '../../types';
 import { IMAGE_TILE_SIZE, IMAGE_TILE_THRESHOLD_EDGE, IMAGE_WHOLE_TEXTURE_EDGE } from '../../shared/imagePipelineConfig';
 import type { SceneBounds } from '../scene/SceneNode';
 
@@ -6,12 +6,12 @@ export interface TileAddress { level: number; column: number; row: number }
 
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)); }
 
-export function shouldUseTiledImage(item: Pick<ImageItem, 'naturalWidth' | 'naturalHeight'>, requiredEdge: number) {
+export function shouldUseTiledImage(item: Pick<BoardItem, 'naturalWidth' | 'naturalHeight'>, requiredEdge: number) {
   return Math.max(item.naturalWidth, item.naturalHeight) > IMAGE_TILE_THRESHOLD_EDGE
     && requiredEdge > IMAGE_WHOLE_TEXTURE_EDGE;
 }
 
-function localPoint(item: ImageItem, point: { x: number; y: number }) {
+function localPoint(item: BoardItem, point: { x: number; y: number }) {
   const centerX = item.x + item.width / 2;
   const centerY = item.y + item.height / 2;
   const radians = -item.rotation * Math.PI / 180;
@@ -25,7 +25,7 @@ function localPoint(item: ImageItem, point: { x: number; y: number }) {
   };
 }
 
-export function selectVisibleTiles(item: ImageItem, worldBounds: SceneBounds, requiredEdge: number) {
+export function selectVisibleTiles(item: BoardItem, worldBounds: SceneBounds, requiredEdge: number) {
   const sourceEdge = Math.max(item.naturalWidth, item.naturalHeight);
   const maxLevel = Math.ceil(Math.log2(sourceEdge / IMAGE_TILE_SIZE));
   const level = clamp(Math.floor(Math.log2(sourceEdge / Math.max(1, requiredEdge))), 0, maxLevel);

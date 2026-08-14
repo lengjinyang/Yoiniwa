@@ -8,6 +8,8 @@ export interface DesiredMipParams {
   devicePixelRatio: number;
   availableMips?: readonly number[];
   oversample?: number;
+  /** When false, do not append the full source edge (canvas whole textures cap at 4096). */
+  allowSourceEdge?: boolean;
 }
 
 export function rotatedScreenBounds(
@@ -37,10 +39,11 @@ function requiredMipEdge(params: DesiredMipParams) {
 export function calculateDesiredMip(params: DesiredMipParams) {
   const sourceEdge = Math.max(1, params.sourceWidth, params.sourceHeight);
   const available = [...(params.availableMips ?? IMAGE_MIP_EDGES)]
-    .filter((edge) => edge <= sourceEdge)
-    .concat(sourceEdge)
+    .filter((edge) => edge <= sourceEdge);
+  if (params.allowSourceEdge !== false) available.push(sourceEdge);
+  const unique = available
     .filter((edge, index, values) => values.indexOf(edge) === index)
     .sort((left, right) => left - right);
   const required = requiredMipEdge(params);
-  return available.find((edge) => edge >= required) ?? available.at(-1) ?? sourceEdge;
+  return unique.find((edge) => edge >= required) ?? unique.at(-1) ?? sourceEdge;
 }

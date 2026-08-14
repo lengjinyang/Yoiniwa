@@ -1,4 +1,4 @@
-import type { ImageGroup, ImageItem } from '../../types';
+import type { ImageGroup, SceneItem, SceneItemPatch } from '../../types';
 import type { Camera } from '../camera/Camera';
 import type { InputRouter } from '../interaction/InputRouter';
 import { PointerState } from '../interaction/PointerState';
@@ -21,21 +21,24 @@ const ROTATE_CURSORS = {
   'south-west': rotationCursor(270),
 } as const;
 
-type ImageChange = Partial<ImageItem> & { id: string };
+type ImageChange = SceneItemPatch;
 export type LassoPoint = { x: number; y: number };
-interface VideoScrubSession {
-  update(deltaX: number, timeStamp: number): void;
+interface VideoJogSession {
+  update(frameOffset: number): void;
   end(): void;
 }
+const VIDEO_JOG_DRAG_THRESHOLD_PX = 4;
+const VIDEO_JOG_PIXELS_PER_FRAME = 8;
 type Drag =
-  | { kind: 'move'; start: { x: number; y: number }; originals: ImageItem[] }
+  | { kind: 'move'; start: { x: number; y: number }; originals: SceneItem[] }
   | { kind: 'box'; start: { x: number; y: number }; additive: string[] }
   | { kind: 'lasso'; additive: string[]; points: LassoPoint[] }
-  | { kind: 'transform'; start: { x: number; y: number }; originals: ImageItem[]; bounds: NonNullable<ReturnType<typeof unionImageBounds>>; handle: TransformHandle }
-  | { kind: 'group-rotate'; start: { x: number; y: number }; originals: ImageItem[]; bounds: GroupFrameBounds }
+  | { kind: 'transform'; start: { x: number; y: number }; originals: SceneItem[]; bounds: NonNullable<ReturnType<typeof unionImageBounds>>; handle: TransformHandle }
+  | { kind: 'group-rotate'; start: { x: number; y: number }; originals: SceneItem[]; bounds: GroupFrameBounds }
   | { kind: 'group'; start: { x: number; y: number }; last: { x: number; y: number }; id: string }
-  | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds }
-  | { kind: 'video-scrub'; startX: number; session: VideoScrubSession };
+  | { kind: 'video-jog-pending'; id: string; start: { x: number; y: number }; startClientX: number; startClientY: number; originals: SceneItem[] }
+  | { kind: 'video-jog'; lastClientX: number; remainderX: number; frameOffset: number; direction: number; session: VideoJogSession }
+  | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds };
 
 interface SelectionControllerOptions {
   element: HTMLElement;
@@ -56,13 +59,14 @@ interface SelectionControllerOptions {
   expandGroup(id: string): void;
   groupHeaderHoverChanged(id?: string, action?: ReturnType<typeof groupHeaderActionAtPoint>): void;
   transformOverlaysHidden(hidden: boolean): void;
-  drawOverlay(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[], controlsVisible?: boolean): void;
+  drawOverlay(items: SceneItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[], controlsVisible?: boolean): void;
   hitHandle(point: { x: number; y: number }): TransformHandle | undefined;
   hitGroupHandle(point: { x: number; y: number }): GroupResizeHandle | undefined;
   interactionBlocked(event?: PointerEvent): boolean;
   documentInteractionBlocked(): boolean;
-  beginVideoScrub(item: ImageItem): VideoScrubSession | undefined;
-  externalDrag(items: ImageItem[]): (() => void) | undefined;
+  canVideoJog(id: string): boolean;
+  beginVideoJog(id: string): VideoJogSession | undefined;
+  externalDrag(items: SceneItem[]): (() => void) | undefined;
   cameraChanged(committed: boolean): void;
 }
 
@@ -222,20 +226,20 @@ export class SelectionController {
     }
     const hit = topmostImageAtPoint(scene.images(), world);
     if (hit) {
-      const scrubSession = isVideoScrubPointer(event) && this.selection.has(hit.id)
-        ? this.options.beginVideoScrub(hit)
-        : undefined;
-      if (scrubSession) {
-        this.drag = { kind: 'video-scrub', startX: event.clientX, session: scrubSession };
-        this.options.element.style.cursor = 'ew-resize';
-        return;
-      }
       this.selectedGroupId = undefined;
       this.options.groupSelectionChanged(undefined);
       if (event.shiftKey || event.ctrlKey || event.metaKey) this.selection.toggle(hit.id);
       else if (!this.selection.has(hit.id)) this.selection.replace([hit.id]);
       this.emitSelection();
       const movable = scene.images().filter((item) => this.selection.has(item.id) && !item.locked);
+      if (!event.shiftKey && !event.ctrlKey && !event.metaKey && this.options.canVideoJog(hit.id)) {
+        this.drag = {
+          kind: 'video-jog-pending', id: hit.id, start: world,
+          startClientX: event.clientX, startClientY: event.clientY,
+          originals: movable.map((item) => ({ ...item })),
+        };
+        return;
+      }
       this.drag = { kind: 'move', start: world, originals: movable.map((item) => ({ ...item })) };
       this.setTransformOverlaysHidden(true);
     } else {
@@ -298,13 +302,27 @@ export class SelectionController {
       return;
     }
     if (!this.pointer.update(event)) return;
-    if (this.tryStartExternalDrag(event)) return;
-    if (this.drag.kind === 'video-scrub') {
-      for (const sample of pointerSamples(event)) {
-        this.drag.session.update(sample.clientX - this.drag.startX, sample.timeStamp);
+    if (this.drag.kind === 'video-jog-pending') {
+      const deltaX = event.clientX - this.drag.startClientX;
+      const deltaY = event.clientY - this.drag.startClientY;
+      if (Math.abs(deltaX) < VIDEO_JOG_DRAG_THRESHOLD_PX && Math.abs(deltaY) < VIDEO_JOG_DRAG_THRESHOLD_PX) return;
+      if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+        const session = this.options.beginVideoJog(this.drag.id);
+        if (session) {
+          this.drag = { kind: 'video-jog', lastClientX: this.drag.startClientX, remainderX: 0, frameOffset: 0, direction: 0, session };
+          this.setTransformOverlaysHidden(true);
+          this.updateVideoJog(event);
+          return;
+        }
       }
+      this.drag = { kind: 'move', start: this.drag.start, originals: this.drag.originals };
+      this.setTransformOverlaysHidden(true);
+    }
+    if (this.drag.kind === 'video-jog') {
+      this.updateVideoJog(event);
       return;
     }
+    if (this.tryStartExternalDrag(event)) return;
     if (this.drag.kind === 'move' || this.drag.kind === 'transform' || this.drag.kind === 'group'
       || this.drag.kind === 'group-resize' || this.drag.kind === 'group-rotate') this.setTransformOverlaysHidden(true);
     if (this.drag.kind === 'box' || this.drag.kind === 'lasso') {
@@ -361,7 +379,6 @@ export class SelectionController {
 
   private pointerUp(event: PointerEvent) {
     if (!this.drag || !this.pointer.end(event)) return;
-    if (this.drag.kind === 'video-scrub') this.drag.session.end();
     this.setTransformOverlaysHidden(false);
     if (this.options.element.hasPointerCapture(event.pointerId)) this.options.element.releasePointerCapture(event.pointerId);
     if (this.drag.kind === 'box' || this.drag.kind === 'lasso') this.options.cameraChanged(true);
@@ -376,6 +393,7 @@ export class SelectionController {
       this.options.groupSelectionChanged(undefined);
       this.options.lassoSelectionChanged(lasso);
     }
+    if (this.drag.kind === 'video-jog') this.drag.session.end();
     if (this.pendingChanges.length) this.options.commit(this.pendingChanges, this.drag.kind !== 'move');
     if (this.drag.kind === 'group') this.options.commitGroup(this.drag.id, this.drag.last.x - this.drag.start.x, this.drag.last.y - this.drag.start.y);
     if (this.drag.kind === 'group-resize') this.options.commitGroupResize(this.drag.id, this.drag.bounds);
@@ -386,6 +404,24 @@ export class SelectionController {
   }
 
   private emitSelection() { this.options.selectionChanged(this.selection.values()); this.refresh(); }
+
+  private updateVideoJog(event: PointerEvent) {
+    if (this.drag?.kind !== 'video-jog') return;
+    const deltaX = event.clientX - this.drag.lastClientX;
+    this.drag.lastClientX = event.clientX;
+    const direction = Math.sign(deltaX);
+    if (!direction) return;
+    if (this.drag.direction && direction !== this.drag.direction) this.drag.remainderX = 0;
+    this.drag.direction = direction;
+    this.drag.remainderX += deltaX;
+    const frames = Math.trunc(this.drag.remainderX / VIDEO_JOG_PIXELS_PER_FRAME);
+    if (frames) {
+      this.drag.remainderX -= frames * VIDEO_JOG_PIXELS_PER_FRAME;
+      this.drag.frameOffset += frames;
+      this.drag.session.update(this.drag.frameOffset);
+    }
+    this.options.element.style.cursor = 'ew-resize';
+  }
 
   clearLasso() {
     if (!this.lassoPoints.length) return;
@@ -433,15 +469,6 @@ export class SelectionController {
   }
 }
 
-function isVideoScrubPointer(event: PointerEvent) {
-  if (event.shiftKey || event.ctrlKey || event.metaKey) return false;
-  return event.pointerType === 'mouse' || event.pointerType === 'pen' || event.pointerType === '';
-}
-
-function pointerSamples(event: PointerEvent) {
-  const coalesced = event.getCoalescedEvents?.();
-  return coalesced?.length ? coalesced : [event];
-}
 
 function lassoBounds(points: LassoPoint[]) {
   const xs = points.map((point) => point.x);
@@ -463,7 +490,7 @@ function rotationCursorAtPoint(point: LassoPoint, bounds: GroupFrameBounds) {
   return ROTATE_CURSORS[`${vertical}-${horizontal}` as keyof typeof ROTATE_CURSORS];
 }
 
-function imagesInGroup(groups: ImageGroup[], images: ImageItem[], rootId: string) {
+function imagesInGroup(groups: ImageGroup[], images: SceneItem[], rootId: string) {
   const imageById = new Map(images.map((item) => [item.id, item]));
   const groupById = new Map(groups.map((group) => [group.id, group]));
   const imageIds = new Set<string>();

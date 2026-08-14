@@ -1,5 +1,5 @@
 import { Container, Graphics, MeshSimple, Text, Texture } from 'pixi.js';
-import type { ImageItem, VisualMark, VisualNotePoint, VisualNotesState } from '../../types';
+import type { SceneItem, VisualMark, VisualNotePoint, VisualNotesState } from '../../types';
 import { markWorldPoints } from '../../visualNotes/VisualNoteGeometry';
 import { markWorldBounds } from '../../visualNotes/VisualNoteGeometry';
 
@@ -65,7 +65,7 @@ export class VisualNotesRenderer {
   private readonly eraserCursor = new Graphics();
   private temporaryHidden = false;
   private notesVisible = true;
-  private images: ImageItem[] = [];
+  private images: SceneItem[] = [];
   private previewMark?: VisualMark;
   private selectedId?: string;
   private state?: VisualNotesState;
@@ -75,7 +75,7 @@ export class VisualNotesRenderer {
 
   constructor(private readonly layer: Container) { layer.addChild(this.preview, this.selection, this.eraserCursor); }
 
-  sync(state: VisualNotesState, images: ImageItem[]) {
+  sync(state: VisualNotesState, images: SceneItem[]) {
     this.images = images;
     this.state = state;
     this.notesVisible = state.visible;

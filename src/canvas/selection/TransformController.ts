@@ -1,13 +1,13 @@
-import type { ImageItem } from '../../types';
+import type { SceneItem, SceneItemPatch } from '../../types';
 import type { SceneBounds } from '../scene/SceneNode';
 import type { TransformHandle } from './SelectionOverlay';
 
-export type ImageTransformChange = Partial<ImageItem> & { id: string };
+export type ImageTransformChange = SceneItemPatch;
 
 export function transformImageSelection(options: {
   start: { x: number; y: number };
   current: { x: number; y: number };
-  originals: ImageItem[];
+  originals: SceneItem[];
   bounds: SceneBounds;
   handle: TransformHandle;
 }): ImageTransformChange[] {

@@ -1,9 +1,9 @@
-import type { ImageItem, Scene } from '../../types';
+import type { BoardItem, Scene } from '../../types';
 import { assetResourceUrl } from '../../assetResourceUrl';
 
 export type CanvasImageVariant = 'thumb128' | 'thumb256' | 'thumb512' | 'thumb1024' | 'original';
 
-export function resolveCanvasImageUrl(scene: Scene, item: ImageItem, variant: CanvasImageVariant) {
+export function resolveCanvasImageUrl(scene: Scene, item: BoardItem, variant: CanvasImageVariant) {
   if (item.dataUrl) return item.dataUrl;
   if (!item.assetId) return undefined;
   const version = scene.assets[item.assetId]?.cacheVersion ?? 0;
@@ -12,7 +12,7 @@ export function resolveCanvasImageUrl(scene: Scene, item: ImageItem, variant: Ca
   return assetResourceUrl(item.assetId, query);
 }
 
-export function resolveCanvasMipUrl(scene: Scene, item: ImageItem, mip: number, priority = 100) {
+export function resolveCanvasMipUrl(scene: Scene, item: BoardItem, mip: number, priority = 100) {
   if (item.dataUrl) return item.dataUrl;
   if (!item.assetId) return undefined;
   const version = scene.assets[item.assetId]?.cacheVersion ?? 0;
@@ -21,7 +21,7 @@ export function resolveCanvasMipUrl(scene: Scene, item: ImageItem, mip: number, 
   return assetResourceUrl(item.assetId, query);
 }
 
-export function resolveCanvasTileUrl(item: ImageItem, level: number, column: number, row: number, priority = 100) {
+export function resolveCanvasTileUrl(item: BoardItem, level: number, column: number, row: number, priority = 100) {
   if (!item.assetId) return undefined;
   const query = new URLSearchParams({
     variant: 'tile', level: String(level), column: String(column), row: String(row), priority: String(priority),

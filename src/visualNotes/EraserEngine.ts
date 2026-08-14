@@ -1,4 +1,4 @@
-import type { ArrowVisualMark, BrushVisualMark, ImageItem, VisualMark, VisualNotePoint } from '../types';
+import type { ArrowVisualMark, BoardItem, BrushVisualMark, VisualMark, VisualNotePoint } from '../types';
 import { markWorldPoints, pointToAnchor, type Point } from './VisualNoteGeometry';
 
 function segmentDistance(point: Point, start: Point, end: Point) {
@@ -28,7 +28,7 @@ function pointInTriangle(point: Point, a: Point, b: Point, c: Point) {
   return (d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0);
 }
 
-function arrowHead(mark: ArrowVisualMark, images: readonly ImageItem[]) {
+function arrowHead(mark: ArrowVisualMark, images: readonly BoardItem[]) {
   const [start, end] = markWorldPoints(mark, images);
   const angle = Math.atan2(end.y - start.y, end.x - start.x);
   // Keep the semantic hit region slightly wider than the painted chevron so a
@@ -38,7 +38,7 @@ function arrowHead(mark: ArrowVisualMark, images: readonly ImageItem[]) {
     right: { x: end.x - Math.cos(angle + 0.48) * size, y: end.y - Math.sin(angle + 0.48) * size } };
 }
 
-function eraserHitsArrowHead(mark: ArrowVisualMark, images: readonly ImageItem[], eraserPath: readonly Point[], radius: number) {
+function eraserHitsArrowHead(mark: ArrowVisualMark, images: readonly BoardItem[], eraserPath: readonly Point[], radius: number) {
   const { end, left, right } = arrowHead(mark, images);
   const edges: Array<[Point, Point]> = [[end, left], [left, right], [right, end]];
   const tipRadius = Math.max(radius, mark.style.baseWidth * 2.5);
@@ -52,7 +52,7 @@ function eraserHitsArrowHead(mark: ArrowVisualMark, images: readonly ImageItem[]
 
 /** Arrows remain semantic objects: touching their shaft or head removes the whole arrow. */
 export function eraserHitsArrow(
-  mark: ArrowVisualMark, images: readonly ImageItem[], eraserPath: readonly Point[], radius: number,
+  mark: ArrowVisualMark, images: readonly BoardItem[], eraserPath: readonly Point[], radius: number,
 ) {
   if (!eraserPath.length) return false;
   const [start, end] = markWorldPoints(mark, images);
@@ -67,7 +67,7 @@ export function eraserHitsArrow(
 /** Locally erases an arrow. The surviving segment that still owns the tip
  * remains an arrow; detached shaft fragments become ordinary brush strokes. */
 export function eraseArrow(
-  mark: ArrowVisualMark, images: readonly ImageItem[], eraserPath: readonly Point[], radius: number,
+  mark: ArrowVisualMark, images: readonly BoardItem[], eraserPath: readonly Point[], radius: number,
   createId: () => string = () => crypto.randomUUID(), precision = radius / 12,
 ): VisualMark[] {
   if (!eraserHitsArrow(mark, images, eraserPath, radius)) return [mark];
@@ -85,7 +85,7 @@ export function eraseArrow(
 }
 
 export function eraseStroke(
-  mark: BrushVisualMark, images: readonly ImageItem[], eraserPath: readonly Point[], radius: number,
+  mark: BrushVisualMark, images: readonly BoardItem[], eraserPath: readonly Point[], radius: number,
   createId: () => string = () => crypto.randomUUID(), precision = radius / 12,
 ) {
   if (!eraserPath.length) return [mark];

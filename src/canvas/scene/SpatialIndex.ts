@@ -1,4 +1,4 @@
-import type { ImageItem } from '../../types';
+import type { BoardItem } from '../../types';
 import type { SceneBounds } from './SceneNode';
 import { boundsIntersect, imageBounds } from '../selection/HitTestService';
 
@@ -8,7 +8,7 @@ export class SpatialIndex {
   private readonly cells = new Map<string, Set<string>>();
   private readonly bounds = new Map<string, SceneBounds>();
 
-  rebuild(items: ImageItem[]) {
+  rebuild(items: BoardItem[]) {
     this.cells.clear();
     this.bounds.clear();
     items.forEach((item) => this.insert(item));
@@ -27,7 +27,7 @@ export class SpatialIndex {
     return result;
   }
 
-  private insert(item: ImageItem) {
+  private insert(item: BoardItem) {
     const bounds = imageBounds(item);
     this.bounds.set(item.id, bounds);
     for (let y = Math.floor(bounds.y / CELL_SIZE); y <= Math.floor((bounds.y + bounds.height) / CELL_SIZE); y += 1) {

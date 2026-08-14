@@ -1,5 +1,5 @@
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
-import { performanceMonitor } from '../../performanceMonitor';
+import { performanceMonitor } from '../../runtime/performanceMonitor';
 
 type PointerHandler = (event: PointerEvent) => void;
 type WheelHandler = (event: WheelEvent) => void;

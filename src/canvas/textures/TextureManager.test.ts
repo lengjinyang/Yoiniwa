@@ -38,4 +38,22 @@ describe('TextureManager CPU lifecycle', () => {
     expect(close).toHaveBeenCalledOnce();
     expect(textureDestroy).toHaveBeenCalled();
   });
+
+  it('boosts native mip generation through the injected callback, not window.refCanvas', async () => {
+    const boostImageResource = vi.fn();
+    const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => new Blob(['image']) }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 8, height: 8, close: vi.fn() })));
+    const manager = new TextureManager({ texture: { initSource: vi.fn() } }, () => undefined, {
+      gpuBudgetBytes: 1024 * 1024,
+      boostImageResource,
+    });
+    const pending = manager.request({ assetId: 'asset', mip: 128, url: 'refcanvas-asset://asset', priority: 40 });
+    expect(boostImageResource).toHaveBeenCalledWith('refcanvas-asset://asset', 40);
+    await vi.waitFor(() => expect(manager.uploads.length).toBe(1));
+    manager.processFrame();
+    const entry = await pending;
+    manager.release(entry.key);
+    manager.destroy();
+  });
 });

@@ -1,4 +1,4 @@
-import type { ImageItem, PickedColor } from '../../types';
+import type { SceneItem, PickedColor } from '../../types';
 import type { Camera } from '../camera/Camera';
 import type { SceneStore } from '../scene/SceneStore';
 import type { InputRouter } from './InputRouter';
@@ -16,11 +16,11 @@ interface PointerInput {
 interface SampleTarget {
   point: Point;
   world: Point;
-  item?: ImageItem;
+  item?: SceneItem;
   color?: PickedColor;
 }
 
-function sourcePixel(item: ImageItem, point: Point) {
+function sourcePixel(item: SceneItem, point: Point) {
   const centerX = item.x + item.width / 2; const centerY = item.y + item.height / 2;
   const radians = -item.rotation * Math.PI / 180;
   const dx = point.x - centerX; const dy = point.y - centerY;
@@ -71,7 +71,7 @@ export class ColorPickerController {
     position(point?: Point): void;
     preview(color: PickedColor | undefined): void;
     picked(color: PickedColor): void;
-    sampleSource?(item: ImageItem, point: Point): Promise<{ r: number; g: number; b: number; a: number }>;
+    sampleSource?(item: SceneItem, point: Point): Promise<{ r: number; g: number; b: number; a: number }>;
     schedulePreview?(callback: FrameRequestCallback): number;
     cancelPreview?(handle: number): void;
     previewSampleIntervalMs?: number;
@@ -249,7 +249,7 @@ export class ColorPickerController {
       this.commit(target.color);
       return;
     }
-    const sampleSource = this.options.sampleSource ?? ((item: ImageItem, point: Point) => {
+    const sampleSource = this.options.sampleSource ?? ((item: SceneItem, point: Point) => {
       if (!window.refCanvas) return Promise.reject(new Error('桌面取色服务不可用'));
       const pixel = sourcePixel(item, point);
       return window.refCanvas.sampleImagePixel(item.assetId as string, pixel.x, pixel.y);

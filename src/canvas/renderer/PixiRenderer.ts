@@ -6,9 +6,9 @@ import { VideoRenderer, type VideoTransportState } from './VideoRenderer';
 import { RenderLayers } from './RenderLayers';
 import { SelectionOverlay, type TransformHandle } from '../selection/SelectionOverlay';
 import type { LassoPoint } from '../selection/SelectionController';
-import type { ImageItem } from '../../types';
+import type { SceneItem } from '../../types';
 import { TextureManager } from '../textures/TextureManager';
-import { performanceMonitor } from '../../performanceMonitor';
+import { performanceMonitor } from '../../runtime/performanceMonitor';
 import { GroupRenderer } from './GroupRenderer';
 import { GroupResizeOverlay } from '../selection/GroupResizeOverlay';
 import type { GroupResizeHandle } from '../selection/GroupResizeController';
@@ -16,6 +16,8 @@ import type { GroupHeaderAction } from '../selection/HitTestService';
 import { VisualNotesRenderer } from './VisualNotesRenderer';
 import type { VisualMark } from '../../types';
 import { compositeDisplayedColor } from '../interaction/colorSampling';
+import type { VideoPlaybackHost } from '../video/videoPlaybackHost';
+import type { ImageResourceBoost } from '../textures/imageResourceBoost';
 
 interface PendingColorReadback {
   buffer: WebGLBuffer;
@@ -42,7 +44,11 @@ export class PixiRenderer {
   private previewSampleBlockedUntil = 0;
   private pendingColorReadback?: PendingColorReadback;
 
-  constructor(private readonly requestRender: () => void) {}
+  constructor(
+    private readonly requestRender: () => void,
+    private readonly videoPlayback?: VideoPlaybackHost,
+    private readonly boostImageResource?: ImageResourceBoost,
+  ) {}
 
   async start(container: HTMLElement, background: string, backgroundOpacity: number) {
     await this.app.init({
@@ -86,9 +92,10 @@ export class PixiRenderer {
     this.layers = new RenderLayers(this.app.stage);
     this.textures = new TextureManager(this.app.renderer, this.requestRender, {
       deviceMemoryGb: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+      boostImageResource: this.boostImageResource,
     });
     this.images = new ImageRenderer(this.layers.images, this.textures, this.requestRender);
-    this.videos = new VideoRenderer(this.layers.images, this.textures, this.requestRender);
+    this.videos = new VideoRenderer(this.layers.images, this.textures, this.requestRender, this.videoPlayback);
     if (gl) this.videos.setMaxTextureSize(gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
     this.groups = new GroupRenderer(this.layers.groups, this.layers.groupHeaderSurfaces, this.layers.groupHeaders, container);
     this.visualNotes = new VisualNotesRenderer(this.layers.marks);
@@ -105,7 +112,7 @@ export class PixiRenderer {
     this.visualNotes?.sync(scene.visualNotes, scene.items);
     this.syncGroupResizeOverlay();
   }
-  previewVisualNotes(notes: VisualNotesState, images: ImageItem[]) {
+  previewVisualNotes(notes: VisualNotesState, images: SceneItem[]) {
     if (this.pendingScene) this.pendingScene = { ...this.pendingScene, visualNotes: notes };
     this.visualNotes?.sync(notes, images);
     this.requestRender();
@@ -137,7 +144,7 @@ export class PixiRenderer {
     this.visualNotes?.setEraserCursor(point, radiusScreen); this.requestRender();
   }
   setSelectedVisualNote(id?: string) { this.visualNotes?.setSelection(id); this.requestRender(); }
-  drawSelection(items: ImageItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[], controlsVisible = true) {
+  drawSelection(items: SceneItem[], scale: number, box?: { x: number; y: number; width: number; height: number }, lasso?: LassoPoint[], controlsVisible = true) {
     this.selection?.draw(items, scale, box, lasso, controlsVisible);
     this.requestRender();
   }
@@ -157,17 +164,15 @@ export class PixiRenderer {
   }
   playVideo(id: string) { return this.videos?.play(id) ?? Promise.resolve(false); }
   pauseVideo(id: string) { return this.videos?.pause(id) ?? false; }
-  beginVideoScrub(id: string) { return this.videos?.beginScrub(id) ?? false; }
-  endVideoScrub(id: string) { return this.videos?.endScrub(id) ?? false; }
-  seekVideo(id: string, time: number) { return this.videos?.seek(id, time) ?? false; }
-  seekVideoFrame(id: string, frameIndex: number, sequential = false, final = false) {
-    return this.videos?.seekFrame(id, frameIndex, sequential, final) ?? false;
-  }
-  stepVideoFrames(id: string, frames: number) { return this.videos?.stepFrames(id, frames) ?? false; }
+  beginVideoTimelineSeek(id: string) { return this.videos?.beginTimelineSeek(id) ?? false; }
+  seekVideoTimeline(id: string, time: number) { return this.videos?.seekTimeline(id, time) ?? false; }
+  endVideoTimelineSeek(id: string) { return this.videos?.endTimelineSeek(id) ?? false; }
+  beginCanvasVideoJog(id: string) { return this.videos?.beginCanvasJog(id) ?? false; }
+  jogCanvasVideoFrames(id: string, frameOffset: number) { return this.videos?.jogCanvasFrames(id, frameOffset) ?? false; }
+  endCanvasVideoJog(id: string) { return this.videos?.endCanvasJog(id) ?? false; }
   setVideoRate(id: string, rate: number) { return this.videos?.setRate(id, rate) ?? false; }
   setVideoMuted(id: string, muted: boolean) { return this.videos?.setMuted(id, muted) ?? false; }
   resumeVideoWhenProxyReady(assetId: string) { this.videos?.resumeWhenProxyReady(assetId); }
-  refreshVideoScrubIndex(assetId: string) { this.videos?.refreshSourceIndex(assetId); }
   failVideoProxy(assetId: string) { this.videos?.failProxy(assetId); }
   setVideoPreparation(assetId: string, stage: string, fraction: number) {
     this.videos?.setPreparation(assetId, stage, fraction);

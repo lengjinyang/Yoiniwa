@@ -1,5 +1,5 @@
 import { Container, Graphics, type Container as PixiContainer } from 'pixi.js';
-import { UI_ICON_PATHS } from '../../app/icons/uiIconPaths';
+import { UI_ICON_PATHS } from '../icons/uiIconPaths';
 import type { ImageGroup, Viewport } from '../../types';
 import {
   GROUP_HEADER_ACTION_SCREEN_WIDTH,

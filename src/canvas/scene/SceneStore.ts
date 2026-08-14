@@ -1,7 +1,7 @@
-import type { ImageGroup, ImageItem, Scene, VisualNotesState } from '../../types';
+import type { ImageGroup, Scene, SceneItem, SceneItemPatch, VisualNotesState } from '../../types';
 import type { SceneNode } from './SceneNode';
 import { SpatialIndex } from './SpatialIndex';
-import { fitAutoGroupsToContents } from '../../scene';
+import { fitAutoGroupsToContents } from '../../domain/scene';
 import { moveSceneMark } from '../../visualNotes/VisualNoteGeometry';
 import { pointInImage } from '../selection/HitTestService';
 
@@ -28,7 +28,7 @@ export class SceneStore {
   images() { return this.scene.items.map((item) => this.hiddenImages.has(item.id) ? { ...item, hidden: true } : item).sort((a, b) => a.zIndex - b.zIndex); }
   imageAtPoint(point: { x: number; y: number }) {
     const candidates = this.spatial.query({ x: point.x, y: point.y, width: 0, height: 0 });
-    let topmost: ImageItem | undefined;
+    let topmost: SceneItem | undefined;
     candidates.forEach((id) => {
       if (this.hiddenImages.has(id)) return;
       const node = this.nodes.get(id);
@@ -54,7 +54,7 @@ export class SceneStore {
     return visible;
   }
 
-  previewImageChanges(changes: Array<Partial<ImageItem> & { id: string }>) {
+  previewImageChanges(changes: Array<SceneItemPatch>) {
     const byId = new Map(changes.map((change) => [change.id, change]));
     const next: Scene = {
       ...this.scene,
@@ -117,7 +117,7 @@ export class SceneStore {
 
   private rebuildIndex() {
     this.nodes.clear();
-    this.scene.items.forEach((value: ImageItem) => this.nodes.set(value.id, { kind: 'image', id: value.id, value }));
+    this.scene.items.forEach((value) => this.nodes.set(value.id, { kind: 'image', id: value.id, value }));
     this.scene.groups.forEach((value: ImageGroup) => this.nodes.set(value.id, { kind: 'group', id: value.id, value }));
     this.hiddenImages = new Set(); this.hiddenGroups = new Set(); this.hiddenMarks = new Set();
     const visited = new Set<string>();

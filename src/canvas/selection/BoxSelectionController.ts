@@ -1,4 +1,4 @@
-import type { ImageGroup, ImageItem } from '../../types';
+import type { ImageGroup, SceneItem } from '../../types';
 import { groupHeaderWorldBounds } from '../groups/GroupPresentation';
 import type { SceneBounds } from '../scene/SceneNode';
 import { boundsIntersect, imageBounds } from './HitTestService';
@@ -7,7 +7,7 @@ export function boxFromPoints(start: { x: number; y: number }, end: { x: number;
   return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
 }
 
-export function imagesInSelectionBox(items: ImageItem[], box: SceneBounds) {
+export function imagesInSelectionBox(items: SceneItem[], box: SceneBounds) {
   return items.filter((item) => !item.hidden && boundsIntersect(imageBounds(item), box)).map((item) => item.id);
 }
 

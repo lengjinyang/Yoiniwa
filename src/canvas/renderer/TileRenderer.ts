@@ -1,6 +1,6 @@
 import { ColorMatrixFilter, Container, Graphics, Sprite } from 'pixi.js';
 import { IMAGE_TILE_GUTTER, IMAGE_TILE_SIZE } from '../../shared/imagePipelineConfig';
-import type { ImageItem, Scene } from '../../types';
+import type { SceneItem, Scene } from '../../types';
 import { imageGrayscaleContrast } from '../../imageAdjustments';
 import { resolveCanvasTileUrl } from '../assets/AssetPathResolver';
 import type { SceneBounds } from '../scene/SceneNode';
@@ -11,7 +11,7 @@ import { RenderObjectRegistry } from './RenderObjectRegistry';
 
 interface TileSet { signature: string; container: Container; grayscale: ColorMatrixFilter; textureKeys: string[] }
 interface PendingTileSet {
-  signature: string; token: number; item: ImageItem; levelWidth: number; levelHeight: number;
+  signature: string; token: number; item: SceneItem; levelWidth: number; levelHeight: number;
   tiles: TileAddress[]; entries: GpuTextureEntry[];
 }
 interface TileRenderObject {
@@ -37,7 +37,7 @@ export class TileRenderer {
     });
   }
 
-  update(item: ImageItem, requiredEdge: number, worldBounds: SceneBounds, priority: number) {
+  update(item: SceneItem, requiredEdge: number, worldBounds: SceneBounds, priority: number) {
     if (!this.scene || !item.assetId || !shouldUseTiledImage(item, requiredEdge)) {
       this.release(item.id);
       return;
@@ -124,7 +124,7 @@ export class TileRenderer {
   invalidateAll() { this.objects.forEach((_object, id) => this.release(id)); }
   hasCurrent(id: string) { return Boolean(this.objects.get(id)?.current); }
 
-  private createTileSet(pending: PendingTileSet, item: ImageItem): TileSet {
+  private createTileSet(pending: PendingTileSet, item: SceneItem): TileSet {
     const container = new Container();
     const grayscale = new ColorMatrixFilter();
     container.sortableChildren = true;
@@ -154,7 +154,7 @@ export class TileRenderer {
     return tileSet;
   }
 
-  private updateTileSet(tileSet: TileSet, item: ImageItem) {
+  private updateTileSet(tileSet: TileSet, item: SceneItem) {
     const { container, grayscale } = tileSet;
     container.position.set(item.x + item.width / 2, item.y + item.height / 2);
     container.rotation = item.rotation * Math.PI / 180;

@@ -1,6 +1,6 @@
 import { ColorMatrixFilter, Rectangle, Sprite, Texture, type Container } from 'pixi.js';
-import type { ImageItem, Scene, Viewport } from '../../types';
-import { isVideoItem } from '../../media';
+import type { SceneItem, Scene, Viewport } from '../../types';
+import { isVideoItem } from '../../domain/media';
 import { imageRequestKey, IMAGE_WHOLE_TEXTURE_EDGE } from '../../shared/imagePipelineConfig';
 import { resolveCanvasMipUrl } from '../assets/AssetPathResolver';
 import { desiredImageMip, mipWithHysteresis, requiredImageEdge, type MipSelectionState } from '../textures/MipSelector';
@@ -28,14 +28,14 @@ interface ImageRenderObject {
   destroy(): void;
 }
 
-function cropFrame(textureWidth: number, textureHeight: number, item: ImageItem) {
+function cropFrame(textureWidth: number, textureHeight: number, item: SceneItem) {
   const scaleX = textureWidth / Math.max(1, item.naturalWidth);
   const scaleY = textureHeight / Math.max(1, item.naturalHeight);
   return new Rectangle(item.crop.x * scaleX, item.crop.y * scaleY,
     Math.max(1, item.crop.width * scaleX), Math.max(1, item.crop.height * scaleY));
 }
 
-function updateSprite(object: ImageRenderObject, item: ImageItem) {
+function updateSprite(object: ImageRenderObject, item: SceneItem) {
   const { sprite } = object;
   sprite.visible = !item.hidden;
   sprite.position.set(item.x + item.width / 2, item.y + item.height / 2);
@@ -56,7 +56,7 @@ function updateSprite(object: ImageRenderObject, item: ImageItem) {
 export class ImageRenderer {
   private readonly objects = new RenderObjectRegistry<ImageRenderObject>();
   private scene?: Scene;
-  private readonly items = new Map<string, ImageItem>();
+  private readonly items = new Map<string, SceneItem>();
   private readonly tiles: TileRenderer;
 
   constructor(private readonly layer: Container, private readonly textures: TextureManager, private readonly requestRender: () => void) {
@@ -155,7 +155,7 @@ export class ImageRenderer {
     if (swapped) this.requestRender();
   }
 
-  private syncItem(item: ImageItem) {
+  private syncItem(item: SceneItem) {
     let object = this.objects.get(item.id);
     if (!object) {
       const sprite = new Sprite(Texture.EMPTY);
@@ -186,7 +186,7 @@ export class ImageRenderer {
     }
   }
 
-  private requestMip(object: ImageRenderObject, item: ImageItem, mip: number, priority: number) {
+  private requestMip(object: ImageRenderObject, item: SceneItem, mip: number, priority: number) {
     if (!this.scene || !item.assetId) return;
     const key = imageRequestKey(item.assetId, mip);
     if (object.textureKey === key || object.targetKey === key) return;

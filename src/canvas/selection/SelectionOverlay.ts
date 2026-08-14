@@ -1,5 +1,5 @@
 import { Graphics, type Container } from 'pixi.js';
-import type { ImageItem } from '../../types';
+import type { BoardItem } from '../../types';
 import type { LassoPoint } from './SelectionController';
 import type { SceneBounds } from '../scene/SceneNode';
 import { unionImageBounds } from './HitTestService';
@@ -16,7 +16,7 @@ export class SelectionOverlay {
 
   constructor(layer: Container) { layer.addChild(this.graphics); }
 
-  draw(items: ImageItem[], scale: number, box?: SceneBounds, lasso?: LassoPoint[], controlsVisible = true) {
+  draw(items: BoardItem[], scale: number, box?: SceneBounds, lasso?: LassoPoint[], controlsVisible = true) {
     this.scale = scale;
     this.controlsVisible = controlsVisible;
     this.selectionBounds = unionImageBounds(items);

@@ -1,8 +1,8 @@
-import type { ImageGroup, ImageItem } from '../../types';
+import type { ImageGroup, BoardItem } from '../../types';
 import { GROUP_HEADER_ACTION_SCREEN_WIDTH, groupHeaderWorldBounds } from '../groups/GroupPresentation';
 import type { SceneBounds } from '../scene/SceneNode';
 
-export function imageBounds(item: ImageItem): SceneBounds {
+export function imageBounds(item: BoardItem): SceneBounds {
   const radians = item.rotation * Math.PI / 180;
   const width = Math.abs(item.width * Math.cos(radians)) + Math.abs(item.height * Math.sin(radians));
   const height = Math.abs(item.width * Math.sin(radians)) + Math.abs(item.height * Math.cos(radians));
@@ -11,7 +11,7 @@ export function imageBounds(item: ImageItem): SceneBounds {
   return { x: centerX - width / 2, y: centerY - height / 2, width, height };
 }
 
-export function pointInImage(item: ImageItem, point: { x: number; y: number }) {
+export function pointInImage(item: BoardItem, point: { x: number; y: number }) {
   const centerX = item.x + item.width / 2;
   const centerY = item.y + item.height / 2;
   const radians = -item.rotation * Math.PI / 180;
@@ -22,7 +22,7 @@ export function pointInImage(item: ImageItem, point: { x: number; y: number }) {
   return Math.abs(localX) <= item.width / 2 && Math.abs(localY) <= item.height / 2;
 }
 
-export function topmostImageAtPoint(items: ImageItem[], point: { x: number; y: number }) {
+export function topmostImageAtPoint(items: BoardItem[], point: { x: number; y: number }) {
   return [...items].sort((a, b) => b.zIndex - a.zIndex)
     .find((item) => !item.hidden && pointInImage(item, point));
 }
@@ -32,7 +32,7 @@ export function boundsIntersect(left: SceneBounds, right: SceneBounds) {
     && left.y <= right.y + right.height && left.y + left.height >= right.y;
 }
 
-export function unionImageBounds(items: ImageItem[]) {
+export function unionImageBounds(items: BoardItem[]) {
   const bounds = items.map(imageBounds);
   if (!bounds.length) return undefined;
   const x = Math.min(...bounds.map((value) => value.x));

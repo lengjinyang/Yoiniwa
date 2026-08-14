@@ -1,7 +1,7 @@
-import type { ImageGroup, ImageItem } from '../../types';
+import type { ImageGroup, SceneItem } from '../../types';
 
 export type SceneNode =
-  | { kind: 'image'; id: string; value: ImageItem }
+  | { kind: 'image'; id: string; value: SceneItem }
   | { kind: 'group'; id: string; value: ImageGroup };
 
 export interface SceneBounds {

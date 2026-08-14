@@ -1,4 +1,5 @@
-import type { ImageItem, Viewport } from '../../types';
+import type { BoardItem, Viewport } from '../../types';
+import { calculateDesiredMip, rotatedScreenBounds } from '../../rendering/textureSelection';
 import { CANVAS_MIP_EDGES, CANVAS_MIP_OVERSAMPLE } from './TextureConfig';
 
 export interface MipSelectionState {
@@ -7,24 +8,31 @@ export interface MipSelectionState {
   downgradeSince?: number;
 }
 
-export function requiredImageEdge(item: ImageItem, viewport: Viewport, devicePixelRatio: number) {
-  const radians = item.rotation * Math.PI / 180;
-  const screenWidth = (Math.abs(item.width * Math.cos(radians)) + Math.abs(item.height * Math.sin(radians))) * viewport.scale;
-  const screenHeight = (Math.abs(item.width * Math.sin(radians)) + Math.abs(item.height * Math.cos(radians))) * viewport.scale;
+export function requiredImageEdge(item: BoardItem, viewport: Viewport, devicePixelRatio: number) {
+  const screen = rotatedScreenBounds(item.width, item.height, item.rotation, viewport.scale);
   return Math.min(Math.max(item.naturalWidth, item.naturalHeight), Math.ceil(
-    Math.max(screenWidth, screenHeight) * devicePixelRatio * CANVAS_MIP_OVERSAMPLE,
+    Math.max(screen.width, screen.height) * devicePixelRatio * CANVAS_MIP_OVERSAMPLE,
   ));
 }
 
-export function desiredImageMip(item: ImageItem, viewport: Viewport, devicePixelRatio: number) {
+export function desiredImageMip(item: BoardItem, viewport: Viewport, devicePixelRatio: number) {
   const sourceEdge = Math.max(1, item.naturalWidth, item.naturalHeight);
   // Full-resolution sources above 4096 are serviced by the tile plane; they are
   // never promoted to one oversized WebGL texture.
   const maximumWholeTextureEdge = Math.min(sourceEdge, 4096);
   const available = [...CANVAS_MIP_EDGES.filter((edge) => edge <= maximumWholeTextureEdge), maximumWholeTextureEdge]
     .filter((edge, index, values) => values.indexOf(edge) === index).sort((a, b) => a - b);
-  const required = requiredImageEdge(item, viewport, devicePixelRatio);
-  return available.find((edge) => edge >= required) ?? available.at(-1) ?? sourceEdge;
+  const screen = rotatedScreenBounds(item.width, item.height, item.rotation, viewport.scale);
+  return calculateDesiredMip({
+    sourceWidth: item.naturalWidth,
+    sourceHeight: item.naturalHeight,
+    screenWidthCss: screen.width,
+    screenHeightCss: screen.height,
+    devicePixelRatio,
+    availableMips: available,
+    oversample: CANVAS_MIP_OVERSAMPLE,
+    allowSourceEdge: false,
+  });
 }
 
 export function mipWithHysteresis(options: {
