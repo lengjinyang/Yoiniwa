@@ -31,7 +31,7 @@ function shortcutState(commandIds: AppShortcutCommandId[], collaborationSpaceAct
   })));
   const state: AppShortcutState = {
     shortcuts: DEFAULT_SHORTCUTS,
-    activeColorPickerShortcut: 's',
+    activeColorPickerShortcut: 'S',
     collaborationSpaceActive,
     commands,
   };

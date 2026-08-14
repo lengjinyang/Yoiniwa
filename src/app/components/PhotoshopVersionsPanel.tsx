@@ -1,4 +1,4 @@
-import { imageSource } from '../../imageResources';
+import { imageSource } from '../../runtime/imageResources';
 import type { PhotoshopVersionRecord } from '../../types';
 import { formatBytes } from './CommonControls';
 import { UiIcon } from './UiIcon';

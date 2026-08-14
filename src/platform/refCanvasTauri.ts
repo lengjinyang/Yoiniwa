@@ -94,7 +94,6 @@ export function installTauriRefCanvasApi() {
     }),
     assetFilePath: (assetId) => command('images_asset_path', { assetId }),
     ensureVideoPlayback: (assetId) => command('videos_ensure_playback', { assetId }),
-    ensureVideoScrub: (assetId) => command('videos_ensure_scrub', { assetId }),
     cancelVideoPlayback: (assetId) => { void command('videos_cancel_playback', { assetId }); },
     onVideoProxyReady: (callback) => onEvent('videos:proxy-ready', callback),
     onVideoProxyFailed: (callback) => onEvent('videos:proxy-failed', callback),

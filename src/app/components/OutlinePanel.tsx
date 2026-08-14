@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from '../../outline';
-import type { ImageGroup, ImageItem, Scene } from '../../types';
+import { groupOrDescendantMatches, outlineObjectMatches, type OutlineFilter } from '../../domain/outline';
+import type { ImageGroup, SceneItem, Scene } from '../../types';
 import { OutlineThumbnail } from './CommonControls';
 import { UiIcon } from './UiIcon';
 
@@ -10,8 +10,8 @@ interface OutlinePanelProps {
   selectedIds: readonly string[];
   selectedGroupId?: string;
   onClose(): void;
-  onSelectImage(item: ImageItem): void;
-  onFocusImage(item: ImageItem): void;
+  onSelectImage(item: SceneItem): void;
+  onFocusImage(item: SceneItem): void;
   onSelectGroup(group: ImageGroup): void;
   onFocusGroup(group: ImageGroup): void;
   onToggleImageVisibility(id: string): void;
@@ -30,7 +30,7 @@ export function OutlinePanel({
   const filter = useMemo<OutlineFilter>(() => ({ query }), [query]);
   const groupedImageIds = new Set(scene.groups.flatMap((group) => group.members
     .filter((member) => member.type === 'image').map((member) => member.id)));
-  const imageMatches = (item: ImageItem) => outlineObjectMatches(item, 'image', filter);
+  const imageMatches = (item: SceneItem) => outlineObjectMatches(item, 'image', filter);
   const groupMatches = (group: ImageGroup) => groupOrDescendantMatches(scene, group, filter);
   const toggleGroup = (id: string) => setCollapsedIds((current) => {
     const next = new Set(current);
@@ -38,7 +38,7 @@ export function OutlinePanel({
     return next;
   });
 
-  const renderImage = (item: ImageItem) => imageMatches(item) ? <li key={`image-${item.id}`}>
+  const renderImage = (item: SceneItem) => imageMatches(item) ? <li key={`image-${item.id}`}>
     <div className={`outline-row image${selectedIds.includes(item.id) ? ' selected' : ''}${item.hidden ? ' muted' : ''}`}>
       <span className="outline-indent" />
       <OutlineThumbnail item={item} />

@@ -1,8 +1,8 @@
 import { memo, useLayoutEffect, useRef, type ReactNode } from 'react';
-import { useImageResource } from '../../imageResources';
-import type { ImageItem } from '../../types';
+import { useImageResource } from '../../runtime/imageResources';
+import type { SceneItem } from '../../types';
 
-export const OutlineThumbnail = memo(function OutlineThumbnail({ item }: { item: ImageItem }) {
+export const OutlineThumbnail = memo(function OutlineThumbnail({ item }: { item: SceneItem }) {
   const image = useImageResource(item, 1, true, 'thumb128', 'thumb128');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useLayoutEffect(() => {

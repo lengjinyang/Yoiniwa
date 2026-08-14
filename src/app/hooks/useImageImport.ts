@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { arrangeImportedItems } from '../../importPlacement';
-import { preloadImagePreview } from '../../imageResources';
-import { isSupportedMediaFile, isVideoAsset, MEDIA_FILE_PATTERN } from '../../media';
-import { memberBounds, reconcileMemberBounds } from '../../scene';
-import type { ImageItem, ImagePrewarmProgress, ImportedImage, Scene } from '../../types';
+import { arrangeImportedItems } from '../../domain/importPlacement';
+import { preloadImagePreview } from '../../runtime/imageResources';
+import { isSupportedMediaFile, isVideoAsset, MEDIA_FILE_PATTERN, toSceneItem } from '../../domain/media';
+import { memberBounds, reconcileMemberBounds } from '../../domain/scene';
+import type { ImagePrewarmProgress, ImportedImage, Scene, SceneItem } from '../../types';
 import { enrichImportedMedia, enrichImportedMediaBatch, mapWithConcurrency } from '../../videoProbe';
 
 export type InternalImageDropHandler = (
@@ -62,7 +62,7 @@ export function useImageImport({
         ? `正在载入 ${sources.length} 个媒体…`
         : `正在载入 ${sources.length} 张图片…`);
     const decodedResults = await mapWithConcurrency(sources, 2, async (source, index): Promise<
-      { ok: true; source: ImportedImage; item: ImageItem } | { ok: false; error: string }
+      { ok: true; source: ImportedImage; item: SceneItem } | { ok: false; error: string }
     > => {
       try {
         const needsEnrich = isVideoAsset(source.asset)
@@ -77,7 +77,7 @@ export function useImageImport({
         const width = dimensions.width * scale;
         const height = dimensions.height * scale;
         const video = isVideoAsset(enriched.asset);
-        const item: ImageItem = {
+        const item = toSceneItem({
           id: crypto.randomUUID(),
           name: enriched.name,
           sourcePath: enriched.path,
@@ -101,14 +101,14 @@ export function useImageImport({
           zIndex: scene.items.length + index,
           locked: false,
           crop: { x: 0, y: 0, width: dimensions.width, height: dimensions.height },
-        };
+        });
         return { ok: true, source: enriched, item };
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     });
     const decoded = decodedResults.filter(
-      (value): value is { ok: true; source: ImportedImage; item: ImageItem } => value.ok,
+      (value): value is { ok: true; source: ImportedImage; item: SceneItem } => value.ok,
     );
     const failures = decodedResults.flatMap((value) => (value.ok ? [] : [value.error]));
     if (!decoded.length) {

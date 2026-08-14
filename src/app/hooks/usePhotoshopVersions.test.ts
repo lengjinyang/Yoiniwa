@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { createScene } from '../../scene';
+import { createScene } from '../../domain/scene';
 import type { PhotoshopVersionRecord } from '../../types';
 import { usePhotoshopVersions } from './usePhotoshopVersions';
 

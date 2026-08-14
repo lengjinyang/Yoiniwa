@@ -1,13 +1,13 @@
 import { useCallback } from 'react';
 import type { LassoPoint } from '../../canvas/selection/SelectionController';
 import { renderItems } from '../../exportScene';
-import type { ImageItem, Scene } from '../../types';
+import type { SceneItem, Scene } from '../../types';
 import type { useVisualNotes } from './useVisualNotes';
 
 interface UseSceneDeliveryOptions {
   api: Window['refCanvas'];
   scene: Scene;
-  selectedItems: ImageItem[];
+  selectedItems: SceneItem[];
   lassoPoints?: LassoPoint[];
   photoshopDocumentBlocked: boolean;
   getVisualNotesForRender: ReturnType<typeof useVisualNotes>['getRenderNotes'];

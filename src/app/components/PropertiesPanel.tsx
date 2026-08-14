@@ -6,10 +6,6 @@ import {
 } from 'react';
 import type { CacheInfo } from '../../types';
 import { SHORTCUT_LABELS, shortcutDisplayName, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
-import {
-  VIDEO_SCRUB_PIXELS_PER_FRAME_MAX,
-  VIDEO_SCRUB_PIXELS_PER_FRAME_MIN,
-} from '../../canvas/renderer/VideoPerformancePolicy';
 import { Button, formatBytes } from './CommonControls';
 import { UiIcon } from './UiIcon';
 
@@ -34,8 +30,6 @@ interface PropertiesPanelProps {
   onClearCache(): void;
   onOpenLogsFolder(): void;
   onCopyDiagnostics(): void;
-  videoScrubPixelsPerFrame: number;
-  onVideoScrubPixelsPerFrameChange(value: number): void;
 }
 
 export function PropertiesPanel({
@@ -43,7 +37,7 @@ export function PropertiesPanel({
   cacheInfo, cacheChanging, nativeAvailable, onClose, onBeginShortcutCapture,
   onCaptureShortcut, onCaptureShortcutKeyUp, onCapturePanShortcutMouse,
   onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
-  onClearCache, onOpenLogsFolder, onCopyDiagnostics, videoScrubPixelsPerFrame, onVideoScrubPixelsPerFrameChange,
+  onClearCache, onOpenLogsFolder, onCopyDiagnostics,
 }: PropertiesPanelProps) {
   const [confirmingCacheClear, setConfirmingCacheClear] = useState(false);
   if (!open) return null;
@@ -77,27 +71,6 @@ export function PropertiesPanel({
         })}
       </div>
       <Button onClick={onResetShortcuts}>恢复默认快捷键</Button>
-    </section>
-    <section>
-      <h3>视频</h3>
-      <label className="video-scrub-speed">
-        <span>拖动逐帧速度</span>
-        <span className="video-scrub-speed-track">
-          <span>慢</span>
-          <input type="range"
-            min={VIDEO_SCRUB_PIXELS_PER_FRAME_MIN}
-            max={VIDEO_SCRUB_PIXELS_PER_FRAME_MAX}
-            step={4}
-            aria-label="拖动逐帧速度"
-            value={VIDEO_SCRUB_PIXELS_PER_FRAME_MAX + VIDEO_SCRUB_PIXELS_PER_FRAME_MIN - videoScrubPixelsPerFrame}
-            onChange={(event) => {
-              onVideoScrubPixelsPerFrameChange(
-                VIDEO_SCRUB_PIXELS_PER_FRAME_MAX + VIDEO_SCRUB_PIXELS_PER_FRAME_MIN - Number(event.target.value),
-              );
-            }} />
-          <span>快</span>
-        </span>
-      </label>
     </section>
     <section>
       <h3>性能与缓存</h3>

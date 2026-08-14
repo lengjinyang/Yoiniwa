@@ -1,10 +1,10 @@
 import type { ContextMenuEntry } from '../ContextMenu';
-import type { LayoutAction } from '../layout';
-import type { ImageGroup, ImageItem, RecentScene, Scene, WindowState } from '../types';
+import type { LayoutAction } from '../domain/layout';
+import type { ImageGroup, SceneItem, RecentScene, Scene, WindowState } from '../types';
 import { shortcutDisplayName, type ShortcutPreferences } from '../keyboardShortcuts';
 import { imageGrayscaleContrast, setImageGrayscaleContrast } from '../imageAdjustments';
 import { appCommand, type AppCommandRegistry } from './AppCommand';
-import { isVideoItem } from '../media';
+import { isVideoItem } from '../domain/media';
 
 interface BuildAppMenuEntriesOptions {
   scene: Scene;
@@ -27,9 +27,9 @@ interface BuildAppMenuEntriesOptions {
   };
   selection: {
     selectedIds: string[];
-    selectedItems: ImageItem[];
+    selectedItems: SceneItem[];
     selectedGroup?: ImageGroup;
-    primary?: ImageItem;
+    primary?: SceneItem;
     selectAll(): void;
   };
   groups: {
@@ -42,8 +42,8 @@ interface BuildAppMenuEntriesOptions {
     deleteSelected(withContents: boolean): void;
   };
   images: {
-    mutate(updater: (item: ImageItem) => void): void;
-    preview(updater: (item: ImageItem) => void): void;
+    mutate(updater: (item: SceneItem) => void): void;
+    preview(updater: (item: SceneItem) => void): void;
     beginAdjustment(): void;
     commitAdjustment(): void;
     resetTransform(): void;
@@ -63,7 +63,7 @@ interface BuildAppMenuEntriesOptions {
   };
   view: {
     hasContent: boolean;
-    focusSelected(items: ImageItem[]): void;
+    focusSelected(items: SceneItem[]): void;
     fitCanvas(): void;
     resetZoom(): void;
   };
@@ -209,7 +209,7 @@ export function buildAppMenuEntries({
           { type: 'separator' as const },
           {
             type: 'item' as const,
-            label: selection.primary?.muted === false ? '静音' : '取消静音',
+            label: selectedVideos[0]?.muted === false ? '静音' : '取消静音',
             action: () => images.mutate((item) => {
               if (!isVideoItem(item, scene.assets)) return;
               item.muted = item.muted === false;
@@ -217,7 +217,7 @@ export function buildAppMenuEntries({
           },
           {
             type: 'item' as const,
-            label: selection.primary?.loop === false ? '循环播放' : '关闭循环',
+            label: selectedVideos[0]?.loop === false ? '循环播放' : '关闭循环',
             action: () => images.mutate((item) => {
               if (!isVideoItem(item, scene.assets)) return;
               item.loop = item.loop === false;

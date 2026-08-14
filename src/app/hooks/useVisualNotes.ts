@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { memberBounds, reconcileMemberBounds } from '../../scene';
+import { memberBounds, reconcileMemberBounds } from '../../domain/scene';
 import type {
   EraserSize,
   Scene,

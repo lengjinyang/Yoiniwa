@@ -1,5 +1,8 @@
-import { useRef, type Dispatch, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
+import { useMemo, useRef, type Dispatch, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
 import { CanvasView } from '../../canvas/CanvasView';
+import { videoPlaybackHostFromApi } from '../../canvas/video/videoPlaybackHost';
+import { imageResourceBoostFromApi } from '../../canvas/textures/imageResourceBoost';
+import { spaceKeyQueryFromApi } from '../../canvas/runtime/spaceKeyQuery';
 import { ColorControl } from '../../ColorControl';
 import { ContextMenu, type ContextMenuEntry } from '../../ContextMenu';
 import type { useSceneHistory } from '../../useSceneHistory';
@@ -72,6 +75,9 @@ export function AppWorkspace({
   context,
   photoshopDocumentBlocked,
 }: AppWorkspaceProps) {
+  const videoPlayback = useMemo(() => videoPlaybackHostFromApi(api), [api]);
+  const boostImageResource = useMemo(() => imageResourceBoostFromApi(api), [api]);
+  const isSpaceDown = useMemo(() => spaceKeyQueryFromApi(api), [api]);
   return <section className="workspace">
     <CanvasView
       canvas={{
@@ -124,7 +130,9 @@ export function AppWorkspace({
         onWindowMoveEnd: () => api?.endWindowMove(),
       }}
       visualNotes={visualNotes.canvas}
-      videoScrubPixelsPerFrame={preferences.videoScrubPixelsPerFrame}
+      videoPlayback={videoPlayback}
+      boostImageResource={boostImageResource}
+      isSpaceDown={isSpaceDown}
     />
 
     <PropertiesPanel
@@ -148,8 +156,6 @@ export function AppWorkspace({
       onClearCache={preferences.clearCache}
       onOpenLogsFolder={preferences.openLogsFolder}
       onCopyDiagnostics={preferences.copyDiagnostics}
-      videoScrubPixelsPerFrame={preferences.videoScrubPixelsPerFrame}
-      onVideoScrubPixelsPerFrameChange={preferences.setVideoScrubPixelsPerFrame}
     />
   </section>;
 }

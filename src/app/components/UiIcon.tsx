@@ -1,5 +1,5 @@
 import type { SVGProps } from 'react';
-import { UI_ICON_PATHS } from '../icons/uiIconPaths';
+import { UI_ICON_PATHS } from '../../canvas/icons/uiIconPaths';
 
 export type UiIconName =
   | 'arrow-down' | 'arrow-up' | 'caret-down' | 'check' | 'chevron-down' | 'chevron-right'

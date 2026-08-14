@@ -20,13 +20,8 @@ import {
   type ShortcutPreferences,
 } from '../../keyboardShortcuts';
 import type { CacheInfo } from '../../types';
-import {
-  VIDEO_SCRUB_PIXELS_PER_FRAME,
-  clampVideoScrubPixelsPerFrame,
-} from '../../canvas/renderer/VideoPerformancePolicy';
 
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
-const VIDEO_SCRUB_PIXELS_STORAGE_KEY = 'refcanvas.videoScrubPixelsPerFrame';
 
 interface UseAppPreferencesOptions {
   api: Window['refCanvas'];
@@ -51,16 +46,6 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     catch { return { ...DEFAULT_SHORTCUTS }; }
   });
   const [shortcutCaptureId, setShortcutCaptureId] = useState<ShortcutId>();
-  const [videoScrubPixelsPerFrame, setVideoScrubPixelsPerFrameState] = useState(() => {
-    try { return clampVideoScrubPixelsPerFrame(localStorage.getItem(VIDEO_SCRUB_PIXELS_STORAGE_KEY)); }
-    catch { return VIDEO_SCRUB_PIXELS_PER_FRAME; }
-  });
-  const setVideoScrubPixelsPerFrame = useCallback((value: number) => {
-    const next = clampVideoScrubPixelsPerFrame(value);
-    setVideoScrubPixelsPerFrameState(next);
-    try { localStorage.setItem(VIDEO_SCRUB_PIXELS_STORAGE_KEY, String(next)); }
-    catch { /* Persistence is optional. */ }
-  }, []);
   const colorPickerShortcut: ColorPickerShortcut = shortcuts.colorPicker === 'Alt' ? 'alt' : 's';
 
   useEffect(() => {
@@ -225,7 +210,5 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     clearCache,
     openLogsFolder,
     copyDiagnostics,
-    videoScrubPixelsPerFrame,
-    setVideoScrubPixelsPerFrame,
   };
 }
