@@ -26,8 +26,6 @@ export const logError = (event: string, error: unknown, data?: unknown) => rende
   error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error),
 });
 
-export const flushLogs = flush;
-
 if (typeof window !== 'undefined') {
   window.addEventListener('error', (event) => logError('window.error', event.error ?? event.message, {
     filename: event.filename, line: event.lineno, column: event.colno,

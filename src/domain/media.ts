@@ -1,10 +1,8 @@
 import type { AssetRecord, BoardItem, MediaKind, SceneItem, VideoClipFields, VideoItem } from '../types';
 
-export const IMAGE_FILE_PATTERN = /\.(png|jpe?g|webp|bmp|gif)$/i;
-export const VIDEO_FILE_PATTERN = /\.(mp4|webm|mov|m4v)$/i;
 export const MEDIA_FILE_PATTERN = /\.(png|jpe?g|webp|bmp|gif|mp4|webm|mov|m4v)$/i;
 
-export function isVideoMime(mimeType: string | undefined) {
+function isVideoMime(mimeType: string | undefined) {
   return Boolean(mimeType?.toLowerCase().startsWith('video/'));
 }
 
@@ -25,10 +23,6 @@ export function isVideoItem(
   if (item.mediaKind === 'image') return false;
   if (!assets || !item.assetId) return false;
   return isVideoAsset(assets[item.assetId]);
-}
-
-export function mediaKindOf(item: { mediaKind?: MediaKind; assetId?: string }, assets?: Record<string, AssetRecord>): MediaKind {
-  return isVideoItem(item, assets) ? 'video' : 'image';
 }
 
 /** Asset used for still display (board LOD / outline / export). */
@@ -52,9 +46,4 @@ export function toSceneItem(
 export function isSupportedMediaFile(file: Pick<File, 'name' | 'type'>) {
   if (file.type.startsWith('image/') || file.type.startsWith('video/')) return true;
   return MEDIA_FILE_PATTERN.test(file.name);
-}
-
-export function isSupportedVideoFile(file: Pick<File, 'name' | 'type'>) {
-  if (file.type.startsWith('video/')) return true;
-  return VIDEO_FILE_PATTERN.test(file.name);
 }

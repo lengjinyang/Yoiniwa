@@ -1,6 +1,5 @@
-export const IMAGE_CACHE_FORMAT_VERSION = 3;
-export const MIP_ALGORITHM_VERSION = 2;
-export const IMAGE_CACHE_DIRECTORY = `image-cache/v${IMAGE_CACHE_FORMAT_VERSION}`;
+const IMAGE_CACHE_FORMAT_VERSION = 3;
+const MIP_ALGORITHM_VERSION = 2;
 
 export const IMAGE_MIP_EDGES = [128, 256, 512, 1024, 2048, 4096, 8192, 16384] as const;
 export const IMAGE_TILE_SIZE = 512;
@@ -11,7 +10,6 @@ export const IMAGE_TILE_THRESHOLD_EDGE = 2048;
 // Whole-image uploads stay below the 8 MiB frame budget. Larger display
 // requirements use the committed 512px tile pyramid.
 export const IMAGE_WHOLE_TEXTURE_EDGE = 1024;
-export const LARGE_IMAGE_TILE_EDGE = 8192;
 export const MIP_OVERSAMPLE = 1.25;
 
 const CPU_IMAGE_CACHE_DEFAULT_BYTES = 512 * 1024 * 1024;
@@ -19,20 +17,11 @@ const CPU_IMAGE_CACHE_MIN_BYTES = 256 * 1024 * 1024;
 const CPU_IMAGE_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 export const GPU_IMAGE_CACHE_DEFAULT_BYTES = 512 * 1024 * 1024;
 export const GPU_IMAGE_CACHE_HARD_MAX_BYTES = 1024 * 1024 * 1024;
-export const DISK_IMAGE_CACHE_DEFAULT_BYTES = 10 * 1024 * 1024 * 1024;
 
 export const GPU_UPLOAD_MAX_ITEMS_PER_FRAME = 4;
 export const GPU_UPLOAD_MAX_BYTES_PER_FRAME = 8 * 1024 * 1024;
 export const GPU_UPLOAD_MAX_MS_PER_FRAME = 2;
 
-export const IMAGE_IMPORT_STAGE_WEIGHTS = {
-  metadata: 0.05,
-  hash: 0.10,
-  decode: 0.20,
-  mip: 0.50,
-  commit: 0.10,
-  scene: 0.05,
-} as const;
 
 export function imageRequestKey(assetId: string, mip: number, tileX?: number, tileY?: number) {
   const tile = tileX === undefined || tileY === undefined ? 'full' : `${tileX}:${tileY}`;

@@ -2,7 +2,7 @@ import { Graphics, Sprite, Texture } from 'pixi.js';
 import { assetResourceUrl } from '../../assetResourceUrl';
 import type { VideoItem } from '../../types';
 
-export function updateTransform(sprite: Sprite, item: VideoItem, textureWidth: number, textureHeight: number) {
+function updateTransform(sprite: Sprite, item: VideoItem, textureWidth: number, textureHeight: number) {
   sprite.visible = !item.hidden;
   sprite.position.set(item.x + item.width / 2, item.y + item.height / 2);
   sprite.anchor.set(0.5);

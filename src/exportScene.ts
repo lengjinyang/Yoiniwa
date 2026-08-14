@@ -5,8 +5,6 @@ import { imageSource } from './runtime/imageResources';
 import ExportSceneWorker from './workers/exportScene.worker?worker';
 import { markWorldBounds } from './visualNotes/VisualNoteGeometry';
 
-export { exportVisibility };
-
 function combinedBounds(items: SceneItem[], groups: ImageGroup[], visualNotes?: VisualNotesState) {
   const parts = [...(items.length ? [sceneBounds(items)] : []), ...groups.map(groupVisibleBounds),
     ...(visualNotes?.visible ? visualNotes.marks.flatMap((mark) => markWorldBounds(mark, items) ?? []) : [])];

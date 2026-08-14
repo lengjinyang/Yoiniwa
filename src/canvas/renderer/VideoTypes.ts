@@ -1,7 +1,7 @@
 import type { Sprite, Graphics, Texture, CanvasSource } from 'pixi.js';
 import type { VideoFrameSize } from './VideoPerformancePolicy';
 
-export type VideoPlaybackPhase = 'paused' | 'loading' | 'playing' | 'suspended' | 'proxy-pending' | 'error';
+type VideoPlaybackPhase = 'paused' | 'loading' | 'playing' | 'suspended' | 'proxy-pending' | 'error';
 export type VideoSeekInteractionKind = 'timeline' | 'canvas-jog';
 
 export interface VideoTransportState {
