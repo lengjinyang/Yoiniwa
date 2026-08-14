@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tauri dev",
     "typecheck:renderer": "tsc --noEmit",
-    "typecheck": "npm run typecheck:renderer",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
+    "typecheck": "npm run typecheck:renderer && npm run typecheck:tests",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc",
     "build:thumbnail-provider": "node scripts/build-thumbnail-provider.mjs",
     "lint": "eslint src scripts --max-warnings=0",

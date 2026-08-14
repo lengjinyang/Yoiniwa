@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createPhotoshopSyncQueue } from './photoshopSyncQueue';
+import type { PhotoshopColorSyncResult } from '../types';
+import { createPhotoshopSyncQueue, type PhotoshopSyncRequest } from './photoshopSyncQueue';
 
 describe('createPhotoshopSyncQueue', () => {
   it('coalesces overlapping syncs to the latest color', async () => {
     const calls: string[] = [];
-    const execute = vi.fn(async (request: { color: { hex: string }; returnFocus: boolean }) => {
+    const execute = vi.fn(async (request: PhotoshopSyncRequest): Promise<PhotoshopColorSyncResult> => {
       calls.push(request.color.hex);
       await new Promise((resolve) => setTimeout(resolve, 20));
       return {

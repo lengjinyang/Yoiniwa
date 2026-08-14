@@ -23,7 +23,11 @@ function keyboardEvent(key: string, code: string, modifiers: Partial<KeyboardEve
   } as unknown as KeyboardEvent;
 }
 
-function shortcutState(commandIds: AppShortcutCommandId[], collaborationSpaceActive = false) {
+function shortcutState(
+  commandIds: AppShortcutCommandId[],
+  collaborationSpaceActive = false,
+  hasInternalClipboard = true,
+) {
   const executed: AppShortcutCommandId[] = [];
   const commands = createAppShortcutCommandRegistry(commandIds.map((id) => ({
     id,
@@ -33,6 +37,7 @@ function shortcutState(commandIds: AppShortcutCommandId[], collaborationSpaceAct
     shortcuts: DEFAULT_SHORTCUTS,
     activeColorPickerShortcut: 'S',
     collaborationSpaceActive,
+    hasInternalClipboard,
     commands,
   };
   return { state, executed };
@@ -66,5 +71,19 @@ describe('useAppShortcuts dispatch boundary', () => {
     const { state, executed } = shortcutState(['ui.escape']);
     dispatchAppShortcutKeyDown(state, keyboardEvent('Escape', 'Escape'));
     expect(executed).toEqual(['ui.escape']);
+  });
+
+  it('lets Ctrl+V fall through to the system clipboard when nothing was copied in-app', () => {
+    const { state, executed } = shortcutState(['edit.paste'], false, false);
+    const event = keyboardEvent('v', 'KeyV', { ctrlKey: true });
+    dispatchAppShortcutKeyDown(state, event);
+    expect(executed).toEqual([]);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('handles Ctrl+V internally once the in-app clipboard holds something', () => {
+    const { state, executed } = shortcutState(['edit.paste'], false, true);
+    dispatchAppShortcutKeyDown(state, keyboardEvent('v', 'KeyV', { ctrlKey: true }));
+    expect(executed).toEqual(['edit.paste']);
   });
 });
