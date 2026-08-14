@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeImportedItems } from './importPlacement';
 import { itemBounds, sceneBounds } from './scene';
-import type { ImageItem } from './types';
+import type { ImageItem } from '../types';
 
 const image = (id: string, width: number, height: number): ImageItem => ({
   id, name: id, sourceType: 'drop', dataUrl: '', naturalWidth: width, naturalHeight: height,

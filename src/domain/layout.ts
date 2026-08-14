@@ -1,4 +1,4 @@
-import type { ImageItem } from './types';
+import type { BoardItem } from '../types';
 import { itemBounds } from './scene';
 
 export type LayoutAction =
@@ -6,13 +6,13 @@ export type LayoutAction =
   | 'distribute-horizontal' | 'distribute-vertical'
   | 'normalize-width' | 'normalize-height' | 'normalize-size';
 
-function moveVisualBounds(item: ImageItem, x?: number, y?: number) {
+function moveVisualBounds(item: BoardItem, x?: number, y?: number) {
   const bounds = itemBounds(item);
   if (x !== undefined) item.x += x - bounds.x;
   if (y !== undefined) item.y += y - bounds.y;
 }
 
-function resizeAroundCenter(item: ImageItem, width: number, height: number) {
+function resizeAroundCenter(item: BoardItem, width: number, height: number) {
   const centerX = item.x + item.width / 2;
   const centerY = item.y + item.height / 2;
   item.width = width;
@@ -25,7 +25,7 @@ function boundsOverlap(a: ReturnType<typeof itemBounds>, b: ReturnType<typeof it
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
-function separateIfOverlapping(items: ImageItem[], padding: number) {
+function separateIfOverlapping<T extends BoardItem>(items: T[], padding: number) {
   const values = items.map((item) => ({ item, bounds: itemBounds(item) }));
   const overlaps = values.some((left, index) => values.slice(index + 1).some((right) => boundsOverlap(left.bounds, right.bounds)));
   if (!overlaps) return;
@@ -42,7 +42,7 @@ function separateIfOverlapping(items: ImageItem[], padding: number) {
   });
 }
 
-export function applyLayout(items: ImageItem[], action: LayoutAction, padding: number, targetAspect = 1.6): ImageItem[] {
+export function applyLayout<T extends BoardItem>(items: T[], action: LayoutAction, padding: number, targetAspect = 1.6): T[] {
   if (!items.length) return items;
   const result = items.map((item) => ({ ...item }));
   const gapSize = Math.max(0, padding);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addMemberToGroup, applyNonDestructiveCrop, createGroupFrame, createScene, groupVisibleBounds, GROUP_TITLE_HEIGHT, moveGroupWithContents, normalizeScene, reconcileMemberBounds, reorderImages, resetImageTransform, resetNonDestructiveCrop, rotateItemsAsGroup, scaleItemsAsGroup, topmostVisibleGroupAtPoint, translateItems } from './scene';
-import type { ImageGroup, ImageItem } from './types';
+import type { ImageGroup, ImageItem } from '../types';
 
 const image = (id: string, x: number, width = 100): ImageItem => ({
   id, name: id, sourceType: 'file', dataUrl: '', naturalWidth: 1000, naturalHeight: 500,

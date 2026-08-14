@@ -1,6 +1,6 @@
 import { sceneBounds } from './scene';
-import type { AssetRecord, Scene } from './types';
-import { moveSceneMark } from './visualNotes/VisualNoteGeometry';
+import type { AssetRecord, Scene } from '../types';
+import { moveSceneMark } from './visualNoteGeometry';
 
 export interface SceneMergeResult {
   imageIds: string[];

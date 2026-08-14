@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createGroupFrame, createScene } from './scene';
 import { mergeSceneInto } from './sceneMerge';
-import type { AssetRecord, ImageItem } from './types';
+import type { AssetRecord, ImageItem } from '../types';
 
 const asset: AssetRecord = {
   id: 'a'.repeat(64), hash: 'a'.repeat(64), mimeType: 'image/png', byteLength: 10,

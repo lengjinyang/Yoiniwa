@@ -1,8 +1,8 @@
-import { applyLayout, type LayoutAction } from '../layout';
-import { fitAutoGroupsToContents, itemBounds, memberBounds, normalizeZIndexes, reconcileMemberBounds } from '../scene';
-import type { ImageItem, Scene } from '../types';
+import { applyLayout, type LayoutAction } from './layout';
+import { fitAutoGroupsToContents, itemBounds, memberBounds, normalizeZIndexes, reconcileMemberBounds } from './scene';
+import type { Scene, SceneItemPatch } from '../types';
 
-export type ImageChange = Partial<ImageItem> & { id: string };
+export type ImageChange = SceneItemPatch;
 
 export function deleteSceneSelection(scene: Scene, imageIds: readonly string[]) {
   const images = new Set(imageIds);

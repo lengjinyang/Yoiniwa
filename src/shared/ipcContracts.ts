@@ -19,7 +19,6 @@ export interface IpcContractMap {
   'images:register-bytes': IpcContract<[name: string, data: ArrayBuffer, sourceType?: ImageItem['sourceType']], ImportedImage>;
   'images:asset-path': IpcContract<[assetId: string], string>;
   'videos:ensure-playback': IpcContract<[assetId: string], VideoPreparationResult>;
-  'videos:ensure-scrub': IpcContract<[assetId: string], VideoPreparationResult>;
   'videos:cancel-playback': IpcContract<[assetId: string], void>;
   'images:prewarm': IpcContract<[ids: string[], requestId: string], { canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   'images:performance-stats': IpcContract<[], ImagePipelinePerformanceStats>;

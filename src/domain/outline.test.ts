@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createScene } from './scene';
 import { groupOrDescendantMatches, outlineObjectMatches, sceneTagCatalog } from './outline';
-import type { ImageGroup, ImageItem } from './types';
+import type { ImageGroup, ImageItem } from '../types';
 
 const image = (id: string, tags?: string[]): ImageItem => ({
   id, name: '城市草图', sourceType: 'file', naturalWidth: 100, naturalHeight: 100,

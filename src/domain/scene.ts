@@ -1,6 +1,7 @@
-import type { CropRect, GroupMember, ImageGroup, ImageItem, Scene } from './types';
+import type { BoardItem, CropRect, GroupMember, ImageGroup, Scene } from '../types';
 import { normalizeTags } from './tags';
-import { markWorldBounds, moveSceneMark } from './visualNotes/VisualNoteGeometry';
+import { toSceneItem } from './media';
+import { markWorldBounds, moveSceneMark } from './visualNoteGeometry';
 
 export const createScene = (): Scene => ({
   format: 'refcanvas',
@@ -31,10 +32,10 @@ export const cloneScene = (scene: Scene): Scene => ({
   },
 });
 
-export const normalizeZIndexes = (items: ImageItem[]) =>
+export const normalizeZIndexes = (items: BoardItem[]) =>
   [...items].sort((a, b) => a.zIndex - b.zIndex).map((item, zIndex) => ({ ...item, zIndex }));
 
-export function reorderImages(items: ImageItem[], selectedIds: string[], toFront: boolean) {
+export function reorderImages(items: BoardItem[], selectedIds: string[], toFront: boolean) {
   const selectedSet = new Set(selectedIds);
   const ordered = [...items].sort((a, b) => a.zIndex - b.zIndex);
   const selected = ordered.filter((item) => selectedSet.has(item.id));
@@ -43,7 +44,7 @@ export function reorderImages(items: ImageItem[], selectedIds: string[], toFront
     .map((item, zIndex) => ({ ...item, zIndex }));
 }
 
-export const itemBounds = (item: ImageItem) => {
+export const itemBounds = (item: BoardItem) => {
   const radians = item.rotation * Math.PI / 180;
   const width = Math.abs(item.width * Math.cos(radians)) + Math.abs(item.height * Math.sin(radians));
   const height = Math.abs(item.width * Math.sin(radians)) + Math.abs(item.height * Math.cos(radians));
@@ -52,7 +53,7 @@ export const itemBounds = (item: ImageItem) => {
   return { x: centerX - width / 2, y: centerY - height / 2, width, height };
 };
 
-export const sceneBounds = (items: ImageItem[]) => {
+export const sceneBounds = (items: BoardItem[]) => {
   if (!items.length) return { x: 0, y: 0, width: 1, height: 1 };
   const bounds = items.map(itemBounds);
   const left = Math.min(...bounds.map((item) => item.x));
@@ -62,11 +63,11 @@ export const sceneBounds = (items: ImageItem[]) => {
   return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
 };
 
-export function translateItems(items: ImageItem[], deltaX: number, deltaY: number) {
+export function translateItems(items: BoardItem[], deltaX: number, deltaY: number) {
   return items.map((item) => ({ id: item.id, x: item.x + deltaX, y: item.y + deltaY }));
 }
 
-export function scaleItemsAsGroup(items: ImageItem[], factor: number) {
+export function scaleItemsAsGroup(items: BoardItem[], factor: number) {
   if (!items.length) return [];
   const bounds = sceneBounds(items);
   const groupCenterX = bounds.x + bounds.width / 2;
@@ -80,7 +81,7 @@ export function scaleItemsAsGroup(items: ImageItem[], factor: number) {
   });
 }
 
-export function rotateItemsAsGroup(items: ImageItem[], deltaDegrees: number) {
+export function rotateItemsAsGroup(items: BoardItem[], deltaDegrees: number) {
   if (!items.length) return [];
   const bounds = sceneBounds(items);
   const groupCenterX = bounds.x + bounds.width / 2;
@@ -378,6 +379,9 @@ export function normalizeScene(scene: Scene): Scene {
       collapsed: false, sizeLocked: false, contentsHidden: false, autoFit: true, members: legacyMembers,
     };
   });
+  scene.items.forEach((item, index) => {
+    scene.items[index] = toSceneItem(item, scene.assets);
+  });
   scene.items.forEach((item) => {
     const tags = normalizeTags(item.tags);
     if (tags) item.tags = tags;
@@ -413,7 +417,7 @@ export function normalizeScene(scene: Scene): Scene {
 
 /** Compatibility wrapper for callers that only knew about group frame migration. */
 
-export function applyNonDestructiveCrop(item: ImageItem, requestedCrop: CropRect) {
+export function applyNonDestructiveCrop(item: BoardItem, requestedCrop: CropRect) {
   const x = Math.max(0, Math.min(item.naturalWidth - 1, requestedCrop.x));
   const y = Math.max(0, Math.min(item.naturalHeight - 1, requestedCrop.y));
   const crop = {
@@ -436,11 +440,11 @@ export function applyNonDestructiveCrop(item: ImageItem, requestedCrop: CropRect
   item.crop = crop;
 }
 
-export function resetNonDestructiveCrop(item: ImageItem) {
+export function resetNonDestructiveCrop(item: BoardItem) {
   applyNonDestructiveCrop(item, { x: 0, y: 0, width: item.naturalWidth, height: item.naturalHeight });
 }
 
-export function resetImageTransform(item: ImageItem) {
+export function resetImageTransform(item: BoardItem) {
   const centerX = item.x + item.width / 2;
   const centerY = item.y + item.height / 2;
   const scale = Math.min(1, 480 / Math.max(item.naturalWidth, item.naturalHeight));

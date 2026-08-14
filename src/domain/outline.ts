@@ -1,6 +1,6 @@
-import type { ImageGroup, ImageItem, Scene } from './types';
+import type { ImageGroup, SceneItem, Scene } from '../types';
 
-export type OutlineObject = ImageItem | ImageGroup;
+export type OutlineObject = SceneItem | ImageGroup;
 
 export interface OutlineFilter {
   query?: string;
@@ -30,10 +30,10 @@ export function outlineObjectMatches(
 ) {
   if (filter.types && !filter.types.has(type)) return false;
   const group = object as ImageGroup;
-  const hidden = type === 'group' ? group.contentsHidden : Boolean((object as ImageItem).hidden);
+  const hidden = type === 'group' ? group.contentsHidden : Boolean((object as SceneItem).hidden);
   if (filter.visibility === 'visible' && hidden) return false;
   if (filter.visibility === 'hidden' && !hidden) return false;
-  const locked = type === 'group' ? group.sizeLocked : Boolean((object as ImageItem).locked);
+  const locked = type === 'group' ? group.sizeLocked : Boolean((object as SceneItem).locked);
   if (filter.lock === 'locked' && !locked) return false;
   if (filter.lock === 'unlocked' && locked) return false;
   const query = filter.query?.trim().toLocaleLowerCase() ?? '';

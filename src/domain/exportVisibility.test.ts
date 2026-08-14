@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { exportVisibility } from './exportScene';
-import type { ImageGroup } from './types';
+import { exportVisibility } from './exportVisibility';
+import type { ImageGroup } from '../types';
 
 const group = (id: string, members: ImageGroup['members'] = []): ImageGroup => ({
   id, name: id, x: 0, y: 0, width: 200, height: 120,

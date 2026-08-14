@@ -1,9 +1,9 @@
 import { applyLayout } from './layout';
 import { sceneBounds } from './scene';
-import type { ImageItem, Viewport } from './types';
+import type { BoardItem, Viewport } from '../types';
 
-export function arrangeImportedItems(
-  items: ImageItem[], viewport: Viewport, screenX: number, screenY: number,
+export function arrangeImportedItems<T extends BoardItem>(
+  items: T[], viewport: Viewport, screenX: number, screenY: number,
   tightlyPack: boolean, padding: number, targetAspect: number,
 ) {
   const arranged = tightlyPack && items.length > 1

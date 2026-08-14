@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createScene } from '../scene';
+import { createScene } from './scene';
 import { applyImageChanges, deleteSceneSelection, moveImageLayer } from './sceneCommands';
 
 const image = (id: string, x: number, zIndex: number) => ({

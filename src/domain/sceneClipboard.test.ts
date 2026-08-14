@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { captureSceneSelection, pasteScenePayload } from './sceneClipboard';
 import { createGroupFrame, createScene } from './scene';
-import type { ImageItem } from './types';
+import type { ImageItem } from '../types';
 
 const image = (id: string, x: number): ImageItem => ({
   id, name: id, sourceType: 'file', dataUrl: '', naturalWidth: 100, naturalHeight: 100,

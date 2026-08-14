@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { displayAssetId, isSupportedMediaFile, isVideoAsset, isVideoItem } from './media';
-import type { AssetRecord, ImageItem } from './types';
+import { displayAssetId, isSupportedMediaFile, isVideoAsset, isVideoItem, toSceneItem } from './media';
+import type { AssetRecord } from '../types';
 
 describe('media helpers', () => {
   it('detects video files by extension and mime', () => {
@@ -14,10 +14,28 @@ describe('media helpers', () => {
     const item = {
       assetId: 'video-id',
       posterAssetId: 'poster-id',
-      mediaKind: 'video',
-    } as Pick<ImageItem, 'assetId' | 'posterAssetId' | 'mediaKind'>;
+      mediaKind: 'video' as const,
+    };
     expect(displayAssetId(item)).toBe('poster-id');
     expect(displayAssetId({ assetId: 'image-id', mediaKind: 'image' })).toBe('image-id');
+  });
+
+  it('stamps independent video nodes and strips clip fields from stills', () => {
+    const still = toSceneItem({
+      id: 'still', name: 'photo', sourceType: 'file', naturalWidth: 10, naturalHeight: 10,
+      x: 0, y: 0, width: 10, height: 10, rotation: 0, flipX: false, flipY: false, opacity: 1,
+      zIndex: 0, locked: false, crop: { x: 0, y: 0, width: 10, height: 10 },
+      muted: true, loop: false, posterAssetId: 'poster',
+    });
+    expect(still).toEqual(expect.objectContaining({ id: 'still' }));
+    expect(still).not.toHaveProperty('muted');
+    expect(still).not.toHaveProperty('posterAssetId');
+    expect(toSceneItem({
+      id: 'clip', name: 'clip', sourceType: 'file', assetId: 'a', naturalWidth: 10, naturalHeight: 10,
+      x: 0, y: 0, width: 10, height: 10, rotation: 0, flipX: false, flipY: false, opacity: 1,
+      zIndex: 0, locked: false, crop: { x: 0, y: 0, width: 10, height: 10 },
+      mediaKind: 'video', muted: false, loop: true, posterAssetId: 'poster', durationSec: 4,
+    })).toMatchObject({ mediaKind: 'video', muted: false, loop: true, posterAssetId: 'poster', durationSec: 4 });
   });
 
   it('detects video items from mediaKind or asset mime', () => {

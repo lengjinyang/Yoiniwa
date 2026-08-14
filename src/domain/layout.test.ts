@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyLayout } from './layout';
 import { applyNonDestructiveCrop, createScene, itemBounds, resetNonDestructiveCrop, sceneBounds, validateScene } from './scene';
-import type { ImageItem } from './types';
+import type { ImageItem } from '../types';
 
 const item = (id: string, x: number, y: number, width: number, height: number): ImageItem => ({
   id, name: id, sourceType: 'file', dataUrl: 'data:image/png;base64,', naturalWidth: width, naturalHeight: height,
