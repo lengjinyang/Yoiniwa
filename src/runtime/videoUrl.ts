@@ -1,4 +1,5 @@
-import { assetResourceUrl } from './assetResourceUrl';
+import { assetResourceUrl } from '../assetResourceUrl';
+import type { VideoPreparationResult } from '../types';
 
 type PlaybackUrlKind = 'original' | 'proxy';
 
@@ -7,6 +8,16 @@ const fpsHints = new Map<string, number>();
 const frameCountHints = new Map<string, number>();
 const pendingProxy = new Set<string>();
 const rejectedOriginals = new Set<string>();
+
+export interface VideoPlaybackLookup {
+  ensurePlayback(assetId: string): Promise<VideoPreparationResult>;
+}
+
+export function videoPlaybackLookupFromApi(api: Window['refCanvas'] | undefined): VideoPlaybackLookup | undefined {
+  return api?.ensureVideoPlayback
+    ? { ensurePlayback: (assetId) => api.ensureVideoPlayback!(assetId) }
+    : undefined;
+}
 
 export function cachedVideoFps(assetId: string) {
   return fpsHints.get(assetId) ?? playbackUrlCache.get(assetId)?.fps ?? 30;
@@ -37,7 +48,7 @@ function originalProtocolUrl(assetId: string) {
  * Try the original asset first so WebView-supported codecs start immediately.
  * A decode failure marks that asset for the H.264 proxy fallback.
  */
-export async function resolveVideoPlaybackUrl(assetId: string, api?: Window['refCanvas']) {
+export async function resolveVideoPlaybackUrl(assetId: string, playback?: VideoPlaybackLookup) {
   const cached = playbackUrlCache.get(assetId);
   if (cached?.url) return cached.url;
 
@@ -52,9 +63,9 @@ export async function resolveVideoPlaybackUrl(assetId: string, api?: Window['ref
     return url;
   }
 
-  if (api?.ensureVideoPlayback) {
+  if (playback?.ensurePlayback) {
     try {
-      const result = await api.ensureVideoPlayback(assetId);
+      const result = await playback.ensurePlayback(assetId);
       rememberVideoTiming(assetId, result.fps, result.frameCount ?? undefined);
       if (result.ready) {
         pendingProxy.delete(assetId);

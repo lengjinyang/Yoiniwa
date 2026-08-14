@@ -1,15 +1,10 @@
-import type { ImageItem, Viewport } from '../../types';
+import type { BoardItem, Viewport } from '../../types';
 
 export const VIDEO_MAX_PLAYBACK_INTENTS = 4;
 const VIDEO_FRAME_UPLOAD_BUDGET = 16 * 1024 * 1024;
 export const VIDEO_POSTER_RELEASE_DELAY_MS = 1500;
 export const VIDEO_DECODER_RELEASE_DELAY_MS = 2000;
-export const VIDEO_SCRUB_PIXELS_PER_FRAME = 24;
-export const VIDEO_SCRUB_PIXELS_PER_FRAME_MIN = 12;
-export const VIDEO_SCRUB_PIXELS_PER_FRAME_MAX = 48;
-export const VIDEO_SCRUB_CLICK_SLOP_PX = 4;
 export const VIDEO_SURFACE_DOWNSIZE_DELAY_MS = 250;
-export const VIDEO_SCRUB_IDLE_RESET_MS = 80;
 
 const FRAME_EDGE_BUCKETS = [256, 512, 1024, 1536, 2048, 3072, 4096, 6144, 8192] as const;
 
@@ -21,7 +16,7 @@ export interface VideoFrameSize {
 }
 
 export function videoFrameSize(
-  item: ImageItem,
+  item: BoardItem,
   viewport: Viewport,
   devicePixelRatio: number,
   maxTextureSize = 8192,
@@ -64,6 +59,12 @@ export function videoFrameUploadDue(
   return now - lastUploadAt >= 1000 / 30 - 1.25;
 }
 
+export function videoPresentedFrameIsNew(presentedTime: number, lastUploadedTime: number) {
+  if (!Number.isFinite(presentedTime)) return false;
+  if (!Number.isFinite(lastUploadedTime) || lastUploadedTime < 0) return true;
+  return Math.abs(presentedTime - lastUploadedTime) > 1e-6;
+}
+
 export function normalizeVideoFps(value: number) {
   const safe = Number.isFinite(value) && value >= 1 && value <= 240 ? value : 30;
   const standards = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60, 120];
@@ -72,7 +73,7 @@ export function normalizeVideoFps(value: number) {
   return Math.abs(closest - safe) <= 0.2 ? closest : Math.round(safe * 1000) / 1000;
 }
 
-export function videoFrameScrubState(currentTime: number, duration: number, fps: number, exactFrameCount?: number) {
+export function videoFrameState(currentTime: number, duration: number, fps: number, exactFrameCount?: number) {
   const safeFps = normalizeVideoFps(fps);
   const safeDuration = Math.max(0, Number.isFinite(duration) ? duration : 0);
   const frameCount = exactFrameCount !== undefined && Number.isFinite(exactFrameCount) && exactFrameCount > 0
@@ -84,7 +85,7 @@ export function videoFrameScrubState(currentTime: number, duration: number, fps:
 }
 
 export function videoFrameTime(frame: number, duration: number, fps: number, exactFrameCount?: number) {
-  const state = videoFrameScrubState(0, duration, fps, exactFrameCount);
+  const state = videoFrameState(0, duration, fps, exactFrameCount);
   const targetFrame = Math.max(0, Math.min(state.maxFrame, Math.round(frame)));
   // Seek into the middle of the frame's presentation interval. Exact frame
   // boundaries are vulnerable to timestamp rounding and can resolve to the
@@ -105,101 +106,33 @@ export function resolvedVideoDuration(
   return 0;
 }
 
-export function clampVideoScrubPixelsPerFrame(value: unknown) {
-  if (value === null || value === undefined || value === '') return VIDEO_SCRUB_PIXELS_PER_FRAME;
-  const pixels = Math.round(Number(value));
-  if (!Number.isFinite(pixels)) return VIDEO_SCRUB_PIXELS_PER_FRAME;
-  return Math.max(
-    VIDEO_SCRUB_PIXELS_PER_FRAME_MIN,
-    Math.min(VIDEO_SCRUB_PIXELS_PER_FRAME_MAX, pixels),
-  );
-}
-
-/** One displayed frame per this many pointer pixels, including long clips. */
-export function videoScrubPixelsPerFrame(
-  _spanPx?: number,
-  _maxFrame?: number,
-  pixelsPerFrame = VIDEO_SCRUB_PIXELS_PER_FRAME,
-) {
-  return clampVideoScrubPixelsPerFrame(pixelsPerFrame);
-}
-
-export function videoScrubFrameAtDelta(
-  startFrame: number,
-  deltaX: number,
-  maxFrame: number,
-  pixelsPerFrame = VIDEO_SCRUB_PIXELS_PER_FRAME,
-) {
-  const frameDelta = Math.trunc(deltaX / Math.max(1e-6, pixelsPerFrame));
-  return Math.max(0, Math.min(Math.max(0, maxFrame), Math.round(startFrame) + frameDelta));
-}
-
-export function videoScrubStrideForVelocity(pixelsPerMs: number) {
-  const speed = Math.abs(Number.isFinite(pixelsPerMs) ? pixelsPerMs : 0);
-  if (speed < 0.35) return 1;
-  if (speed < 0.9) return 2;
-  if (speed < 1.8) return 4;
-  return 8;
-}
-
-export function videoScrubTargets(lastFrame: number, desiredFrame: number, stride: number) {
-  const current = Math.round(lastFrame);
-  const desired = Math.round(desiredFrame);
-  if (current === desired) return [];
-  const direction = Math.sign(desired - current);
-  if (stride > 1) {
-    const distance = Math.abs(desired - current);
-    if (distance < stride) return [];
-    return [current + direction * Math.floor(distance / stride) * stride];
-  }
-  return Array.from({ length: Math.abs(desired - current) }, (_, index) => current + direction * (index + 1));
-}
-
-/** Keep live scrub on the latest playhead; sequential stepping still appends. */
-export function videoLiveScrubQueue(
-  queue: Array<{ frameIndex: number; sequential: boolean }>,
-  target: number,
-  sequential: boolean,
-) {
-  if (sequential) {
-    if (queue.at(-1)?.frameIndex === target) return queue;
-    return [...queue, { frameIndex: target, sequential: true }];
-  }
-  return [{ frameIndex: target, sequential: false }];
-}
-
-export function videoCloserScrubFrame(candidate: number, displayed: number, target: number) {
-  return Math.abs(candidate - target) <= Math.abs(displayed - target);
-}
-
 export function videoFramePhaseUploadable(phase: string) {
-  return phase === 'playing' || phase === 'paused';
+  return phase === 'playing' || phase === 'paused' || phase === 'loading';
 }
 
-export function videoScrubSeekTarget(inFlight: boolean, pendingTime: number | undefined) {
-  return !inFlight && pendingTime !== undefined && Number.isFinite(pendingTime) ? pendingTime : undefined;
+/** Metadata is not enough — drawImage of a not-yet-decoded video paints black. */
+export function videoHasDecodedFrame(videoWidth: number, videoHeight: number, readyState: number) {
+  return videoWidth > 0 && videoHeight > 0 && readyState >= 2;
 }
 
-export function videoResponsiveSeekReady(inFlight: boolean, pendingFrame: number | undefined) {
-  return !inFlight && pendingFrame !== undefined;
-}
-
-export function videoSeekAlreadyAtTime(currentTime: number, targetTime: number, fps: number) {
-  const frameDuration = 1 / Math.max(1, normalizeVideoFps(fps));
-  return Math.abs(currentTime - targetTime) < frameDuration * 0.2;
-}
-
-export const VIDEO_SCRUB_NEARBY_CACHE_RADIUS = 2;
-export const VIDEO_SCRUB_LIVE_PREVIEW_RADIUS = 16;
-export const VIDEO_SCRUB_LIVE_DECODE_CANCEL_FRAMES = 2;
-
-export function videoShouldCancelLiveDecode(
-  decodingFrame: number | undefined,
-  target: number,
-  threshold = VIDEO_SCRUB_LIVE_DECODE_CANCEL_FRAMES,
+/** After a surface rebuild, keep the paused pixels. Poster is first-frame only. */
+export function videoShouldBindPosterFallback(
+  hasLiveVideo: boolean,
+  copiedPausedFrame: boolean,
+  displayedFrame: number,
 ) {
-  if (decodingFrame === undefined) return false;
-  return Math.abs(target - decodingFrame) > threshold;
+  if (hasLiveVideo || copiedPausedFrame) return false;
+  return displayedFrame <= 0;
+}
+
+/** Keep showing the poster until a decoded frame is actually on the sprite. */
+export function videoShouldShowPoster(
+  phase: string,
+  showingLiveFrame: boolean,
+  displayedFrame: number,
+) {
+  if (phase === 'playing' || showingLiveFrame) return false;
+  return displayedFrame <= 0;
 }
 
 export function oldestPlaybackIntent<T extends { intentOrder: number }>(values: readonly T[]) {

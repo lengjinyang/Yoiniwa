@@ -1,6 +1,6 @@
-import { isVideoAsset } from './media';
+import { isVideoAsset } from './domain/media';
 import type { AssetRecord, ImportedImage } from './types';
-import { resolveVideoPlaybackUrl } from './videoUrl';
+import { resolveVideoPlaybackUrl, videoPlaybackLookupFromApi } from './runtime/videoUrl';
 
 interface ProbedVideo {
   width: number;
@@ -62,7 +62,7 @@ function loadVideoElement(url: string) {
 }
 
 async function probeVideoAsset(asset: AssetRecord, api?: Window['refCanvas']): Promise<ProbedVideo> {
-  let url = await resolveVideoPlaybackUrl(asset.id, api);
+  let url = await resolveVideoPlaybackUrl(asset.id, videoPlaybackLookupFromApi(api));
   if (!url && api?.assetFilePath) {
     const { convertFileSrc } = await import('@tauri-apps/api/core');
     url = convertFileSrc(await api.assetFilePath(asset.id));
