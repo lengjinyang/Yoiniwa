@@ -111,11 +111,6 @@ pub fn videos_ensure_playback(state: State<'_, AppState>, asset_id: String) -> C
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn videos_ensure_scrub(state: State<'_, AppState>, asset_id: String) -> CommandResult<Value> {
-    command_result(state.assets.ensure_video_scrub(&asset_id))
-}
-
-#[tauri::command(rename_all = "camelCase")]
 pub fn videos_cancel_playback(state: State<'_, AppState>, asset_id: String) -> CommandResult<()> {
     state.assets.cancel_video_playback(&asset_id);
     Ok(())

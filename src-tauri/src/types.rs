@@ -82,6 +82,8 @@ pub struct ImageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grayscale: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grayscale_contrast: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
@@ -371,6 +373,12 @@ pub struct ImagePipelinePerformanceStats {
     pub proxy_active: u64,
     #[serde(default)]
     pub proxy_queued: u64,
+    #[serde(default)]
+    pub video_decode_active: u64,
+    #[serde(default)]
+    pub video_decode_requests: u64,
+    #[serde(default)]
+    pub video_decode_ms: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -477,4 +485,65 @@ pub struct ProjectStorageStats {
     pub recovered: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery_source: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_item_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": "a",
+            "name": "shot",
+            "sourceType": "file",
+            "assetId": "abc",
+            "posterAssetId": "poster",
+            "mediaKind": "video",
+            "durationSec": 1.5,
+            "muted": true,
+            "loop": false,
+            "naturalWidth": 10,
+            "naturalHeight": 10,
+            "x": 0,
+            "y": 0,
+            "width": 10,
+            "height": 10,
+            "rotation": 0,
+            "flipX": false,
+            "flipY": false,
+            "opacity": 1,
+            "zIndex": 1,
+            "locked": false,
+            "hidden": false,
+            "grayscale": true,
+            "grayscaleContrast": 1.4,
+            "tags": ["ref"],
+            "groupId": "g1",
+            "crop": { "x": 0, "y": 0, "width": 10, "height": 10 }
+        })
+    }
+
+    #[test]
+    fn image_item_roundtrip_keeps_frontend_optional_fields() {
+        let item: ImageItem = serde_json::from_value(sample_item_json()).expect("deserialize ImageItem");
+        assert_eq!(item.grayscale_contrast, Some(1.4));
+        let out = serde_json::to_value(&item).expect("serialize ImageItem");
+        for key in [
+            "posterAssetId",
+            "mediaKind",
+            "durationSec",
+            "muted",
+            "loop",
+            "grayscale",
+            "grayscaleContrast",
+            "hidden",
+            "tags",
+            "groupId",
+        ] {
+            assert!(out.get(key).is_some(), "missing {key} after Rust scene roundtrip");
+        }
+        assert_eq!(out["grayscaleContrast"], 1.4);
+        assert_eq!(out["loop"], false);
+        assert_eq!(out["posterAssetId"], "poster");
+    }
 }
