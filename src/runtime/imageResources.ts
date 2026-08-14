@@ -144,12 +144,31 @@ export function cropForResource(item: Pick<BoardItem, 'crop' | 'naturalWidth' | 
   };
 }
 
-function trimUnusedCache() {
-  const unused = [...cache.entries()].filter(([, entry]) => entry.refs === 0).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-  let bytes = [...cache.values()].reduce((total, entry) => total + entry.bytes, 0);
+/**
+ * Pick the least-recently-used unreferenced entries to drop until the unused
+ * bytes fit the budget. Retained entries are deliberately excluded from the
+ * total: they cannot be evicted here, so counting them would keep the budget
+ * permanently exceeded and drain every unused entry on each trim.
+ */
+export function selectUnusedEvictions<K>(
+  entries: Iterable<[K, { refs: number; bytes: number; lastUsed: number }]>,
+  maxUnusedBytes: number,
+) {
+  const unused = [...entries].filter(([, entry]) => entry.refs === 0).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+  let bytes = unused.reduce((total, [, entry]) => total + entry.bytes, 0);
+  const evicted: K[] = [];
   for (const [key, entry] of unused) {
-    if (bytes <= MAX_UNUSED_BYTES) break;
+    if (bytes <= maxUnusedBytes) break;
     bytes -= entry.bytes;
+    evicted.push(key);
+  }
+  return evicted;
+}
+
+function trimUnusedCache() {
+  for (const key of selectUnusedEvictions(cache, MAX_UNUSED_BYTES)) {
+    const entry = cache.get(key);
+    if (!entry) continue;
     entry.image.src = '';
     cache.delete(key);
   }

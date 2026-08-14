@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boundedPreviewSize, chooseImageVariant, cropForResource, deleteCacheEntryIfCurrent, imageSource, imageVariantCandidates, releaseCacheEntryReference } from './imageResources';
+import { boundedPreviewSize, chooseImageVariant, cropForResource, deleteCacheEntryIfCurrent, imageSource, imageVariantCandidates, releaseCacheEntryReference, selectUnusedEvictions } from './imageResources';
 
 describe('image resource levels', () => {
   it('uses derived resources only for distant images', () => {
@@ -48,5 +48,38 @@ describe('image resource levels', () => {
     expect(replacement.refs).toBe(2);
     expect(deleteCacheEntryIfCurrent(entries, 'asset', replacement)).toBe(true);
     expect(entries.has('asset')).toBe(false);
+  });
+});
+
+describe('unused image cache eviction', () => {
+  const entry = (refs: number, bytes: number, lastUsed: number) => ({ refs, bytes, lastUsed });
+
+  it('drops the oldest unused entries only until the unused bytes fit the budget', () => {
+    const entries = new Map([
+      ['old', entry(0, 40, 1)],
+      ['recent', entry(0, 40, 9)],
+      ['middle', entry(0, 40, 5)],
+    ]);
+    expect(selectUnusedEvictions(entries, 100)).toEqual(['old']);
+  });
+
+  it('keeps unused entries when retained images alone exceed the budget', () => {
+    // The regression: counting retained bytes against MAX_UNUSED_BYTES made the
+    // loop never reach the break, so a big board wiped its whole unused cache
+    // and re-fetched on every pan.
+    const entries = new Map([
+      ['retained', entry(3, 5000, 1)],
+      ['unused-old', entry(0, 10, 2)],
+      ['unused-new', entry(0, 10, 3)],
+    ]);
+    expect(selectUnusedEvictions(entries, 100)).toEqual([]);
+  });
+
+  it('never evicts referenced entries even when they are the oldest', () => {
+    const entries = new Map([
+      ['retained', entry(1, 90, 1)],
+      ['unused', entry(0, 90, 2)],
+    ]);
+    expect(selectUnusedEvictions(entries, 50)).toEqual(['unused']);
   });
 });
