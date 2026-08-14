@@ -247,11 +247,15 @@ export function CanvasView({
       runtimeRef.current = undefined;
       runtime.destroy();
     };
-  }, [runtimeAttempt]); // Runtime owns high-frequency state for each mounted attempt.
+    // Deliberately keyed on the attempt alone: the runtime owns high-frequency
+    // state for each mounted attempt, so re-running this would tear down and
+    // rebuild the Pixi renderer whenever any of the seeded values changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeAttempt]);
 
   useEffect(() => {
-    if (!selectedVideo) return undefined;
-    const videoId = selectedVideo.id;
+    const videoId = selectedVideo?.id;
+    if (!videoId) return undefined;
     let frame = 0;
     let running = true;
     const updatePosition = () => {

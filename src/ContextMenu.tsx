@@ -51,6 +51,10 @@ export function clampMenuPosition(position: MenuPosition, size: MenuSize, viewpo
 
 function useMenuViewport(anchor?: MenuPosition) {
   const [viewport, setViewport] = useState<MenuViewport>(fallbackViewport);
+  // Track the coordinates, not the anchor object: callers rebuild it every
+  // render and getWindowWorkArea only reads x/y.
+  const anchorX = anchor?.x;
+  const anchorY = anchor?.y;
 
   useLayoutEffect(() => {
     let disposed = false;
@@ -59,7 +63,8 @@ function useMenuViewport(anchor?: MenuPosition) {
       const api = window.refCanvas;
       if (!api) { setViewport(fallback); return; }
       setViewport({ ...fallback, ready: false });
-      void api.getWindowWorkArea(anchor).then((workArea) => {
+      const point = anchorX === undefined || anchorY === undefined ? undefined : { x: anchorX, y: anchorY };
+      void api.getWindowWorkArea(point).then((workArea) => {
         if (disposed) return;
         const left = Math.max(0, Math.min(window.innerWidth, workArea.left));
         const top = Math.max(0, Math.min(window.innerHeight, workArea.top));
@@ -71,7 +76,7 @@ function useMenuViewport(anchor?: MenuPosition) {
     refresh();
     window.addEventListener('resize', refresh);
     return () => { disposed = true; window.removeEventListener('resize', refresh); };
-  }, [anchor?.x, anchor?.y]);
+  }, [anchorX, anchorY]);
 
   return viewport;
 }

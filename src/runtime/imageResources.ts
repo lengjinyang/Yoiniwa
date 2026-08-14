@@ -330,7 +330,14 @@ export function useImageResource(
   const variant = exactVariant ? targetVariant : cappedImageVariant(settledVariant, maximumVariant);
   const targetRevision = useThumbnailRevision(displayId, variant);
   const previewRevision = useThumbnailRevision(displayId, 'thumb128');
-  const src = useMemo(() => imageSource(item, variant, targetRevision), [displayId, item.dataUrl, item.mediaKind, item.posterAssetId, targetRevision, variant]);
+  // Pass the fields imageSource actually reads rather than the whole item, so
+  // the dependency list stays checkable and a new BoardItem identity alone does
+  // not rebuild the source URL.
+  const { dataUrl, mediaKind, posterAssetId } = item;
+  const src = useMemo(
+    () => imageSource({ assetId: displayId, dataUrl, mediaKind, posterAssetId }, variant, targetRevision),
+    [dataUrl, displayId, mediaKind, posterAssetId, targetRevision, variant],
+  );
   const assetKey = item.dataUrl || displayId || '';
   const [resource, setResource] = useState<{ assetKey: string; rank: number; image: HTMLImageElement } | undefined>(() => {
     const targetImage = readyCachedImage(src);

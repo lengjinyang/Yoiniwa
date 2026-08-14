@@ -18,6 +18,9 @@ export function useAppHarness({
 }: UseAppHarnessOptions) {
   const performanceSceneRef = useRef(history.scene);
   performanceSceneRef.current = history.scene;
+  // The bench harness only needs the two stable history methods; depending on
+  // the controller object would rebuild the window hooks on every commit.
+  const { commit: commitScene, load: loadScene } = history;
 
   useEffect(() => {
     if (!new URLSearchParams(window.location.search).has('smoke')) return undefined;
@@ -35,16 +38,16 @@ export function useAppHarness({
   useEffect(() => {
     if (!new URLSearchParams(window.location.search).has('perf-bench')) return undefined;
     const perfWindow = window as typeof window & { __refCanvasPerf?: {
-      getScene(): typeof history.scene;
+      getScene(): SceneHistoryController['scene'];
       expandScene(count: number): void;
       selectImages(count: number): void;
       clearSelection(): void;
-      loadScene(scene: typeof history.scene): void;
+      loadScene(scene: SceneHistoryController['scene']): void;
     } };
     perfWindow.__refCanvasPerf = {
       getScene: () => performanceSceneRef.current,
       expandScene: (count) => {
-        history.commit((scene) => {
+        commitScene((scene) => {
           if (!scene.items.length || count <= 0) return;
           const originals = [...scene.items];
           const columns = Math.ceil(Math.sqrt(count * 1.6));
@@ -84,8 +87,8 @@ export function useAppHarness({
         setSelectedIds([]);
         setSelectedGroupId(undefined);
       },
-      loadScene: (scene) => history.load(scene),
+      loadScene: (scene) => loadScene(scene),
     };
     return () => { delete perfWindow.__refCanvasPerf; };
-  }, [history.commit, history.load, setSelectedGroupId, setSelectedIds]);
+  }, [commitScene, loadScene, setSelectedGroupId, setSelectedIds]);
 }
