@@ -1,4 +1,4 @@
-import { createScene, GROUP_PADDING } from './scene';
+import { createScene, GROUP_PADDING } from './domain/scene';
 import type { AssetRecord, ImageGroup, ImageItem, Scene } from './types';
 
 /**

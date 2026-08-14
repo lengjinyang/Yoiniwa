@@ -2,41 +2,22 @@ export type CropRect = { x: number; y: number; width: number; height: number };
 
 export type MediaKind = 'image' | 'video';
 
-export interface AssetRecord {
-  id: string;
-  /** Canonical identity. `id` remains serialized for version-2 scene compatibility. */
-  assetId?: string;
-  hash: string;
-  mimeType: string;
-  byteLength: number;
-  sourceSize?: number;
-  sourceMtimeMs?: number;
-  naturalWidth: number;
-  naturalHeight: number;
-  orientation?: number;
-  hasAlpha?: boolean;
-  contentHash?: string;
-  cacheVersion?: number;
-  originalName: string;
-  sourcePath?: string;
-  /** Defaults to image when omitted (legacy scenes). */
-  kind?: MediaKind;
+/** Video-only optional fields. Serialized on video nodes; omitted from still images. */
+export interface VideoClipFields {
+  /** Still-frame image asset used for board LOD, outline thumbs, and export. */
+  posterAssetId?: string;
   durationSec?: number;
+  muted?: boolean;
+  loop?: boolean;
 }
 
-export interface ImageItem {
+/** Shared board-node geometry. Scene v3 JSON still uses one item object shape. */
+export interface BoardItem {
   id: string;
   name: string;
   sourcePath?: string;
   sourceType: 'file' | 'clipboard' | 'drop';
   assetId?: string;
-  /** Still-frame image asset used for board LOD, outline thumbs, and export. */
-  posterAssetId?: string;
-  /** Defaults to image when omitted (legacy scenes). */
-  mediaKind?: MediaKind;
-  durationSec?: number;
-  muted?: boolean;
-  loop?: boolean;
   /** Only used by small unit-test fixtures. Version 2 scene files never persist data URLs. */
   dataUrl?: string;
   naturalWidth: number;
@@ -59,7 +40,56 @@ export interface ImageItem {
   crop: CropRect;
 }
 
-type GroupMemberType = 'image' | 'group' | 'mark' | 'video';
+export interface ImageItem extends BoardItem {
+  /** Defaults to image when omitted (legacy scenes). */
+  mediaKind?: 'image';
+}
+
+export interface VideoItem extends BoardItem, VideoClipFields {
+  mediaKind: 'video';
+}
+
+export type SceneItem = ImageItem | VideoItem;
+
+/** Patch applied to a board node. Video-only keys are ignored on still images. */
+export type SceneItemPatch = Partial<BoardItem> & Partial<VideoClipFields> & {
+  id: string;
+  mediaKind?: MediaKind;
+};
+
+/** Still-display lookup for outline, export, and UI thumbs. */
+export type DisplayableMedia = {
+  assetId?: string;
+  dataUrl?: string;
+  mediaKind?: MediaKind;
+  posterAssetId?: string;
+  width?: number;
+  height?: number;
+};
+
+export interface AssetRecord {
+  id: string;
+  /** Canonical identity. `id` remains serialized for version-2 scene compatibility. */
+  assetId?: string;
+  hash: string;
+  mimeType: string;
+  byteLength: number;
+  sourceSize?: number;
+  sourceMtimeMs?: number;
+  naturalWidth: number;
+  naturalHeight: number;
+  orientation?: number;
+  hasAlpha?: boolean;
+  contentHash?: string;
+  cacheVersion?: number;
+  originalName: string;
+  sourcePath?: string;
+  /** Defaults to image when omitted (legacy scenes). */
+  kind?: MediaKind;
+  durationSec?: number;
+}
+
+type GroupMemberType = 'image' | 'group' | 'mark';
 
 export interface GroupMember {
   type: GroupMemberType;
@@ -161,7 +191,7 @@ export interface Scene {
   viewport: Viewport;
   canvas: CanvasSettings;
   assets: Record<string, AssetRecord>;
-  items: ImageItem[];
+  items: SceneItem[];
   groups: ImageGroup[];
   visualNotes: VisualNotesState;
 }
@@ -303,6 +333,9 @@ export interface ImagePipelinePerformanceStats {
   jobsCompleted?: number;
   proxyActive?: number;
   proxyQueued?: number;
+  videoDecodeActive?: number;
+  videoDecodeRequests?: number;
+  videoDecodeMs?: number;
 }
 export interface ImagePrewarmProgress {
   requestId: string;
@@ -358,8 +391,6 @@ export interface VideoPreparationResult {
   ready: boolean;
   indexReady: boolean;
   playbackReady: boolean;
-  scrubReady: boolean;
-  frameAccurate?: boolean;
   vfr: boolean;
   unsupportedReason?: string | null;
   state: 'ready' | 'queued' | 'running';
@@ -373,7 +404,6 @@ export interface VideoPreparationProgress {
   fps?: number;
   frameCount?: number;
   vfr?: boolean;
-  frameAccurate?: boolean;
   message?: string;
 }
 
@@ -384,7 +414,6 @@ export interface VideoProxyReady {
   frameCount?: number;
   indexReady?: boolean;
   playbackReady?: boolean;
-  scrubReady?: boolean;
   vfr?: boolean;
 }
 
@@ -403,7 +432,6 @@ export interface RefCanvasAPI {
   registerImageBytes?(name: string, data: ArrayBuffer, sourceType?: ImageItem['sourceType']): Promise<ImportedImage>;
   assetFilePath?(assetId: string): Promise<string>;
   ensureVideoPlayback?(assetId: string): Promise<VideoPreparationResult>;
-  ensureVideoScrub?(assetId: string): Promise<VideoPreparationResult>;
   cancelVideoPlayback?(assetId: string): void;
   onVideoProxyReady?(callback: (payload: VideoProxyReady) => void): () => void;
   onVideoProxyFailed?(callback: (payload: VideoProxyFailed) => void): () => void;

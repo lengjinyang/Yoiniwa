@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ImageItem, ImageThumbnailReady } from './types';
+import type { DisplayableMedia, ImageThumbnailReady, BoardItem } from '../types';
 import { performanceMonitor } from './performanceMonitor';
-import { boundedCpuImageBudget } from './shared/imagePipelineConfig';
-import { calculateDesiredMip, rotatedScreenBounds } from './rendering/textureSelection';
-import { assetResourceUrl, isAssetResourceUrl } from './assetResourceUrl';
-import { displayAssetId } from './media';
+import { boundedCpuImageBudget } from '../shared/imagePipelineConfig';
+import { calculateDesiredMip, rotatedScreenBounds } from '../rendering/textureSelection';
+import { assetResourceUrl, isAssetResourceUrl } from '../assetResourceUrl';
+import { displayAssetId } from '../domain/media';
 
 export type ImageVariant = 'thumb128' | 'thumb256' | 'thumb512' | 'thumb768' | 'thumb1024' | 'original';
 
@@ -69,7 +69,7 @@ function useThumbnailRevision(assetId: string | undefined, variant: ImageVariant
 }
 
 export function chooseImageVariant(
-  item: Pick<ImageItem, 'width' | 'height'> & Partial<Pick<ImageItem, 'naturalWidth' | 'naturalHeight' | 'rotation'>>,
+  item: Pick<BoardItem, 'width' | 'height'> & Partial<Pick<BoardItem, 'naturalWidth' | 'naturalHeight' | 'rotation'>>,
   viewportScale: number,
   pixelRatio = window.devicePixelRatio || 1,
 ): ImageVariant {
@@ -100,7 +100,7 @@ export function imageVariantCandidates(hasDataUrl: boolean, variant: ImageVarian
 }
 
 export function imageSource(
-  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'posterAssetId' | 'mediaKind'>,
+  item: DisplayableMedia,
   variant: ImageVariant = 'original',
   revision = 0,
 ) {
@@ -133,7 +133,7 @@ function useSettledVariant(variant: ImageVariant) {
   return settledVariant;
 }
 
-export function cropForResource(item: Pick<ImageItem, 'crop' | 'naturalWidth' | 'naturalHeight'>, resourceWidth: number, resourceHeight: number) {
+export function cropForResource(item: Pick<BoardItem, 'crop' | 'naturalWidth' | 'naturalHeight'>, resourceWidth: number, resourceHeight: number) {
   const scaleX = resourceWidth / Math.max(1, item.naturalWidth);
   const scaleY = resourceHeight / Math.max(1, item.naturalHeight);
   return {
@@ -285,7 +285,7 @@ function preloadImageSource(src: string) {
 }
 
 export async function preloadImagePreview(
-  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'posterAssetId' | 'mediaKind'>,
+  item: DisplayableMedia,
   revision = 0,
   _maximumEdge = 128,
 ) {
@@ -297,7 +297,7 @@ export async function preloadImagePreview(
 }
 
 export function useImageResource(
-  item: Pick<ImageItem, 'assetId' | 'dataUrl' | 'posterAssetId' | 'mediaKind' | 'width' | 'height'>,
+  item: DisplayableMedia & Pick<BoardItem, 'width' | 'height'>,
   viewportScale: number,
   enabled = true,
   maximumVariant: ImageVariant = 'original',

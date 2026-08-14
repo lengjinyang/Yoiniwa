@@ -1,37 +1,13 @@
-import { groupVisibleBounds, sceneBounds } from './scene';
-import type { ImageGroup, ImageItem, VisualNotesState } from './types';
-import { imageSource } from './imageResources';
+import { groupVisibleBounds, sceneBounds } from './domain/scene';
+import { exportVisibility } from './domain/exportVisibility';
+import type { ImageGroup, SceneItem, VisualNotesState } from './types';
+import { imageSource } from './runtime/imageResources';
 import ExportSceneWorker from './workers/exportScene.worker?worker';
 import { markWorldBounds } from './visualNotes/VisualNoteGeometry';
 
-export function exportVisibility(groups: ImageGroup[]) {
-  const hiddenImages = new Set<string>();
-  const hiddenGroups = new Set<string>();
-  const hiddenMarks = new Set<string>();
-  const visit = (id: string, hideFrame: boolean, visited = new Set<string>()) => {
-    if (visited.has(id)) return;
-    visited.add(id);
-    const group = groups.find((value) => value.id === id);
-    if (!group) return;
-    if (hideFrame) hiddenGroups.add(id);
-    group.members.forEach((member) => {
-      if (member.type === 'image') hiddenImages.add(member.id);
-      else if (member.type === 'group') visit(member.id, true, visited);
-      else if (member.type === 'mark') hiddenMarks.add(member.id);
-    });
-  };
-  groups.forEach((group) => {
-    if (!group.collapsed && !group.contentsHidden) return;
-    group.members.forEach((member) => {
-      if (member.type === 'image') hiddenImages.add(member.id);
-      else if (member.type === 'group') visit(member.id, true);
-      else if (member.type === 'mark') hiddenMarks.add(member.id);
-    });
-  });
-  return { hiddenImages, hiddenGroups, hiddenMarks };
-}
+export { exportVisibility };
 
-function combinedBounds(items: ImageItem[], groups: ImageGroup[], visualNotes?: VisualNotesState) {
+function combinedBounds(items: SceneItem[], groups: ImageGroup[], visualNotes?: VisualNotesState) {
   const parts = [...(items.length ? [sceneBounds(items)] : []), ...groups.map(groupVisibleBounds),
     ...(visualNotes?.visible ? visualNotes.marks.flatMap((mark) => markWorldBounds(mark, items) ?? []) : [])];
   if (!parts.length) return { x: 0, y: 0, width: 1, height: 1 };
@@ -43,7 +19,7 @@ function combinedBounds(items: ImageItem[], groups: ImageGroup[], visualNotes?: 
 }
 
 export async function renderItems(
-  items: ImageItem[], background?: string, groups: ImageGroup[] = [], backgroundOpacity = 1,
+  items: SceneItem[], background?: string, groups: ImageGroup[] = [], backgroundOpacity = 1,
   visualNotes?: VisualNotesState, options: {
     margin?: number; maxSide?: number; pixelScale?: number; clipPolygon?: Array<{ x: number; y: number }>;
   } = {},
