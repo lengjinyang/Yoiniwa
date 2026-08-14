@@ -2,7 +2,6 @@ import {
   Fragment,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import type { CacheInfo } from '../../types';
 import { SHORTCUT_LABELS, shortcutDisplayName, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
@@ -22,7 +21,6 @@ interface PropertiesPanelProps {
   onBeginShortcutCapture(id: ShortcutId, label: string): void;
   onCaptureShortcut(id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>): void;
   onCaptureShortcutKeyUp(id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>): void;
-  onCapturePanShortcutMouse(id: ShortcutId, event: ReactMouseEvent<HTMLButtonElement>): void;
   onShortcutCaptureBlur(): void;
   onResetShortcuts(): void;
   onChooseCacheLocation(): void;
@@ -35,7 +33,7 @@ interface PropertiesPanelProps {
 export function PropertiesPanel({
   open, settingsShortcut, shortcuts, shortcutCaptureId, drawingCollaborationMode,
   cacheInfo, cacheChanging, nativeAvailable, onClose, onBeginShortcutCapture,
-  onCaptureShortcut, onCaptureShortcutKeyUp, onCapturePanShortcutMouse,
+  onCaptureShortcut, onCaptureShortcutKeyUp,
   onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
   onClearCache, onOpenLogsFolder, onCopyDiagnostics,
 }: PropertiesPanelProps) {
@@ -57,12 +55,10 @@ export function PropertiesPanel({
             <div className="shortcut-row">
               <span>{label}</span>
               <button className={capturing ? 'active shortcut-capture' : 'shortcut-capture'}
-                title={disabled ? '请先退出协作模式' : id === 'panCanvas' ? '点击后按下快捷键或鼠标中键' : '点击后按下快捷键'}
+                title={disabled ? '请先退出协作模式' : '点击后按下快捷键'}
                 disabled={disabled}
                 onClick={() => onBeginShortcutCapture(id, label)} onKeyDown={(event) => onCaptureShortcut(id, event)}
                 onKeyUp={(event) => onCaptureShortcutKeyUp(id, event)}
-                onMouseDown={(event) => onCapturePanShortcutMouse(id, event)}
-                onAuxClick={(event) => { if (capturing && id === 'panCanvas') event.preventDefault(); }}
                 onBlur={() => { if (capturing) onShortcutCaptureBlur(); }}>
                 {capturing ? '请按键…' : shortcutDisplayName(shortcuts[id])}
               </button>

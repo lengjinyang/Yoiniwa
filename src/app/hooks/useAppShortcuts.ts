@@ -152,7 +152,10 @@ export function dispatchAppShortcutKeyDown(state: AppShortcutState, event: Keybo
     if (!event.repeat) executeCommand(state.commands, 'colorPicker.press');
     return;
   }
-  if (!state.collaborationSpaceActive && shortcutMatchesKeyboardEvent(state.shortcuts.panCanvas, event)) {
+  // Alt is the canvas pan modifier (hardcoded in CameraController alongside the
+  // middle button). Swallow a bare Alt press so the WebView does not enter menu
+  // accelerator mode while the user is starting an Alt+drag pan.
+  if (!state.collaborationSpaceActive && shortcutMatchesKeyboardEvent('Alt', event)) {
     event.preventDefault();
     return;
   }

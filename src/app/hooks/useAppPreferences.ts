@@ -3,15 +3,12 @@ import {
   useEffect,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import type { ColorPickerShortcut } from '../../interactions';
 import {
   DEFAULT_SHORTCUTS,
   loadShortcutPreferences,
-  PAN_MOUSE_MIDDLE_SHORTCUT,
   panModifierShortcutFromKeyboardEvent,
-  panShortcutFromKeyboardEvent,
   SHORTCUT_LABELS,
   shortcutConflict,
   shortcutFromKeyboardEvent,
@@ -87,7 +84,7 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     setShortcuts((current) => ({ ...current, [id]: next }));
     setShortcutCaptureId(undefined);
     const label = SHORTCUT_LABELS.find((item) => item.id === id)?.label ?? '操作';
-    setStatus(`${label}快捷键已设为 ${next === PAN_MOUSE_MIDDLE_SHORTCUT ? '鼠标中键' : next}`);
+    setStatus(`${label}快捷键已设为 ${next}`);
   }, [api, drawingCollaborationModeRef, setStatus, shortcuts]);
 
   const captureShortcut = useCallback((id: ShortcutId, event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -98,9 +95,7 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
       setStatus(`继续按下其他按键可设置组合键，松开将使用 ${modifier}`);
       return;
     }
-    const next = id === 'panCanvas'
-      ? panShortcutFromKeyboardEvent(event.nativeEvent)
-      : shortcutFromKeyboardEvent(event.nativeEvent);
+    const next = shortcutFromKeyboardEvent(event.nativeEvent);
     if (!next) { setStatus('请按下一个有效的快捷键组合'); return; }
     commitShortcut(id, next);
   }, [commitShortcut, setStatus]);
@@ -112,13 +107,6 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     event.preventDefault();
     event.stopPropagation();
     commitShortcut(id, modifier);
-  }, [commitShortcut, shortcutCaptureId]);
-
-  const capturePanShortcutMouse = useCallback((id: ShortcutId, event: ReactMouseEvent<HTMLButtonElement>) => {
-    if (id !== 'panCanvas' || shortcutCaptureId !== id || event.button !== 1) return;
-    event.preventDefault();
-    event.stopPropagation();
-    commitShortcut(id, PAN_MOUSE_MIDDLE_SHORTCUT);
   }, [commitShortcut, shortcutCaptureId]);
 
   const resetShortcuts = useCallback(() => {
@@ -202,7 +190,6 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
     setShortcutCaptureId,
     captureShortcut,
     captureShortcutKeyUp,
-    capturePanShortcutMouse,
     resetShortcuts,
     beginShortcutCapture,
     chooseCacheLocation,

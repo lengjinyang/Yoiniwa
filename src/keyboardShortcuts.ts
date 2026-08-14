@@ -1,5 +1,4 @@
 export const SHORTCUT_PREFERENCES_STORAGE_KEY = 'refcanvas.shortcuts';
-export const PAN_MOUSE_MIDDLE_SHORTCUT = 'MouseMiddle';
 
 const SHORTCUT_IDS = [
   'settings',
@@ -49,7 +48,6 @@ const SHORTCUT_IDS = [
   'zoomIn',
   'zoomOut',
   'openMenu',
-  'panCanvas',
   'boxSelect',
   'colorPicker',
   'visualNotesToggle',
@@ -122,7 +120,6 @@ export const DEFAULT_SHORTCUTS: ShortcutPreferences = {
   zoomIn: 'Ctrl+=',
   zoomOut: 'Ctrl+-',
   openMenu: 'Ctrl+Shift+P',
-  panCanvas: 'Alt',
   boxSelect: 'D',
   colorPicker: 'S',
   visualNotesToggle: 'Q',
@@ -193,7 +190,6 @@ export const SHORTCUT_LABELS: ReadonlyArray<{ id: ShortcutId; label: string; gro
   { id: 'focusPrevious', label: '上一个焦点对象', group: '画布与视图' },
   { id: 'zoomIn', label: '放大', group: '画布与视图' },
   { id: 'zoomOut', label: '缩小', group: '画布与视图' },
-  { id: 'panCanvas', label: '拖动画布', group: '画布与视图' },
   { id: 'boxSelect', label: '框选', group: '画布与视图' },
   { id: 'colorPicker', label: '取色', group: '画布与视图' },
   { id: 'visualNotesToggle', label: '标注模式', group: '标注' },
@@ -254,11 +250,6 @@ function modifierFromEventKey(key: string) {
   return undefined;
 }
 
-export function panShortcutFromKeyboardEvent(event: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>) {
-  if (modifierFromEventKey(event.key)) return undefined;
-  return shortcutFromKeyboardEvent(event);
-}
-
 export function panModifierShortcutFromKeyboardEvent(
   event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>,
 ) {
@@ -291,21 +282,7 @@ export function shortcutReleasedByKeyboardEvent(shortcut: string, event: Pick<Ke
   return Boolean(released && shortcut.split('+').includes(released));
 }
 
-export function panShortcutMatchesPointerEvent(
-  shortcut: string,
-  event: Pick<PointerEvent, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>,
-  shortcutHeld: boolean,
-) {
-  const parts = shortcut.split('+');
-  const modifierOnly = parts.every((part) => ['Ctrl', 'Alt', 'Shift'].includes(part));
-  return (event.ctrlKey || event.metaKey) === parts.includes('Ctrl')
-    && event.altKey === parts.includes('Alt')
-    && event.shiftKey === parts.includes('Shift')
-    && (modifierOnly || shortcutHeld);
-}
-
 export function shortcutDisplayName(shortcut: string) {
-  if (shortcut === PAN_MOUSE_MIDDLE_SHORTCUT) return '鼠标中键';
   return shortcut.replace(/ArrowUp/g, '↑').replace(/ArrowDown/g, '↓').replace(/ArrowLeft/g, '←').replace(/ArrowRight/g, '→');
 }
 
@@ -327,11 +304,6 @@ function isValidShortcut(shortcut: string) {
   return /^[A-Z0-9]$|^F(?:[1-9]|1\d|2[0-4])$|^(?:Tab|Space|Delete|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight)$|^(?:-|=)$/.test(key);
 }
 
-function isValidPanShortcut(shortcut: string) {
-  if (shortcut === PAN_MOUSE_MIDDLE_SHORTCUT) return true;
-  return isValidConfigurableShortcut(shortcut);
-}
-
 function isValidConfigurableShortcut(shortcut: string) {
   if (isValidShortcut(shortcut)) return true;
   const parts = shortcut.split('+');
@@ -346,8 +318,7 @@ export function loadShortcutPreferences(raw: string | null): ShortcutPreferences
     const parsed = JSON.parse(raw) as Partial<Record<ShortcutId, unknown>>;
     const values = { ...DEFAULT_SHORTCUTS };
     for (const id of SHORTCUT_IDS) {
-      if (typeof parsed[id] === 'string'
-        && (id === 'panCanvas' ? isValidPanShortcut(parsed[id]) : isValidConfigurableShortcut(parsed[id]))) {
+      if (typeof parsed[id] === 'string' && isValidConfigurableShortcut(parsed[id])) {
         values[id] = parsed[id];
       }
     }
