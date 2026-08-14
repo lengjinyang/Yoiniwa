@@ -352,7 +352,9 @@ export class SelectionController {
       this.options.drawOverlay(scene.images().filter((item) => this.selection.has(item.id)), this.options.camera.snapshot().scale, box);
     } else if (this.drag.kind === 'lasso') {
       this.appendLassoPoint(this.drag.points, world);
-      this.lassoPoints = [...this.drag.points];
+      // Alias rather than copy: a 200Hz pen makes this run thousands of times
+      // per lasso, and pointerUp already snapshots the array before it escapes.
+      this.lassoPoints = this.drag.points;
       const box = lassoBounds(this.lassoPoints);
       const ids = imagesInSelectionBox(scene.images(), box);
       this.selectedGroupId = undefined;
