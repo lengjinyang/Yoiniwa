@@ -19,7 +19,7 @@
 Yoiniwa（宵庭）使用 Electron、React、TypeScript 与 PixiJS 构建。它提供无限画布、图片整理、非破坏性编辑、嵌入式工程文件及 Photoshop 取色协作，核心工作流无需云服务。
 
 > [!IMPORTANT]
-> Photoshop 协作模式的最高优先级不变量是：从 Yoiniwa 取色后，回到 Photoshop 的第一次真实笔尖按下必须能够正常绘画。自动测试和鼠标模拟不能替代真实 Windows Ink 数位板验证；涉及窗口、焦点或原生输入的改动在发布前必须实机复测。
+> Photoshop 协作模式的最高优先级不变量是：自动测试和鼠标模拟不能替代真实 Windows Ink 数位板验证；涉及窗口、焦点或原生输入的改动在发布前必须实机复测。
 
 ## 下载
 
