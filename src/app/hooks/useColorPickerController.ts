@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ColorPickerShortcut } from '../../interactions';
-import type { PickedColor } from '../../types';
+import type { PhotoshopColorSyncResult, PickedColor } from '../../types';
 import { logWarn } from '../../logger';
 
 interface UseColorPickerControllerOptions {
@@ -33,11 +33,19 @@ export function useColorPickerController({
       setStatus(`无法连接桌面取色服务 ${color.hex}`);
       return;
     }
-    const result = await api.syncPhotoshopForeground(
-      color,
-      // Collaboration must never request a focus round-trip; Photoshop keeps Ink ownership.
-      drawingCollaborationMode ? false : autoPhotoshopRoundTrip,
-    );
+    let result: PhotoshopColorSyncResult;
+    try {
+      result = await api.syncPhotoshopForeground(
+        color,
+        // Collaboration must never request a focus round-trip; Photoshop keeps Ink ownership.
+        drawingCollaborationMode ? false : autoPhotoshopRoundTrip,
+      );
+    } catch (error) {
+      if (request !== colorSyncRequestRef.current) return;
+      logWarn('photoshop.sync_error', { hex: color.hex, error: String(error) });
+      setStatus(`Photoshop 同步失败 · ${color.hex}`);
+      return;
+    }
     if (request !== colorSyncRequestRef.current) return;
     if (!result.ok) {
       logWarn('photoshop.sync_failed', { hex: color.hex, status: result.status, message: result.message, copied: result.copied });

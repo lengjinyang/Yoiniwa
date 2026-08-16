@@ -315,9 +315,9 @@ export function CanvasView({
     return api.onNativePointer((input) => {
       const container = containerRef.current;
       if (!container) return;
-      const hit = document.elementFromPoint(input.clientX, input.clientY);
-      if (hit && hudRef.current?.contains(hit)) return;
       if (input.kind === 'wheel' || input.kind === 'hwheel') {
+        const hit = document.elementFromPoint(input.clientX, input.clientY);
+        if (hit && hudRef.current?.contains(hit)) return;
         container.dispatchEvent(new WheelEvent('wheel', {
           bubbles: true, cancelable: true, clientX: input.clientX, clientY: input.clientY,
           deltaX: input.kind === 'hwheel' ? -input.delta : 0,
@@ -337,6 +337,11 @@ export function CanvasView({
         buttons: pressed ? 1 : 0, pressure: pressed ? 0.5 : 0,
         clientX: input.clientX, clientY: input.clientY, altKey: input.altKey,
       });
+      // Native CANCEL is a state-machine abort (timeout, missed release, or a
+      // stale gesture superseded by a new physical DOWN), not a successful
+      // Windows Ink tip-up. Mark the synthetic event so the picker can clean up
+      // without committing a Photoshop color during the next real contact.
+      Object.defineProperty(pointerEvent, 'nativeInput', { value: true, enumerable: false });
       Object.defineProperty(pointerEvent, 'spaceKey', { value: input.spaceKey, enumerable: false });
       if (input.visibleBounds) {
         Object.defineProperty(pointerEvent, 'visibleBounds', { value: input.visibleBounds, enumerable: false });

@@ -1,4 +1,4 @@
-import { useMemo, useRef, type Dispatch, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type SetStateAction } from 'react';
 import { CanvasView } from '../../canvas/CanvasView';
 import { videoPlaybackHostFromApi } from '../../canvas/video/videoPlaybackHost';
 import { imageResourceBoostFromApi } from '../../canvas/textures/imageResourceBoost';
@@ -195,6 +195,7 @@ export function AppOverlays({
   photoshopDocumentBlocked,
 }: AppOverlaysProps) {
   const comparison = versions.comparisonPreview;
+  const [windowControlsRevealed, setWindowControlsRevealed] = useState(false);
   const emptyStateWindowDragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | undefined>(undefined);
   const suppressEmptyStateContextMenuRef = useRef(false);
   const startEmptyStateWindowDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -240,6 +241,33 @@ export function AppOverlays({
     workspace.setGroupActionMenu(undefined);
     context.open({ x: event.clientX, y: event.clientY });
   };
+  useEffect(() => {
+    if (windowController.drawingCollaborationMode) {
+      setWindowControlsRevealed(false);
+      return;
+    }
+    const revealAt = (clientX: number, clientY: number, altKey: boolean) => {
+      const picking = altKey || document.documentElement.classList.contains('color-picker-armed');
+      const near = !picking && clientY <= 42 && clientX >= window.innerWidth - 238;
+      setWindowControlsRevealed((current) => current === near ? current : near);
+    };
+    const onMove = (event: PointerEvent) => revealAt(event.clientX, event.clientY, event.altKey);
+    const hide = () => setWindowControlsRevealed(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Alt' && event.code !== 'AltLeft' && event.code !== 'AltRight') return;
+      if (event.type === 'keydown' || event.altKey) hide();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('blur', hide);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKey, true);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('blur', hide);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKey, true);
+    };
+  }, [windowController.drawingCollaborationMode]);
   return <>
     {versions.comparisonVersion && <PhotoshopVersionComparePanel
       currentPreviewUrl={comparison.url}
@@ -292,7 +320,7 @@ export function AppOverlays({
       {project.displaySceneName}{history.dirty ? '  •' : ''}
     </div>
 
-    {!windowController.drawingCollaborationMode && <div className="window-control-zone no-drag">
+    {!windowController.drawingCollaborationMode && <div className={`window-control-zone no-drag${windowControlsRevealed ? ' revealed' : ''}`}>
       <div className="window-floating-controls">
         <button className={windowController.mode.alwaysOnTop ? 'active' : ''}
           title={windowController.mode.alwaysOnTop ? '取消始终置顶' : '始终置顶'}

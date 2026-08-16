@@ -138,9 +138,9 @@ impl PhotoshopService {
                 message: Some(format!("缺少 Photoshop 颜色桥接脚本：{}", self.color_script.display())),
             };
         }
-        let requested_round_trip = requested_return_focus && window_state.locked && window_state.always_on_top;
+        // Focusless / collaboration windows must never steal Photoshop focus.
         let focusless = window_state.locked && window_state.always_on_top;
-        let return_focus = requested_round_trip && !focusless;
+        let return_focus = requested_return_focus && !focusless;
         let mut bridges = self.bridges.lock();
         if bridges.color.is_none() {
             bridges.color = match PersistentHelper::start(&self.color_script) {

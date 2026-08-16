@@ -10,11 +10,11 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use parking_lot::{Mutex, RwLock};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition,
-    WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WebviewWindow,
 };
 
 use crate::{diagnostics::DiagnosticsLog, types::{WindowState, WindowStatePatch}};
@@ -31,27 +31,11 @@ use windows::Win32::{
     UI::{
         WindowsAndMessaging::{
             FindWindowExW, FindWindowW, GetAncestor, GetWindow, GetWindowLongPtrW, SetWindowLongPtrW,
-            SetWindowPos, ShowWindow, GA_ROOT, GWLP_HWNDPARENT, GWL_EXSTYLE, GW_HWNDNEXT, HWND_TOPMOST,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-            WS_EX_TOOLWINDOW,
+            SetWindowPos, GA_ROOT, GWL_EXSTYLE, GW_HWNDNEXT, HWND_TOPMOST,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
         },
     },
 };
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-pub struct TaskbarPointerInput {
-    pub kind: String,
-    pub pointer_id: f64,
-    pub pointer_type: String,
-    pub button: f64,
-    pub buttons: f64,
-    pub client_x: f64,
-    pub client_y: f64,
-    pub alt_key: bool,
-    pub mode: Option<String>,
-}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,10 +48,24 @@ struct NativePointerPayload {
     pointer_type: String,
     delta: f64,
     visible_bounds: VisibleBounds,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen_y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hit_bounds: Option<VisibleBounds>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct VisibleBounds { left: f64, top: f64, right: f64, bottom: f64 }
+
+#[derive(Clone, Copy)]
+struct PointerCoordinateSpace {
+    window_x: i32,
+    window_y: i32,
+    scale: f64,
+    visible_bounds: VisibleBounds,
+}
 
 struct NativeHelper {
     child: Child,
@@ -77,16 +75,22 @@ struct NativeHelper {
 struct NativeShared {
     app: AppHandle,
     state: RwLock<WindowState>,
-    pen_labels: Mutex<Vec<String>>,
     pending_input: Mutex<HashMap<String, mpsc::Sender<bool>>>,
+    pending_layer: Mutex<HashMap<String, mpsc::Sender<String>>>,
     pending_key: Mutex<HashMap<String, mpsc::Sender<bool>>>,
     pending_shutdown: Mutex<Option<mpsc::Sender<()>>>,
     ready: AtomicBool,
     /// True while the helper LL hooks are armed. Used to skip a second disable
     /// IPC when the shortcut path already released INPUT before set_mode.
     input_hooks_active: AtomicBool,
+    /// True while the helper-owned, no-activate Win32 input HWND covers the
+    /// collaboration window. The HWND dies with the helper process.
+    input_layer_active: AtomicBool,
     /// Skip blur Z-order / INPUT repair while Alt-pick handoff is critical.
     pick_critical_until: Mutex<Option<Instant>>,
+    /// The collaboration window is locked for a gesture, so its physical origin
+    /// and DPI can be reused instead of asking WebView2 on every pen packet.
+    pointer_coordinate_space: Mutex<Option<PointerCoordinateSpace>>,
     sequence: AtomicU64,
 }
 
@@ -108,11 +112,14 @@ impl NativeWindowManager {
         Arc::new(Self {
             helper_script: normalize_helper_script(resource_dir.join("resources/native-window-move.ps1")), helper: Mutex::new(None),
             shared: Arc::new(NativeShared {
-                app, state: RwLock::new(WindowState::default()), pen_labels: Mutex::new(Vec::new()),
-                pending_input: Mutex::new(HashMap::new()), pending_key: Mutex::new(HashMap::new()),
+                app, state: RwLock::new(WindowState::default()),
+                pending_input: Mutex::new(HashMap::new()), pending_layer: Mutex::new(HashMap::new()),
+                pending_key: Mutex::new(HashMap::new()),
                 pending_shutdown: Mutex::new(None),
                 ready: AtomicBool::new(false), input_hooks_active: AtomicBool::new(false),
+                input_layer_active: AtomicBool::new(false),
                 pick_critical_until: Mutex::new(None),
+                pointer_coordinate_space: Mutex::new(None),
                 sequence: AtomicU64::new(0),
             }),
             diagnostics,
@@ -144,16 +151,10 @@ impl NativeWindowManager {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) { handle_helper_line(&shared, &diagnostics, &line); }
             shared.ready.store(false, Ordering::SeqCst);
             shared.input_hooks_active.store(false, Ordering::SeqCst);
+            shared.input_layer_active.store(false, Ordering::SeqCst);
             diagnostics.warn("window.helper_stdout_closed", json!({}));
-            // Do not kill_orphan here — a racing restart can murder the live helper.
-            // Button release only; orphan scrub belongs to clear_helper/shutdown.
-            let _ = std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
-                    "Add-Type -Name YoiniwaMouseFix -Namespace Yoiniwa -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void mouse_event(uint f,uint x,uint y,uint d,System.UIntPtr e); [DllImport(\"user32.dll\")] public static extern short GetAsyncKeyState(int k);'; [Yoiniwa.YoiniwaMouseFix]::mouse_event(0x0004,0,0,0,[UIntPtr]::Zero); if (([Yoiniwa.YoiniwaMouseFix]::GetAsyncKeyState(2) -band 0x8000) -ne 0) { [Yoiniwa.YoiniwaMouseFix]::mouse_event(0x0010,0,0,0,[UIntPtr]::Zero) }",
-                ])
-                .creation_flags(CREATE_NO_WINDOW.0)
-                .status();
+            // The helper-owned HWND is destroyed by Windows with the process.
+            // Never inject a synthetic button release during crash recovery.
         });
         if let Some(stderr) = stderr {
             let diagnostics = self.diagnostics.clone();
@@ -179,6 +180,7 @@ impl NativeWindowManager {
                 *helper = None;
                 self.shared.ready.store(false, Ordering::SeqCst);
                 self.shared.input_hooks_active.store(false, Ordering::SeqCst);
+                self.shared.input_layer_active.store(false, Ordering::SeqCst);
                 false
             }
             Err(error) => {
@@ -186,20 +188,21 @@ impl NativeWindowManager {
                 *helper = None;
                 self.shared.ready.store(false, Ordering::SeqCst);
                 self.shared.input_hooks_active.store(false, Ordering::SeqCst);
+                self.shared.input_layer_active.store(false, Ordering::SeqCst);
                 false
             }
         }
     }
 
     fn clear_helper(&self) {
-        // Never TerminateProcess while WH_MOUSE_LL may still be installed — that can
-        // leave LBUTTON swallowed system-wide (HWND reuse / missed button-up).
+        // Ask the helper to release its Hook and native HWND on their owning
+        // threads before considering a forced process stop.
         let had_helper = {
             let mut helper = self.helper.lock();
             if let Some(current) = helper.as_mut() {
                 let (sender, receiver) = mpsc::channel();
                 *self.shared.pending_shutdown.lock() = Some(sender);
-                let _ = current.stdin.write_all(b"INPUT|shutdown-release|0|0|0\nSHUTDOWN\n");
+                let _ = current.stdin.write_all(b"SHUTDOWN\n");
                 let _ = current.stdin.flush();
                 // Drop helper lock before waiting so stdout thread can progress.
                 drop(helper);
@@ -217,12 +220,22 @@ impl NativeWindowManager {
         let mut helper = self.helper.lock();
         if let Some(mut current) = helper.take() {
             drop(current.stdin);
-            let _ = current.child.wait();
-            let _ = current.child.kill();
+            let deadline = Instant::now() + Duration::from_millis(800);
+            while Instant::now() < deadline {
+                match current.child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => thread::sleep(Duration::from_millis(20)),
+                    Err(_) => break,
+                }
+            }
+            if current.child.try_wait().ok().flatten().is_none() {
+                let _ = current.child.kill();
+            }
             let _ = current.child.wait();
         }
         self.shared.ready.store(false, Ordering::SeqCst);
         self.shared.input_hooks_active.store(false, Ordering::SeqCst);
+        self.shared.input_layer_active.store(false, Ordering::SeqCst);
         if had_helper {
             self.diagnostics.info("window.helper_shutdown", json!({}));
         }
@@ -290,21 +303,105 @@ impl NativeWindowManager {
         let next = previous.patched(patch.clone());
         let focusless_before = focusless(&previous);
         let focusless_next = focusless(&next);
+        let native_input_before = focusless_before || previous.collaboration_mode;
+        let native_input_next = focusless_next || next.collaboration_mode;
         let mode_changed = previous.collaboration_mode != next.collaboration_mode;
         self.diagnostics.info("window.set_mode.begin", json!({
             "previous": previous, "patch": patch, "next": next,
             "focuslessBefore": focusless_before, "focuslessNext": focusless_next,
         }));
         let main = self.main_window()?;
-        if previous.always_on_top != next.always_on_top {
-            set_always_on_top_screen_saver(&main, next.always_on_top)?;
-        }
-        set_window_opacity(&main, next.opacity.clamp(0.25, 1.0))?;
-        main.set_resizable(!next.collaboration_mode)?;
+        let helper_transition = focusless_before != focusless_next || mode_changed;
+        if helper_transition {
+            // Resolve input ownership before mutating focus, Z order or non-client
+            // state. A physical contact makes helper release return FAILED, so an
+            // exit attempt cannot tear down the layer halfway through a stroke.
+            let hooks_active = self.shared.input_hooks_active.load(Ordering::SeqCst);
+            let need_input_ipc = native_input_next || (native_input_before && hooks_active);
+            if need_input_ipc {
+                let input_timeout = if native_input_next { Duration::from_millis(2500) } else { Duration::from_millis(800) };
+                let input_ready = match self.request_input(native_input_next, next.collaboration_mode, input_timeout) {
+                    Ok(ready) => ready,
+                    Err(error) => {
+                        self.diagnostics.error_with_message("window.set_mode.input_failed", error.to_string(), json!({
+                            "previous": previous, "next": next,
+                        }));
+                        return Ok(previous);
+                    }
+                };
+                if !input_ready {
+                    let message = if native_input_next {
+                        "无法启用协作输入钩子（INPUT），请重试或检查数位板驱动"
+                    } else {
+                        "笔尖或鼠标仍处于按下状态，已保留协作模式"
+                    };
+                    self.diagnostics.error_with_message("window.set_mode.input_failed", message, json!({
+                        "previous": previous, "next": next,
+                    }));
+                    return Ok(previous);
+                }
+            } else {
+                self.diagnostics.info("window.input_skip", json!({
+                    "enabled": native_input_next, "hooksActive": hooks_active,
+                }));
+            }
+            self.diagnostics.info("window.input_ready", json!({ "enabled": native_input_next }));
 
-        if focusless_before != focusless_next || mode_changed {
-            // Apply focusless layer in-process (NOACTIVATE + taskbar place).
-            if !apply_focusless_layer(&main, focusless_next, next.collaboration_mode)? && focusless_next {
+            if mode_changed {
+                let layer_timeout = if next.collaboration_mode { Duration::from_millis(2500) } else { Duration::from_millis(1200) };
+                let layer_ready = self.request_input_layer(next.collaboration_mode, layer_timeout).unwrap_or(false);
+                if !layer_ready {
+                    // Restore the previous input configuration before returning to
+                    // the previous state. INPUT is restored before LAYER, matching
+                    // both the normal enter and reverse-order exit contracts.
+                    let _ = self.request_input(native_input_before, previous.collaboration_mode, Duration::from_millis(1200));
+                    let restored_layer = self.request_input_layer(previous.collaboration_mode, Duration::from_millis(1800)).unwrap_or(false);
+                    let message = if next.collaboration_mode {
+                        "无法建立原生协作输入层，已取消进入协作模式"
+                    } else {
+                        "原生协作输入层尚未安全释放，已保留协作模式"
+                    };
+                    self.diagnostics.error_with_message("window.set_mode.input_layer_failed", message, json!({
+                        "previous": previous, "next": next, "restoredLayer": restored_layer,
+                    }));
+                    return Ok(previous);
+                }
+                self.diagnostics.info("window.input_layer_ready", json!({
+                    "enabled": next.collaboration_mode, "backend": "system-static",
+                }));
+            }
+        }
+
+        let window_properties = (|| -> Result<()> {
+            if previous.always_on_top != next.always_on_top {
+                set_always_on_top_screen_saver(&main, next.always_on_top)?;
+            }
+            set_window_opacity(&main, next.opacity.clamp(0.25, 1.0))?;
+            main.set_resizable(!next.collaboration_mode)?;
+            Ok(())
+        })();
+        if let Err(error) = window_properties {
+            let _ = self.request_input(native_input_before, previous.collaboration_mode, Duration::from_millis(1200));
+            if mode_changed {
+                let _ = self.request_input_layer(previous.collaboration_mode, Duration::from_millis(1200));
+            }
+            let _ = self.rollback_mode(&main, &previous);
+            self.diagnostics.error_with_message("window.set_mode.properties_failed", error.to_string(), json!({
+                "previous": previous, "next": next,
+            }));
+            return Ok(previous);
+        }
+
+        if helper_transition {
+            // Apply NOACTIVATE/taskbar placement only after helper ownership is
+            // settled, never while helper reports an active contact.
+            let layer_applied = apply_focusless_layer(&main, focusless_next, next.collaboration_mode).unwrap_or(false);
+            if !layer_applied {
+                let _ = self.request_input(native_input_before, previous.collaboration_mode, Duration::from_millis(1200));
+                if mode_changed {
+                    let _ = self.request_input_layer(previous.collaboration_mode, Duration::from_millis(1200));
+                }
+                let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
                 self.rollback_mode(&main, &previous)?;
                 let message = "无法建立协作窗口层级（NOACTIVATE/任务栏）";
                 self.diagnostics.error_with_message("window.set_mode.layer_failed", message, json!({ "previous": previous, "next": next }));
@@ -313,49 +410,29 @@ impl NativeWindowManager {
             self.diagnostics.info("window.layer_ready", json!({
                 "enabled": focusless_next, "aboveTaskbar": next.collaboration_mode,
             }));
-
-            // Enabling needs a live helper. Disabling can skip IPC when hooks are
-            // already down (shortcut pre-release) or the helper is already gone.
-            let hooks_active = self.shared.input_hooks_active.load(Ordering::SeqCst);
-            let need_input_ipc = focusless_next || (focusless_before && hooks_active);
-            if need_input_ipc {
-                if let Err(error) = self.ensure_helper_ready(Duration::from_millis(if focusless_next { 5000 } else { 800 })) {
-                    if focusless_next {
-                        let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
-                        self.rollback_mode(&main, &previous)?;
-                        self.diagnostics.error_with_message("window.set_mode.helper_not_ready", error.to_string(), json!({ "previous": previous, "next": next }));
-                        return Ok(previous);
-                    }
-                    self.diagnostics.warn("window.set_mode.helper_skip_disable", json!({ "error": error.to_string() }));
-                    self.shared.input_hooks_active.store(false, Ordering::SeqCst);
-                } else {
-                    let input_timeout = if focusless_next { Duration::from_millis(2500) } else { Duration::from_millis(600) };
-                    if !self.request_input(focusless_next, next.collaboration_mode, input_timeout)? && focusless_next {
-                        let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
-                        self.rollback_mode(&main, &previous)?;
-                        let message = "无法启用协作输入钩子（INPUT），请重试或检查数位板驱动";
-                        self.diagnostics.error_with_message("window.set_mode.input_failed", message, json!({ "previous": previous, "next": next }));
-                        return Ok(previous);
-                    }
-                }
-            } else {
-                self.diagnostics.info("window.input_skip", json!({
-                    "enabled": focusless_next, "hooksActive": hooks_active,
-                }));
-            }
-            self.diagnostics.info("window.input_ready", json!({ "enabled": focusless_next }));
         }
 
-        // Do not place an interactive WebView above the click-through main window.
-        // A pen down implicitly captures to that WebView and releases to Photoshop
-        // at the contact boundary; on a virtual multi-monitor desktop that handoff
-        // can also expose a different absolute cursor coordinate. INPUT observes
-        // the physical packets while the real target remains Photoshop.
-        let remove_pen_layer = !self.shared.pen_labels.lock().is_empty();
-
         // Commit the click-through mode only after the native input observer is ready.
-        main.set_ignore_cursor_events(next.click_through || focusless_next)?;
+        if let Err(error) = main.set_ignore_cursor_events(next.click_through || focusless_next) {
+            let _ = self.request_input(native_input_before, previous.collaboration_mode, Duration::from_millis(1200));
+            if mode_changed {
+                let _ = self.request_input_layer(previous.collaboration_mode, Duration::from_millis(1200));
+            }
+            let _ = apply_focusless_layer(&main, focusless_before, previous.collaboration_mode);
+            let _ = self.rollback_mode(&main, &previous);
+            self.diagnostics.error_with_message("window.set_mode.pointer_target_failed", error.to_string(), json!({
+                "previous": previous, "next": next,
+            }));
+            return Ok(previous);
+        }
+        if next.collaboration_mode {
+            // The overlay is created before set_resizable(false) and DWM placement.
+            // Sync it to the final visible frame so the click-through main window
+            // does not leave an uncovered strip around every edge.
+            let _ = self.request_input_layer(true, Duration::from_millis(1500));
+        }
         *self.shared.state.write() = next.clone();
+        *self.shared.pointer_coordinate_space.lock() = None;
         if focusless_next && (!focusless_before || !previous.collaboration_mode && next.collaboration_mode) {
             let _ = self.shared.app.state::<crate::state::AppState>().photoshop.warm();
             self.shared.app.state::<crate::state::AppState>().photoshop.capture_focus();
@@ -363,9 +440,6 @@ impl NativeWindowManager {
         if focusless_before && !focusless_next { let _ = main.set_focus(); }
         self.diagnostics.info("window.set_mode.ok", json!({ "state": next }));
 
-        if remove_pen_layer {
-            self.spawn_pen_window_update(false);
-        }
         Ok(next)
     }
 
@@ -414,24 +488,30 @@ impl NativeWindowManager {
             "alwaysOnTop": state.always_on_top,
         }));
         if state.collaboration_mode {
-            // Electron contract: release native INPUT before React restores window state.
-            // Must not activate a window or inject input (AGENTS.md first-stroke invariant).
-            if let Ok(main) = self.main_window() {
-                let _ = main.set_ignore_cursor_events(state.click_through);
-            }
+            // Release helper ownership before React restores any window state.
+            // A physical contact makes either request fail; in that case keep the
+            // collaboration window untouched and do not emit the toggle request.
             let released = self.request_input(false, false, Duration::from_millis(500)).unwrap_or(false);
             self.diagnostics.info("window.collaboration_input_release", json!({ "released": released }));
             if !released {
-                self.diagnostics.warn("window.collaboration_input_release", json!({ "action": "restart_helper" }));
-                self.restart_helper();
+                self.diagnostics.warn("window.collaboration_input_release_blocked", json!({ "reason": "active_contact_or_timeout" }));
+                return;
+            }
+            let layer_released = self.request_input_layer(false, Duration::from_millis(900)).unwrap_or(false);
+            self.diagnostics.info("window.collaboration_layer_release", json!({ "released": layer_released }));
+            if !layer_released {
+                let restored = self.request_input(true, true, Duration::from_millis(1200)).unwrap_or(false);
+                let restored_layer = self.request_input_layer(true, Duration::from_millis(1800)).unwrap_or(false);
+                self.diagnostics.warn("window.collaboration_layer_release_blocked", json!({
+                    "inputRestored": restored, "layerRestored": restored_layer,
+                }));
+                return;
+            }
+            if let Ok(main) = self.main_window() {
+                let _ = main.set_ignore_cursor_events(state.click_through);
             }
         }
         let _ = self.shared.app.emit("window:toggle-collaboration-requested", ());
-    }
-
-    fn restart_helper(&self) {
-        self.clear_helper();
-        let _ = self.start_helper();
     }
 
     pub fn begin_native_move(&self) -> Result<()> {
@@ -458,63 +538,6 @@ impl NativeWindowManager {
         Ok(monitor_bounds(position.x as f64 + point.0 * scale, position.y as f64 + point.1 * scale, position, scale))
     }
 
-    pub fn taskbar_pen_start(&self, input: &TaskbarPointerInput) -> String {
-        if !self.mode().collaboration_mode || !focusless(&self.mode()) || input.pointer_type != "pen" { return "block".into(); }
-        let mode = if input.alt_key { "pick" } else if self.query_key(0x20) { "pan" } else { "block" };
-        // Drive LL-hook gesture state from the pen overlay because hook-level
-        // Alt sampling alone can miss the start of a Windows Ink contact.
-        let _ = self.send_line(&format!("GESTURE|{mode}\n"));
-        if mode == "pick" || mode == "pan" {
-            self.extend_pick_critical(Duration::from_millis(2000));
-        }
-        mode.into()
-    }
-
-    pub fn taskbar_pen_pointer(&self, source: &WebviewWindow, input: TaskbarPointerInput) -> Result<()> {
-        if !self.mode().collaboration_mode || !focusless(&self.mode()) || input.pointer_type != "pen" { return Ok(()); }
-        if !matches!(input.kind.as_str(), "down" | "move" | "up" | "cancel") { return Ok(()); }
-        let mode = input.mode.as_deref().unwrap_or("block"); if mode == "block" { return Ok(()); }
-        if matches!(input.kind.as_str(), "down") && (mode == "pick" || mode == "pan") {
-            let _ = self.send_line(&format!("GESTURE|{mode}\n"));
-            self.extend_pick_critical(Duration::from_millis(2000));
-        } else if matches!(input.kind.as_str(), "up" | "cancel") {
-            let _ = self.send_line("GESTURE|none\n");
-            self.extend_pick_critical(Duration::from_millis(500));
-        } else if matches!(input.kind.as_str(), "move") && mode == "pick" {
-            self.extend_pick_critical(Duration::from_millis(2000));
-        }
-        // DOM client coordinates belong to the pen WebView's DPI space. On a
-        // multi-monitor desktop its scale can differ from the main WebView's,
-        // and virtual-screen coordinates can be negative. Convert through
-        // physical screen coordinates using each window's own client origin.
-        let source_position = source.inner_position()?;
-        let source_scale = source.scale_factor()?;
-        let main = self.main_window()?;
-        let main_position = main.inner_position()?;
-        let main_scale = main.scale_factor()?;
-        let screen_x = source_position.x as f64 + input.client_x * source_scale;
-        let screen_y = source_position.y as f64 + input.client_y * source_scale;
-        let client_x = (screen_x - main_position.x as f64) / main_scale;
-        let client_y = (screen_y - main_position.y as f64) / main_scale;
-        let visible_bounds = monitor_bounds(screen_x, screen_y, main_position, main_scale);
-        if input.kind == "down" {
-            self.diagnostics.info("window.pen_coordinate_space", json!({
-                "sourcePosition": { "x": source_position.x, "y": source_position.y },
-                "sourceScale": source_scale,
-                "mainPosition": { "x": main_position.x, "y": main_position.y },
-                "mainScale": main_scale,
-                "screen": { "x": screen_x, "y": screen_y },
-                "client": { "x": client_x, "y": client_y },
-            }));
-        }
-        let payload = NativePointerPayload {
-            kind: input.kind.clone(), client_x, client_y,
-            alt_key: mode == "pick", space_key: mode == "pan",
-            pointer_type: "pen".into(), delta: 0.0, visible_bounds,
-        };
-        self.shared.app.emit("window:native-pointer", payload)?; Ok(())
-    }
-
     pub fn extend_pick_critical(&self, extra: Duration) {
         extend_pick_critical(&self.shared, extra);
     }
@@ -530,25 +553,12 @@ impl NativeWindowManager {
             if let Ok(main) = self.main_window() {
                 let _ = apply_focusless_layer(&main, true, state.collaboration_mode);
             }
-            let _ = self.request_input(true, state.collaboration_mode, Duration::from_millis(500));
-            self.sync_pen_windows();
+            let input_ready = self.request_input(true, state.collaboration_mode, Duration::from_millis(800)).unwrap_or(false);
+            if input_ready && state.collaboration_mode {
+                let _ = self.request_input_layer(true, Duration::from_millis(1500));
+            }
         } else if state.always_on_top && !state.collaboration_mode {
             if let Ok(window) = self.main_window() { let _ = set_always_on_top_screen_saver(&window, true); }
-        }
-    }
-
-    pub fn sync_pen_windows(&self) {
-        let Ok(main) = self.main_window() else { return; };
-        let Ok(position) = main.outer_position() else { return; };
-        let Ok(size) = main.outer_size() else { return; };
-        let labels = self.shared.pen_labels.lock().clone();
-        for label in labels {
-            let Some(window) = self.shared.app.get_webview_window(&label) else { continue; };
-            let _ = window.set_position(tauri::Position::Physical(position));
-            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: size.width, height: size.height }));
-            let _ = set_pen_window_owner(&window, &main);
-            let _ = configure_no_activate_tool_window(&window);
-            let _ = window.set_always_on_top(true);
         }
     }
 
@@ -581,42 +591,46 @@ impl NativeWindowManager {
             Err(_) => {
                 self.shared.pending_input.lock().remove(&id);
                 self.diagnostics.warn("window.input_timeout", json!({ "id": id, "enabled": enabled }));
-                // On disable timeout assume disarmed so exit does not restart the helper
-                // or wait again; enable timeout remains a hard failure for the caller.
-                if !enabled { self.shared.input_hooks_active.store(false, Ordering::SeqCst); }
-                Ok(!enabled)
+                // A disable timeout is not proof that the physical contact and Hook
+                // were released. Keep the prior state and refuse the mode transition.
+                Ok(false)
             }
         }
     }
 
-    fn spawn_pen_window_update(&self, enabled: bool) {
-        let app = self.shared.app.clone();
-        let diagnostics = self.diagnostics.clone();
-        let shared = self.shared.clone();
-        thread::spawn(move || {
-            // Let the invoking command finish so the main/event loop can accept a new WebView.
-            thread::sleep(Duration::from_millis(32));
-            let app_for_main = app.clone();
-            let diagnostics_for_main = diagnostics.clone();
-            let shared_for_main = shared.clone();
-            // Prefer main-thread create; falling back to direct build if dispatch fails.
-            let dispatched = app.run_on_main_thread(move || {
-                if let Err(error) = configure_pen_window_impl(
-                    &app_for_main, &shared_for_main, enabled, &diagnostics_for_main,
-                ) {
-                    diagnostics_for_main.warn("window.collaboration_pen_layer_failed", json!({
-                        "enabled": enabled,
-                        "error": error.to_string(),
-                    }));
+    fn request_input_layer(&self, enabled: bool, timeout: Duration) -> Result<bool> {
+        if !enabled && !self.shared.input_layer_active.load(Ordering::SeqCst) {
+            return Ok(true);
+        }
+        if enabled {
+            self.ensure_helper_ready(timeout.max(Duration::from_millis(3000)))?;
+        } else if !self.shared.ready.load(Ordering::SeqCst) || !self.helper_alive() {
+            // The HWND belongs to the helper process and cannot survive its exit.
+            self.shared.input_layer_active.store(false, Ordering::SeqCst);
+            return Ok(true);
+        }
+        let id = self.next_id();
+        let handle = raw_handle(&self.main_window()?)?;
+        let (sender, receiver) = mpsc::channel();
+        self.shared.pending_layer.lock().insert(id.clone(), sender);
+        if let Err(error) = self.send_line(&format!("LAYER|{id}|{handle}|{}\n", enabled as u8)) {
+            self.shared.pending_layer.lock().remove(&id);
+            return Err(error);
+        }
+        match receiver.recv_timeout(timeout) {
+            Ok(status) => {
+                let ready = if enabled { status == "READY" } else { status == "RELEASED" };
+                if ready {
+                    self.shared.input_layer_active.store(enabled, Ordering::SeqCst);
                 }
-            });
-            if let Err(error) = dispatched {
-                diagnostics.warn("window.collaboration_pen_layer_failed", json!({
-                    "enabled": enabled,
-                    "error": format!("run_on_main_thread: {error}"),
-                }));
+                Ok(ready)
             }
-        });
+            Err(_) => {
+                self.shared.pending_layer.lock().remove(&id);
+                self.diagnostics.warn("window.input_layer_timeout", json!({ "id": id, "enabled": enabled }));
+                Ok(false)
+            }
+        }
     }
 
     fn send_line(&self, line: &str) -> Result<()> {
@@ -628,52 +642,14 @@ impl NativeWindowManager {
     fn main_window(&self) -> Result<WebviewWindow> { self.shared.app.get_webview_window("main").ok_or_else(|| anyhow!("主窗口不可用")) }
 }
 
-fn configure_pen_window_impl(
-    app: &AppHandle,
-    shared: &NativeShared,
-    enabled: bool,
-    diagnostics: &DiagnosticsLog,
-) -> Result<()> {
-    let labels = std::mem::take(&mut *shared.pen_labels.lock());
-    for label in labels {
-        if let Some(window) = app.get_webview_window(&label) {
-            let _ = window.destroy();
-        }
-    }
-    if !enabled {
-        return Ok(());
-    }
-    let main = app.get_webview_window("main").ok_or_else(|| anyhow!("主窗口不可用"))?;
-    let position = main.outer_position()?;
-    let size = main.outer_size()?;
-    let scale = main.scale_factor()?;
-    let label = "taskbar-pen-0".to_string();
-    // Builder only accepts logical x/y; correct with Physical immediately after build
-    // so mixed-DPI multi-monitor layouts do not place the overlay on the wrong screen.
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App("taskbar-pen.html".into()))
-        .title("Yoiniwa Pen Input").decorations(false).transparent(true).shadow(false).visible(false)
-        .focused(false).focusable(false).skip_taskbar(true).resizable(false).always_on_top(true)
-        .position(position.x as f64 / scale, position.y as f64 / scale)
-        .inner_size(size.width as f64 / scale, size.height as f64 / scale).build()?;
-    let _ = window.set_position(tauri::Position::Physical(position));
-    let _ = window.set_size(tauri::Size::Physical(size));
-    set_pen_window_owner(&window, &main)?;
-    configure_no_activate_tool_window(&window)?;
-    set_always_on_top_screen_saver(&window, true)?;
-    let _ = window.set_position(tauri::Position::Physical(position));
-    let _ = window.show();
-    shared.pen_labels.lock().push(label);
-    diagnostics.info("window.collaboration_pen_layer_ready", json!({ "windows": 1 }));
-    Ok(())
-}
-
 impl Drop for NativeWindowManager {
     fn drop(&mut self) {
         if let Some(mut helper) = self.helper.get_mut().take() {
-            let _ = helper.stdin.write_all(b"INPUT|drop-release|0|0|0\nSHUTDOWN\n");
+            let _ = helper.stdin.write_all(b"SHUTDOWN\n");
             let _ = helper.stdin.flush();
             drop(helper.stdin);
-            // Prefer graceful exit so ShutdownInputHooks can Unhook + release buttons.
+            // Prefer graceful exit so the Hook and helper-owned HWND are released
+            // on their owning threads without synthesizing any input.
             let deadline = std::time::Instant::now() + Duration::from_millis(2000);
             while std::time::Instant::now() < deadline {
                 match helper.child.try_wait() {
@@ -701,15 +677,17 @@ fn handle_helper_line(shared: &Arc<NativeShared>, diagnostics: &Arc<DiagnosticsL
     }
     let parts = line.split('|').collect::<Vec<_>>();
     match parts.first().copied() {
-        Some("INPUT_ACK") if parts.len() >= 3 => if let Some(sender) = shared.pending_input.lock().remove(parts[1]) { let _ = sender.send(parts[2] == "READY"); },
+        Some("INPUT_ACK") if parts.len() >= 3 => if let Some(sender) = shared.pending_input.lock().remove(parts[1]) {
+            let _ = sender.send(parts[2] == "READY" || parts[2] == "RELEASED");
+        },
+        Some("LAYER_ACK") if parts.len() >= 3 => if let Some(sender) = shared.pending_layer.lock().remove(parts[1]) {
+            let _ = sender.send(parts[2].to_string());
+        },
         Some("KEY") if parts.len() >= 3 => if let Some(sender) = shared.pending_key.lock().remove(parts[1]) { let _ = sender.send(parts[2] == "1"); },
         Some("ZOOM") if parts.len() >= 2 => { let _ = shared.app.emit("window:native-zoom", if parts[1] == "IN" { "in" } else { "out" }); }
         Some("POINTER") if parts.len() >= 8 => emit_helper_pointer(shared, &parts),
         Some("DONE") | Some("SKIPPED") => { let _ = shared.app.emit("window:move-finished", ()); }
         Some("APPEARANCE_DONE") | Some("APPEARANCE_SKIPPED") => {}
-        Some("INPUT_PROBE") => {
-            diagnostics.info("window.native_input_probe", json!({ "line": line }));
-        }
         Some("PICK_CRITICAL") if parts.len() >= 2 => {
             let extra = if parts[1] == "HOLD" {
                 Duration::from_millis(500)
@@ -717,13 +695,12 @@ fn handle_helper_line(shared: &Arc<NativeShared>, diagnostics: &Arc<DiagnosticsL
                 Duration::from_millis(2000)
             };
             extend_pick_critical(shared, extra);
-            diagnostics.info("window.pick_critical", json!({ "phase": parts[1], "ms": extra.as_millis() }));
         }
-        Some("GESTURE_ACK") if parts.len() >= 2 => {
-            diagnostics.info("window.gesture_ack", json!({ "mode": parts[1] }));
-        }
-        Some("INPUT_SHUTDOWN") | Some("SHUTDOWN_ACK") => {
+        Some("INPUT_SHUTDOWN") => {
             diagnostics.info("window.input_hooks_shutdown", json!({ "line": line }));
+        }
+        Some("SHUTDOWN_ACK") => {
+            diagnostics.info("window.helper_shutdown_ack", json!({}));
             if let Some(sender) = shared.pending_shutdown.lock().take() {
                 let _ = sender.send(());
             }
@@ -751,16 +728,63 @@ fn pick_critical_active(shared: &NativeShared) -> bool {
 
 fn emit_helper_pointer(shared: &Arc<NativeShared>, parts: &[&str]) {
     let pointer_type = if parts[6] == "pen" { "pen" } else { "mouse" };
-    if pointer_type == "pen" && !shared.pen_labels.lock().is_empty() && parts[1] != "HOVER" { return; }
-    let Some(window) = shared.app.get_webview_window("main") else { return; };
-    let Ok(position) = window.inner_position() else { return; }; let Ok(scale) = window.scale_factor() else { return; };
-    let Ok(screen_x) = parts[2].parse::<f64>() else { return; }; let Ok(screen_y) = parts[3].parse::<f64>() else { return; };
+    let kind = parts[1].to_ascii_lowercase();
+    let begins_gesture = kind == "down";
+    let Ok(screen_x) = parts[2].parse::<f64>() else { return; };
+    let Ok(screen_y) = parts[3].parse::<f64>() else { return; };
+    // HOVER/WHEEL must never seed a gesture cache: the helper can move the
+    // no-activate window directly with the right button, so a hover-time origin
+    // may already be stale by the next tip-down. Every DOWN is authoritative.
+    let cached_coordinates = if begins_gesture {
+        None
+    } else {
+        *shared.pointer_coordinate_space.lock()
+    };
+    let coordinates = if let Some(cached) = cached_coordinates {
+        cached
+    } else {
+        let Some(window) = shared.app.get_webview_window("main") else { return; };
+        let Ok(position) = window.inner_position() else { return; };
+        let Ok(scale) = window.scale_factor() else { return; };
+        let coordinates = PointerCoordinateSpace {
+            window_x: position.x,
+            window_y: position.y,
+            scale,
+            visible_bounds: monitor_bounds(screen_x, screen_y, position, scale),
+        };
+        if begins_gesture {
+            *shared.pointer_coordinate_space.lock() = Some(coordinates);
+        }
+        coordinates
+    };
+    let position = PhysicalPosition::new(coordinates.window_x, coordinates.window_y);
+    let scale = coordinates.scale;
+    let ends_gesture = matches!(kind.as_str(), "up" | "cancel");
+    let hit_bounds = if parts.len() >= 12 {
+        let left = parts[8].parse::<f64>().ok();
+        let top = parts[9].parse::<f64>().ok();
+        let right = parts[10].parse::<f64>().ok();
+        let bottom = parts[11].parse::<f64>().ok();
+        match (left, top, right, bottom) {
+            (Some(left), Some(top), Some(right), Some(bottom)) if right > left && bottom > top => {
+                Some(VisibleBounds { left, top, right, bottom })
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let payload = NativePointerPayload {
-        kind: parts[1].to_ascii_lowercase(), client_x: (screen_x - position.x as f64) / scale,
+        kind, client_x: (screen_x - position.x as f64) / scale,
         client_y: (screen_y - position.y as f64) / scale, alt_key: parts[4] == "1", space_key: parts[5] == "1",
-        pointer_type: pointer_type.into(), delta: parts[7].parse().unwrap_or(0.0), visible_bounds: monitor_bounds(screen_x, screen_y, position, scale),
+        pointer_type: pointer_type.into(), delta: parts[7].parse().unwrap_or(0.0),
+        visible_bounds: coordinates.visible_bounds,
+        screen_x: Some(screen_x), screen_y: Some(screen_y), hit_bounds,
     };
     let _ = shared.app.emit("window:native-pointer", payload);
+    if ends_gesture {
+        *shared.pointer_coordinate_space.lock() = None;
+    }
 }
 
 fn focusless(state: &WindowState) -> bool { state.locked && state.always_on_top }
@@ -888,33 +912,6 @@ fn set_always_on_top_screen_saver(window: &WebviewWindow, enabled: bool) -> Resu
     window.set_always_on_top(enabled)?;
     Ok(())
 }
-
-#[cfg(windows)]
-fn set_pen_window_owner(pen: &WebviewWindow, main: &WebviewWindow) -> Result<()> {
-    unsafe {
-        let pen_hwnd = root_hwnd(pen)?;
-        let main_hwnd = root_hwnd(main)?;
-        // Owner relationship (GWLP_HWNDPARENT on top-level) matches Electron parent: mainWindow.
-        SetWindowLongPtrW(pen_hwnd, GWLP_HWNDPARENT, main_hwnd.0 as isize);
-    }
-    Ok(())
-}
-#[cfg(not(windows))]
-fn set_pen_window_owner(_pen: &WebviewWindow, _main: &WebviewWindow) -> Result<()> { Ok(()) }
-
-#[cfg(windows)]
-fn configure_no_activate_tool_window(window: &WebviewWindow) -> Result<()> {
-    unsafe {
-        let hwnd = root_hwnd(window)?;
-        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, current | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize);
-        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    }
-    Ok(())
-}
-#[cfg(not(windows))]
-fn configure_no_activate_tool_window(_window: &WebviewWindow) -> Result<()> { Ok(()) }
 
 #[cfg(windows)]
 fn set_window_opacity(window: &WebviewWindow, opacity: f64) -> Result<()> {

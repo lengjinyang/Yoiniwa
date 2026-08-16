@@ -6,7 +6,10 @@ export interface PhotoshopSyncRequest {
 }
 
 interface QueueEntry extends PhotoshopSyncRequest {
-  waiters: Array<(result: PhotoshopColorSyncResult) => void>;
+  waiters: Array<{
+    resolve(result: PhotoshopColorSyncResult): void;
+    reject(error: unknown): void;
+  }>;
 }
 
 /** Coalesce in-flight Photoshop color syncs so rapid Alt+pen picks keep the latest color. */
@@ -16,28 +19,35 @@ export function createPhotoshopSyncQueue(
   let active = false;
   let pending: QueueEntry | undefined;
 
-  const run = async (entry: QueueEntry) => {
+  const run = async (first: QueueEntry) => {
     active = true;
-    const result = await execute(entry);
-    entry.waiters.forEach((waiter) => waiter(result));
-    const next = pending;
-    pending = undefined;
-    if (next) await run(next);
-    else active = false;
+    let entry: QueueEntry | undefined = first;
+    while (entry) {
+      try {
+        const result = await execute(entry);
+        entry.waiters.forEach((waiter) => waiter.resolve(result));
+      } catch (error) {
+        entry.waiters.forEach((waiter) => waiter.reject(error));
+      }
+      entry = pending;
+      pending = undefined;
+    }
+    active = false;
   };
 
   return {
     enqueue(request: PhotoshopSyncRequest) {
-      return new Promise<PhotoshopColorSyncResult>((resolve) => {
+      return new Promise<PhotoshopColorSyncResult>((resolve, reject) => {
+        const waiter = { resolve, reject };
         if (active) {
           if (pending) {
             pending.color = request.color;
             pending.returnFocus = request.returnFocus;
-            pending.waiters.push(resolve);
-          } else pending = { ...request, waiters: [resolve] };
+            pending.waiters.push(waiter);
+          } else pending = { ...request, waiters: [waiter] };
           return;
         }
-        void run({ ...request, waiters: [resolve] });
+        void run({ ...request, waiters: [waiter] });
       });
     },
   };

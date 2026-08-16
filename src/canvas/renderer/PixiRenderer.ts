@@ -42,7 +42,12 @@ export class PixiRenderer {
   private selectedGroupId?: string;
   private viewportScale = 1;
   private previewSampleBlockedUntil = 0;
+  private lastStageRenderAt = 0;
   private pendingColorReadback?: PendingColorReadback;
+  private previewSampleMap?: {
+    left: number; top: number; width: number; height: number;
+    parentLeft: number; parentTop: number; until: number;
+  };
 
   constructor(
     private readonly requestRender: () => void,
@@ -55,10 +60,20 @@ export class PixiRenderer {
       // Create an alpha-capable context up front; Pixi cannot add alpha support
       // after initialization when the user later lowers background opacity.
       background, backgroundAlpha: 0, antialias: true, autoDensity: true,
+      // Eyedropper preview reads the last presented frame instead of forcing a
+      // full scene render on every sample. Without this the buffer is discarded
+      // after compositing and each preview hitch-renders the stage.
+      preserveDrawingBuffer: true,
       resolution: boundedDevicePixelRatio(), preference: 'webgl', powerPreference: 'high-performance',
       resizeTo: container,
+      // Canvas input is owned by InputRouter. Pixi's EventSystem preventDefault
+      // on pointerdown capture suppresses Windows Ink / WebView2 contacts.
+      eventFeatures: { click: false, move: false, wheel: false, globalMove: false },
     });
     this.app.renderer.background.alpha = backgroundOpacity;
+    this.app.stage.eventMode = 'none';
+    const events = (this.app.renderer as typeof this.app.renderer & { events?: { autoPreventDefault: boolean } }).events;
+    if (events) events.autoPreventDefault = false;
     this.app.stop();
     const gl = (this.app.renderer as typeof this.app.renderer & { gl?: WebGL2RenderingContext }).gl;
     if (gl) {
@@ -220,11 +235,13 @@ export class PixiRenderer {
     this.layers.overlay.scale.set(viewport.scale);
     try {
       this.app.render();
+      this.lastStageRenderAt = performance.now();
       this.videos?.afterRender();
     } catch {
       this.videos?.recoverAfterRenderError();
       try {
         this.app.render();
+        this.lastStageRenderAt = performance.now();
         this.videos?.afterRender();
       } catch { /* keep the last good frame instead of freezing the canvas */ }
     }
@@ -289,12 +306,31 @@ export class PixiRenderer {
     const gl = (this.app.renderer as typeof this.app.renderer & { gl?: WebGL2RenderingContext }).gl;
     if (!gl || !this.app.canvas.isConnected) return undefined;
     const now = performance.now();
-    const bounds = this.app.canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return undefined;
+    const mapped = this.previewSampleMap;
+    const reuse = !final && mapped && now < mapped.until && mapped.width > 0 && mapped.height > 0;
+    let left: number; let top: number; let width: number; let height: number;
+    let parentLeft: number; let parentTop: number;
+    if (reuse && mapped) {
+      left = mapped.left; top = mapped.top; width = mapped.width; height = mapped.height;
+      parentLeft = mapped.parentLeft; parentTop = mapped.parentTop;
+    } else {
+      const canvasBounds = this.app.canvas.getBoundingClientRect();
+      if (!canvasBounds.width || !canvasBounds.height) return undefined;
+      const parentBounds = this.app.canvas.parentElement?.getBoundingClientRect();
+      left = canvasBounds.left; top = canvasBounds.top;
+      width = canvasBounds.width; height = canvasBounds.height;
+      parentLeft = parentBounds?.left ?? left;
+      parentTop = parentBounds?.top ?? top;
+      if (!final) {
+        this.previewSampleMap = { left, top, width, height, parentLeft, parentTop, until: now + 250 };
+      }
+    }
+    const canvasX = point.x + parentLeft - left;
+    const canvasY = point.y + parentTop - top;
     const x = Math.max(0, Math.min(gl.drawingBufferWidth - 1,
-      Math.floor(point.x * gl.drawingBufferWidth / bounds.width)));
+      Math.floor(canvasX * gl.drawingBufferWidth / width)));
     const y = Math.max(0, Math.min(gl.drawingBufferHeight - 1,
-      gl.drawingBufferHeight - 1 - Math.floor(point.y * gl.drawingBufferHeight / bounds.height)));
+      gl.drawingBufferHeight - 1 - Math.floor(canvasY * gl.drawingBufferHeight / height)));
     if (final) {
       this.discardPendingColorReadback(gl);
       return this.readColorSynchronously(gl, x, y);
@@ -304,7 +340,7 @@ export class PixiRenderer {
     if (!this.pendingColorReadback && now >= this.previewSampleBlockedUntil) {
       if (!this.beginAsyncColorReadback(gl, x, y)) {
         // WebGL 1 and uncommon drivers without pixel-pack buffers retain the
-        // limited synchronous fallback. The controller calls this at only 30 Hz.
+        // limited synchronous fallback. In-flight PBO is the only GPU throttle.
         return completed ?? this.readColorSynchronously(gl, x, y, false);
       }
     }
@@ -331,10 +367,13 @@ export class PixiRenderer {
     const buffer = gl.createBuffer();
     if (!buffer) return false;
     const startedAt = performance.now();
-    // Rendering is CPU-cheap compared with a synchronous GPU read. Pairing it
-    // with a pixel-pack buffer keeps the displayed frame valid without stalling
-    // pointer delivery while the GPU finishes the one-pixel transfer.
-    this.app.render();
+    // A preview read should not stall the tablet stroke. With a preserved
+    // drawing buffer, reuse the last presented frame while the scene is still
+    // fresh; otherwise render once, then pack a one-pixel PBO.
+    if (startedAt - this.lastStageRenderAt > 48) {
+      this.app.render();
+      this.lastStageRenderAt = performance.now();
+    }
     const previous = gl.getParameter(gl.PIXEL_PACK_BUFFER_BINDING) as WebGLBuffer | null;
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
     gl.bufferData(gl.PIXEL_PACK_BUFFER, 4, gl.STREAM_READ);

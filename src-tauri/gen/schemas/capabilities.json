@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Yoiniwa main window","local":true,"windows":["main","taskbar-pen-*"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Yoiniwa main window","local":true,"windows":["main"],"permissions":["core:default"]}}

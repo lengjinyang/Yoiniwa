@@ -88,6 +88,17 @@ export class CanvasRuntime {
   private colorPickerPoint?: { x: number; y: number };
   private colorPickerColor?: PickedColor;
   private colorPickerVisibleBounds?: { left: number; top: number; right: number; bottom: number };
+  private colorPickerOrigin = { left: 0, top: 0 };
+  private colorPickerView = { width: 0, height: 0 };
+  private colorPickerMetricsAt = 0;
+  private pickerChromeFrame?: number;
+  private pickerHideFrame?: number;
+  private lastPickerDisplayHex?: string;
+  private lastPickedDisplay?: PickedColor;
+  private colorPickerHudOffset = { x: 32, y: 32 };
+  private colorPickerHudClamp = { left: 8, top: 8, right: 8, bottom: 8 };
+  private colorPickerHudShown = false;
+  private colorPickerReticleShown = false;
 
   constructor(private readonly container: HTMLElement, private readonly options: CanvasRuntimeOptions) {
     this.renderer = new PixiRenderer(() => this.scheduleRender(), options.videoPlayback, options.boostImageResource);
@@ -109,13 +120,22 @@ export class CanvasRuntime {
     }
     this.createColorPickerHud();
     const armAltFromPointer = (event: PointerEvent) => {
+      if (this.colorPickerSampling) return;
       this.updateColorPickerVisibleBounds(event);
+      const nativeInput = Boolean((event as PointerEvent & { nativeInput?: boolean }).nativeInput);
       if (event.type === 'pointerenter') this.altPointerArmed = event.altKey;
       else if (event.altKey) this.altPointerArmed = true;
-      if (event.pointerType === 'pen' && event.buttons === 0 && !this.colorPickerSampling && !this.colorPickerHoverSuppressed) {
+      else if (nativeInput) this.altPointerArmed = false;
+      this.syncColorPickerArmedClass();
+      if (this.colorPickerSampling) return;
+      // HUD is contact-only. Alt hover may show the reticle for a pen, never the swatch.
+      if (event.pointerType === 'pen' && event.buttons === 0 && !this.colorPickerHoverSuppressed) {
         if (this.colorPickerHeld || event.altKey || this.altPointerArmed) {
-          const bounds = this.container.getBoundingClientRect();
-          this.showColorPickerHover({ x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+          if (!this.colorPickerPoint) this.refreshColorPickerOrigin();
+          this.showColorPickerHover({
+            x: event.clientX - this.colorPickerOrigin.left,
+            y: event.clientY - this.colorPickerOrigin.top,
+          });
         } else this.showColorPickerHover();
       }
     };
@@ -126,17 +146,25 @@ export class CanvasRuntime {
     const updateAltFromKeyboard = (event: KeyboardEvent) => {
       if (event.key !== 'Alt' && event.code !== 'AltLeft' && event.code !== 'AltRight') return;
       this.altPointerArmed = event.type === 'keydown';
+      this.syncColorPickerArmedClass();
+      if (event.type === 'keydown') this.refreshColorPickerOrigin();
       if (event.type === 'keyup') hideAltHover();
     };
     this.container.addEventListener('pointerenter', armAltFromPointer, true);
+    this.container.addEventListener('pointerdown', armAltFromPointer, true);
     this.container.addEventListener('pointermove', armAltFromPointer, true);
     this.container.addEventListener('pointerleave', hideAltHover, true);
+    window.addEventListener('pointerdown', armAltFromPointer, true);
+    window.addEventListener('pointermove', armAltFromPointer, true);
     window.addEventListener('keydown', updateAltFromKeyboard, true);
     window.addEventListener('keyup', updateAltFromKeyboard, true);
     this.lifecycle.add(() => {
       this.container.removeEventListener('pointerenter', armAltFromPointer, true);
+      this.container.removeEventListener('pointerdown', armAltFromPointer, true);
       this.container.removeEventListener('pointermove', armAltFromPointer, true);
       this.container.removeEventListener('pointerleave', hideAltHover, true);
+      window.removeEventListener('pointerdown', armAltFromPointer, true);
+      window.removeEventListener('pointermove', armAltFromPointer, true);
       window.removeEventListener('keydown', updateAltFromKeyboard, true);
       window.removeEventListener('keyup', updateAltFromKeyboard, true);
     });
@@ -213,12 +241,11 @@ export class CanvasRuntime {
       scene: () => this.sceneStore, enabled: (event) => this.isColorPickerPointer(event),
       sample: (point, final) => this.renderer.sampleColor(point, final),
       position: (point) => this.positionColorPickerPreview(point),
+      pending: () => this.showColorPickerPending(),
       preview: (color) => this.updateColorPickerPreview(color),
       picked: (color) => {
         this.altPointerArmed = false;
         this.colorPickerHoverSuppressed = true;
-        this.hideColorPickerOverlay();
-        this.container.classList.remove('color-picker-sampling');
         this.options.onColorPicked?.(color);
       },
     });
@@ -305,6 +332,7 @@ export class CanvasRuntime {
       this.container.removeEventListener('dragleave', clearDropTarget);
     });
     this.scheduleRender();
+    this.syncColorPickerArmedClass();
   }
 
   private emitGroupPreviewAnchor(id: string) {
@@ -339,9 +367,13 @@ export class CanvasRuntime {
     this.colorPickerHeld = held;
     if (!held) this.colorPickerHoverSuppressed = false;
     this.container.classList.toggle('color-picker-active', held);
+    this.syncColorPickerArmedClass();
     if (!held && !this.colorPickerSampling) this.showColorPickerHover();
   }
-  setColorPickerShortcut(shortcut: ColorPickerShortcut) { this.colorPickerShortcut = shortcut; }
+  setColorPickerShortcut(shortcut: ColorPickerShortcut) {
+    this.colorPickerShortcut = shortcut;
+    this.syncColorPickerArmedClass();
+  }
   setVisualNotesState(state: VisualNotesToolState) {
     this.visualNotesState = state; this.renderer.setSelectedVisualNote(state.enabled ? state.selectedMarkId : undefined);
     if (!state.enabled) this.visualNotesController?.cancel();
@@ -352,6 +384,7 @@ export class CanvasRuntime {
   setWindowLocked(locked: boolean) {
     this.windowLocked = locked;
     this.container.classList.toggle('canvas-content-locked', locked);
+    this.syncColorPickerArmedClass();
     if (!locked) return;
     this.selectionController?.setSelection([]);
     this.selectionController?.clearLasso();
@@ -413,9 +446,10 @@ export class CanvasRuntime {
 
   private isColorPickerPointer(event: PointerEvent) {
     this.updateColorPickerVisibleBounds(event);
+    if (event.altKey) this.altPointerArmed = true;
     const primaryButton = event.button === 0
       || (event.pointerType === 'pen' && event.button === -1 && (event.buttons & 1) !== 0);
-    if (this.drawingCollaborationMode && (event as PointerEvent & { spaceKey?: boolean }).spaceKey && primaryButton) return false;
+    if (this.drawingCollaborationMode && (event as PointerEvent & { spaceKey?: boolean }).spaceKey && !event.altKey && primaryButton) return false;
     if (this.drawingCollaborationMode && event.ctrlKey && primaryButton) return false;
     // Locked reference mode always mirrors Photoshop's Alt+pen gesture, even
     // when the editable-board shortcut preference is still set to S.
@@ -426,18 +460,24 @@ export class CanvasRuntime {
       ctrlKey: event.ctrlKey, altKey, shiftKey: event.shiftKey,
     });
     if (enabled && event.button === 0) this.colorPickerHoverSuppressed = false;
-    // The pointer-enter latch only bridges the focus transition. Consume it on
-    // the first pen contact so a missed key-up cannot arm later normal taps.
+    // Consume the hover latch on the first pen contact, but do not restyle
+    // the document here — that double-toggle hitches the first tablet drag.
     if (enabled && event.pointerType === 'pen' && (event.button === 0 || event.button === -1)) {
       this.altPointerArmed = false;
     }
     return enabled;
   }
 
+  private syncColorPickerArmedClass() {
+    const shortcut = this.windowLocked ? 'alt' : this.colorPickerShortcut;
+    const armed = this.colorPickerHeld || this.colorPickerSampling
+      || (shortcut === 'alt' && this.altPointerArmed);
+    document.documentElement.classList.toggle('color-picker-armed', armed);
+  }
+
   private createColorPickerHud() {
     const reticle = document.createElement('div');
     reticle.className = 'color-picker-reticle';
-    reticle.hidden = true;
     const reticleDot = document.createElement('i');
     reticleDot.className = 'color-picker-reticle-dot';
     const reticleIcon = document.createElement('i');
@@ -445,7 +485,6 @@ export class CanvasRuntime {
     reticle.append(reticleDot, reticleIcon);
     const hud = document.createElement('div');
     hud.className = 'color-picker-hud';
-    hud.hidden = true;
     const swatch = document.createElement('div');
     swatch.className = 'color-picker-swatch';
     const values = document.createElement('div');
@@ -462,53 +501,115 @@ export class CanvasRuntime {
     this.colorPickerRgb = rgb;
   }
 
+  private refreshColorPickerOrigin() {
+    const bounds = this.container.getBoundingClientRect();
+    this.colorPickerOrigin = { left: bounds.left, top: bounds.top };
+    this.colorPickerView = { width: this.container.clientWidth, height: this.container.clientHeight };
+    this.colorPickerMetricsAt = performance.now();
+  }
+
+  private ensureColorPickerMetrics() {
+    if (this.colorPickerView.width > 0 && performance.now() - this.colorPickerMetricsAt < 2000) return;
+    this.refreshColorPickerOrigin();
+  }
+
+  private schedulePickerChrome() {
+    if (this.pickerChromeFrame !== undefined) return;
+    this.pickerChromeFrame = requestAnimationFrame(() => {
+      this.pickerChromeFrame = undefined;
+      if (!this.colorPickerSampling) return;
+      this.container.classList.add('color-picker-sampling');
+      this.syncColorPickerArmedClass();
+    });
+  }
+
   private positionColorPickerPreview(point?: { x: number; y: number }) {
+    if (point && this.pickerHideFrame !== undefined) {
+      cancelAnimationFrame(this.pickerHideFrame);
+      this.pickerHideFrame = undefined;
+    }
+    const starting = Boolean(point) && !this.colorPickerSampling;
     this.colorPickerSampling = Boolean(point);
     this.colorPickerPoint = point;
     if (!point) {
+      if (this.pickerChromeFrame !== undefined) {
+        cancelAnimationFrame(this.pickerChromeFrame);
+        this.pickerChromeFrame = undefined;
+      }
+      // Same-tick native DOWN/UP never paints if we hide synchronously. Keep
+      // the HUD up for one frame so a short tablet contact is still a drag.
+      if (this.colorPickerHudShown || this.colorPickerReticleShown) {
+        if (this.pickerHideFrame === undefined) {
+          this.pickerHideFrame = requestAnimationFrame(() => {
+            this.pickerHideFrame = undefined;
+            this.hideColorPickerOverlay();
+            this.container.classList.remove('color-picker-sampling');
+            this.syncColorPickerArmedClass();
+          });
+        }
+        return;
+      }
       this.hideColorPickerOverlay();
       this.container.classList.remove('color-picker-sampling');
+      this.syncColorPickerArmedClass();
       return;
     }
-    this.container.classList.add('color-picker-sampling');
-    this.positionColorPickerReticle(point, this.colorPickerColor);
-    if (this.colorPickerColor && this.colorPickerHud && !this.colorPickerHud.hidden) {
-      this.positionColorPickerHud(point);
+    if (starting) {
+      this.ensureColorPickerMetrics();
+      if (!this.colorPickerColor && this.lastPickedDisplay) this.colorPickerColor = this.lastPickedDisplay;
+      this.lockColorPickerHudOffset(point);
     }
+    this.positionColorPickerReticle(point, this.colorPickerColor);
+    this.followColorPickerHud(point);
+    if (starting) this.schedulePickerChrome();
   }
 
   private updateColorPickerPreview(color?: PickedColor) {
-    const hud = this.colorPickerHud;
+    if (!color || !this.colorPickerHud || !this.colorPickerPoint) return;
+    this.applyPickedColor(color);
+  }
+
+  private applyPickedColor(color: PickedColor) {
     this.colorPickerColor = color;
-    if (!hud || !color || !this.colorPickerPoint) {
-      if (hud) hud.hidden = true;
-      if (this.colorPickerPoint) this.positionColorPickerReticle(this.colorPickerPoint);
-      return;
-    }
-    this.positionColorPickerReticle(this.colorPickerPoint, color);
-    if (this.colorPickerSwatch) this.colorPickerSwatch.style.setProperty('--picked-color', color.hex);
+    this.lastPickedDisplay = color;
+    if (this.lastPickerDisplayHex === color.hex) return;
+    this.lastPickerDisplayHex = color.hex;
+    this.colorPickerSwatch?.style.setProperty('--picked-color', color.hex);
     if (this.colorPickerHex) this.colorPickerHex.textContent = color.hex;
     if (this.colorPickerRgb) this.colorPickerRgb.textContent = `RGB ${color.r}  ${color.g}  ${color.b}`;
-    hud.hidden = false;
-    this.positionColorPickerHud(this.colorPickerPoint);
+    this.colorPickerReticle?.style.setProperty('--picked-color', color.hex);
+  }
+
+  private colorPickerHudBounds() {
+    const origin = this.colorPickerOrigin;
+    const visible = this.colorPickerVisibleBounds;
+    const view = this.colorPickerView;
+    return {
+      left: Math.max(8, (visible?.left ?? origin.left) - origin.left + 8),
+      top: Math.max(8, (visible?.top ?? origin.top) - origin.top + 8),
+      right: Math.min(view.width - 8, (visible?.right ?? origin.left + view.width) - origin.left - 8),
+      bottom: Math.min(view.height - 8, (visible?.bottom ?? origin.top + view.height) - origin.top - 8),
+    };
+  }
+
+  private lockColorPickerHudOffset(point: { x: number; y: number }) {
+    const width = 178; const height = 54; const gap = 32;
+    const bounds = this.colorPickerHudBounds();
+    this.colorPickerHudClamp = bounds;
+    this.colorPickerHudOffset = {
+      x: point.x + gap + width <= bounds.right ? gap : -gap - width,
+      y: point.y + gap + height <= bounds.bottom ? gap : -gap - height,
+    };
   }
 
   private positionColorPickerHud(point: { x: number; y: number }) {
     const hud = this.colorPickerHud;
     if (!hud) return;
-    const width = hud.offsetWidth || 178; const height = hud.offsetHeight || 54; const gap = 32;
-    const containerBounds = this.container.getBoundingClientRect();
-    const visible = this.colorPickerVisibleBounds;
-    const left = Math.max(8, (visible?.left ?? containerBounds.left) - containerBounds.left + 8);
-    const top = Math.max(8, (visible?.top ?? containerBounds.top) - containerBounds.top + 8);
-    const right = Math.min(this.container.clientWidth - 8,
-      (visible?.right ?? containerBounds.right) - containerBounds.left - 8);
-    const bottom = Math.min(this.container.clientHeight - 8,
-      (visible?.bottom ?? containerBounds.bottom) - containerBounds.top - 8);
-    const preferredX = point.x + gap + width <= right ? point.x + gap : point.x - gap - width;
-    const preferredY = point.y + gap + height <= bottom ? point.y + gap : point.y - gap - height;
-    hud.style.left = `${Math.max(left, Math.min(right - width, preferredX))}px`;
-    hud.style.top = `${Math.max(top, Math.min(bottom - height, preferredY))}px`;
+    const width = 178; const height = 54;
+    const { left, top, right, bottom } = this.colorPickerHudClamp;
+    const x = Math.max(left, Math.min(right - width, point.x + this.colorPickerHudOffset.x));
+    const y = Math.max(top, Math.min(bottom - height, point.y + this.colorPickerHudOffset.y));
+    hud.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   }
 
   private updateColorPickerVisibleBounds(event: PointerEvent) {
@@ -519,6 +620,16 @@ export class CanvasRuntime {
       ? bounds : undefined;
   }
 
+  private followColorPickerHud(point: { x: number; y: number }) {
+    const hud = this.colorPickerHud;
+    if (!hud) return;
+    if (!this.colorPickerHudShown) {
+      hud.classList.add('is-shown');
+      this.colorPickerHudShown = true;
+    }
+    this.positionColorPickerHud(point);
+  }
+
   private showColorPickerHover(point?: { x: number; y: number }) {
     if (!point) {
       this.hideColorPickerOverlay();
@@ -527,19 +638,31 @@ export class CanvasRuntime {
     this.positionColorPickerReticle(point);
   }
 
+  private showColorPickerPending() {
+    const point = this.colorPickerPoint;
+    if (!this.colorPickerHud || !point) return;
+    this.followColorPickerHud(point);
+  }
+
   private positionColorPickerReticle(point: { x: number; y: number }, color?: PickedColor) {
     const reticle = this.colorPickerReticle;
     if (!reticle) return;
-    reticle.hidden = false;
-    reticle.style.left = `${point.x}px`;
-    reticle.style.top = `${point.y}px`;
+    if (!this.colorPickerReticleShown) {
+      reticle.classList.add('is-shown');
+      this.colorPickerReticleShown = true;
+    }
+    // Keep pen tracking on the compositor. Updating left/top forces layout and
+    // makes the first collaboration drag visibly hitch over a WebGL canvas.
+    reticle.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -50%)`;
     if (color) reticle.style.setProperty('--picked-color', color.hex);
     else reticle.style.removeProperty('--picked-color');
   }
 
   private hideColorPickerOverlay() {
-    if (this.colorPickerHud) this.colorPickerHud.hidden = true;
-    if (this.colorPickerReticle) this.colorPickerReticle.hidden = true;
+    this.colorPickerHud?.classList.remove('is-shown');
+    this.colorPickerReticle?.classList.remove('is-shown');
+    this.colorPickerHudShown = false;
+    this.colorPickerReticleShown = false;
     this.colorPickerPoint = undefined;
     this.colorPickerColor = undefined;
   }
@@ -568,6 +691,9 @@ export class CanvasRuntime {
   }
 
   destroy() {
+    if (this.pickerHideFrame !== undefined) cancelAnimationFrame(this.pickerHideFrame);
+    if (this.pickerChromeFrame !== undefined) cancelAnimationFrame(this.pickerChromeFrame);
+    document.documentElement.classList.remove('color-picker-armed');
     this.container.classList.remove('color-picker-active', 'color-picker-sampling', 'canvas-content-locked');
     this.colorPickerHud?.remove();
     this.colorPickerReticle?.remove();

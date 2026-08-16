@@ -16,6 +16,7 @@ interface PointerInput {
 interface SampleTarget {
   point: Point;
   world: Point;
+  inside: boolean;
   item?: SceneItem;
   color?: PickedColor;
 }
@@ -33,6 +34,7 @@ function sourcePixel(item: SceneItem, point: Point) {
 }
 
 function latestPointerEvent(event: PointerEvent) {
+  if ((event as PointerEvent & { nativeInput?: boolean }).nativeInput) return event;
   const coalesced = event.getCoalescedEvents?.();
   return coalesced?.length ? coalesced[coalesced.length - 1] : event;
 }
@@ -49,6 +51,21 @@ function colorFromRgba(rgba: { r: number; g: number; b: number; a: number }): Pi
   return { ...rgba, hex };
 }
 
+function preventMouseDefault(event: PointerEvent) {
+  if (event.pointerType !== 'pen') event.preventDefault();
+}
+
+/** Client pixels past the canvas rect that still count as inside. Covers DPI
+ *  rounding and a few pixels that Windows maps through the resize frame. */
+const EDGE_TOLERANCE_PX = 24;
+
+function fromCanvasElement(element: HTMLElement, event: PointerEvent) {
+  if ((event as PointerEvent & { nativeInput?: boolean }).nativeInput) return true;
+  const target = event.target;
+  if (!target || typeof Node === 'undefined' || !(target instanceof Node)) return false;
+  return element.contains?.(target) === true;
+}
+
 export class ColorPickerController {
   private state: 'idle' | 'sampling' | 'committed' | 'canceled' = 'idle';
   private request = 0;
@@ -58,8 +75,14 @@ export class ColorPickerController {
   private pendingPreview?: Point;
   private lastClientPoint?: Point;
   private lastPreviewColor?: PickedColor;
-  private lastPreviewClient?: Point;
   private lastPreviewSampleAt = Number.NEGATIVE_INFINITY;
+  /** Same native event can arrive from window capture and the canvas router. */
+  private handledPointerEvent?: PointerEvent;
+  /** Native collaboration input is already clipped to the Yoiniwa window. */
+  private nativeGesture = false;
+  /** Client rect captured on tip-down so drag does not force layout. */
+  private gestureHost?: { left: number; top: number; width: number; height: number };
+  private lastHost?: { left: number; top: number; width: number; height: number; at: number };
   constructor(private readonly options: {
     element: HTMLElement;
     input: InputRouter | PointerInput;
@@ -69,41 +92,80 @@ export class ColorPickerController {
     enabled(event: PointerEvent): boolean;
     sample(point: Point, final: boolean): PickedColor | undefined;
     position(point?: Point): void;
+    pending?(): void;
     preview(color: PickedColor | undefined): void;
     picked(color: PickedColor): void;
     sampleSource?(item: SceneItem, point: Point): Promise<{ r: number; g: number; b: number; a: number }>;
     schedulePreview?(callback: FrameRequestCallback): number;
     cancelPreview?(handle: number): void;
     previewSampleIntervalMs?: number;
-    /** Reuse last preview on UP when the tip has not moved farther than this (client px). */
-    previewReuseMaxDistancePx?: number;
     now?(): number;
+    /** Capture-phase host for overlay punch-through. Defaults to `window`. */
+    captureTarget?: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
   }) {}
 
   private now() { return this.options.now?.() ?? performance.now(); }
-  private previewReuseMaxDistancePx() { return this.options.previewReuseMaxDistancePx ?? 12; }
 
   start() {
+    const queuePreview = (clientPoint: Point) => {
+      this.pendingPreview = clientPoint;
+      this.lastClientPoint = clientPoint;
+      if (this.previewFrame !== undefined) return;
+      const schedule = this.options.schedulePreview ?? requestAnimationFrame;
+      this.previewFrame = schedule(() => {
+        this.previewFrame = undefined;
+        const pending = this.pendingPreview;
+        this.pendingPreview = undefined;
+        if (!pending || this.pointerId === undefined) return;
+        const target = this.sampleTarget(pending.x, pending.y, false, false);
+        // Color readback is throttled. Reticle/HUD position is applied on the
+        // pointer event itself so a tablet tip is not one frame behind.
+        if (!target.inside) return;
+        const now = this.now();
+        const awaitingFirstColor = this.lastPreviewColor === undefined;
+        // Match Alt+mouse: live color at display refresh. In-flight GPU
+        // readback is the only throttle; the pointer path only moves the HUD.
+        const interval = this.options.previewSampleIntervalMs ?? 16;
+        if (!awaitingFirstColor && now - this.lastPreviewSampleAt < interval) return;
+        this.lastPreviewSampleAt = now;
+        const color = this.options.sample(target.point, false);
+        if (color) {
+          this.lastPreviewColor = color;
+          this.options.preview(color);
+        }
+        if (this.pointerId !== undefined && this.lastPreviewColor === undefined) {
+          queuePreview(pending);
+        }
+      });
+    };
     const down = (event: PointerEvent) => {
+      if (this.handledPointerEvent === event) return;
       if (!supportsPickerGesture(event) || !this.options.enabled(event)) return;
-      const target = this.sampleTarget(event.clientX, event.clientY, false, false);
-      if (!target.item?.assetId) return;
-      if (this.state === 'sampling' || this.pointerId !== undefined || this.previewFrame !== undefined) this.cancel();
+      this.handledPointerEvent = event;
+      // Keep a valid Alt contact alive even when its first packet lands just
+      // outside an image. The same contact can then begin sampling as soon as
+      // the user drags onto an image instead of remaining inert until tip-up.
+      if (this.state === 'sampling' || this.state === 'committed'
+        || this.pointerId !== undefined || this.previewFrame !== undefined) this.cancel();
       else this.request += 1;
-      event.preventDefault();
+      this.nativeGesture = Boolean((event as PointerEvent & { nativeInput?: boolean }).nativeInput);
+      this.captureHostRect();
+      const target = this.mapClient(event.clientX, event.clientY);
+      preventMouseDefault(event);
       this.state = 'sampling';
       this.pointerId = event.pointerId;
       this.pointerType = event.pointerType;
       this.lastClientPoint = { x: event.clientX, y: event.clientY };
       this.lastPreviewColor = undefined;
-      this.lastPreviewClient = undefined;
+      this.lastPreviewSampleAt = Number.NEGATIVE_INFINITY;
       this.request += 1;
-      try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic input may not support capture. */ }
-      this.lastPreviewSampleAt = this.now();
+      // Pointer capture forces a WebView hit-test and can hitch the first
+      // Windows Ink drag. Mouse still needs it to track outside the canvas.
+      if (event.pointerType === 'mouse' && !this.nativeGesture) {
+        try { this.options.element.setPointerCapture(event.pointerId); } catch { /* Synthetic input may not support capture. */ }
+      }
       this.options.position(target.point);
-      // Defer the first GPU color readback until a move frame so pen-down
-      // remains responsive and does not stall the start of a drag gesture.
-      this.options.preview(undefined);
+      queuePreview({ x: event.clientX, y: event.clientY });
     };
     const move = (event: PointerEvent) => {
       if (this.state !== 'sampling' || event.pointerId !== this.pointerId) return;
@@ -114,41 +176,16 @@ export class ColorPickerController {
         this.cancel(event.pointerId);
         return;
       }
-      event.preventDefault();
+      preventMouseDefault(event);
       const latest = latestPointerEvent(event);
-      this.pendingPreview = { x: latest.clientX, y: latest.clientY };
-      this.lastClientPoint = this.pendingPreview;
-      if (this.previewFrame !== undefined) return;
-      const schedule = this.options.schedulePreview ?? requestAnimationFrame;
-      this.previewFrame = schedule(() => {
-        this.previewFrame = undefined;
-        const pending = this.pendingPreview;
-        this.pendingPreview = undefined;
-        if (!pending || this.pointerId === undefined) return;
-        const target = this.sampleTarget(pending.x, pending.y, false, false);
-        // Position updates are intentionally independent from GPU sampling. The
-        // reticle stays attached to the pen at display refresh rate even when a
-        // color readback is skipped because the GPU is busy.
-        this.options.position(target.point);
-        if (!target.item?.assetId) {
-          this.options.preview(undefined);
-          return;
-        }
-        const now = this.now();
-        const interval = this.options.previewSampleIntervalMs ?? 33;
-        if (now - this.lastPreviewSampleAt < interval) return;
-        this.lastPreviewSampleAt = now;
-        const color = this.options.sample(target.point, false);
-        if (color) {
-          this.lastPreviewColor = color;
-          this.lastPreviewClient = { x: pending.x, y: pending.y };
-          this.options.preview(color);
-        }
-      });
+      const clientPoint = { x: latest.clientX, y: latest.clientY };
+      const target = this.mapClient(clientPoint.x, clientPoint.y);
+      this.options.position(target.point);
+      queuePreview(clientPoint);
     };
     const up = (event: PointerEvent) => {
       if (this.state !== 'sampling' || event.pointerId !== this.pointerId) return;
-      event.preventDefault();
+      preventMouseDefault(event);
       const latest = latestPointerEvent(event);
       this.finish(event.pointerId, { x: latest.clientX, y: latest.clientY });
     };
@@ -156,17 +193,58 @@ export class ColorPickerController {
       if (event.pointerId !== this.pointerId) return;
       // Wacom/Windows Ink can end a valid primary-tip contact with
       // pointercancel during a focus transition. Preserve the artist's last
-      // sampled position instead of silently dropping the gesture.
-      if (this.pointerType === 'pen' && this.lastClientPoint) {
+      // sampled position instead of silently dropping the gesture. The native
+      // collaboration layer has stricter semantics: its CANCEL means the
+      // gesture was aborted and must never submit color during a later DOWN.
+      const nativeInput = Boolean((event as PointerEvent & { nativeInput?: boolean }).nativeInput);
+      if (!nativeInput && this.pointerType === 'pen' && this.lastClientPoint) {
         this.finish(event.pointerId, this.lastClientPoint);
       } else this.cancel(event.pointerId);
     };
+    const overlayDown = (event: PointerEvent) => {
+      down(event);
+      if (this.pointerId === event.pointerId && this.state === 'sampling'
+        && !fromCanvasElement(this.options.element, event)) {
+        preventMouseDefault(event);
+        event.stopPropagation();
+      }
+    };
+    const overlayMove = (event: PointerEvent) => {
+      if (this.state !== 'sampling' || event.pointerId !== this.pointerId) return;
+      if (fromCanvasElement(this.options.element, event)) return;
+      move(event);
+    };
+    const overlayUp = (event: PointerEvent) => {
+      if (this.state !== 'sampling' || event.pointerId !== this.pointerId) return;
+      if (fromCanvasElement(this.options.element, event)) return;
+      up(event);
+    };
+    const overlayCancel = (event: PointerEvent) => {
+      if (event.pointerId !== this.pointerId) return;
+      if (fromCanvasElement(this.options.element, event)) return;
+      cancel(event);
+    };
+    const capture = { capture: true } as const;
+    const captureHost = this.options.captureTarget
+      ?? (typeof globalThis.window === 'undefined' ? undefined : globalThis.window);
+    if (captureHost) {
+      captureHost.addEventListener('pointerdown', overlayDown as EventListener, capture);
+      captureHost.addEventListener('pointermove', overlayMove as EventListener, capture);
+      captureHost.addEventListener('pointerup', overlayUp as EventListener, capture);
+      captureHost.addEventListener('pointercancel', overlayCancel as EventListener, capture);
+    }
     const disposers = [
       this.options.input.onPointerDown(down), this.options.input.onPointerMove(move),
       this.options.input.onPointerUp(up), this.options.input.onPointerCancel(cancel),
     ];
     this.options.lifecycle.add(() => {
       this.cancel();
+      if (captureHost) {
+        captureHost.removeEventListener('pointerdown', overlayDown as EventListener, capture);
+        captureHost.removeEventListener('pointermove', overlayMove as EventListener, capture);
+        captureHost.removeEventListener('pointerup', overlayUp as EventListener, capture);
+        captureHost.removeEventListener('pointercancel', overlayCancel as EventListener, capture);
+      }
       disposers.forEach((dispose) => dispose());
     });
   }
@@ -180,13 +258,42 @@ export class ColorPickerController {
     this.options.preview(undefined);
   }
 
-  private sampleTarget(clientX: number, clientY: number, final: boolean, sample = true): SampleTarget {
+  private captureHostRect() {
+    const cached = this.lastHost;
+    if (cached && (this.nativeGesture || this.now() - cached.at < 2000)) {
+      this.gestureHost = cached;
+      return cached;
+    }
     const bounds = this.options.element.getBoundingClientRect();
-    const point = { x: clientX - bounds.left, y: clientY - bounds.top };
+    this.lastHost = {
+      left: bounds.left, top: bounds.top,
+      width: Math.max(0, bounds.width), height: Math.max(0, bounds.height),
+      at: this.now(),
+    };
+    this.gestureHost = this.lastHost;
+    return this.gestureHost;
+  }
+
+  private mapClient(clientX: number, clientY: number) {
+    const bounds = this.gestureHost ?? this.captureHostRect();
+    const raw = { x: clientX - bounds.left, y: clientY - bounds.top };
+    const inside = this.nativeGesture || (raw.x >= -EDGE_TOLERANCE_PX && raw.y >= -EDGE_TOLERANCE_PX
+      && raw.x < bounds.width + EDGE_TOLERANCE_PX && raw.y < bounds.height + EDGE_TOLERANCE_PX);
+    return {
+      inside,
+      point: {
+        x: Math.max(0, Math.min(Math.max(0, bounds.width - 1e-4), raw.x)),
+        y: Math.max(0, Math.min(Math.max(0, bounds.height - 1e-4), raw.y)),
+      },
+    };
+  }
+
+  private sampleTarget(clientX: number, clientY: number, final: boolean, sample = true): SampleTarget {
+    const { point, inside } = this.mapClient(clientX, clientY);
     const world = this.options.camera.screenToWorld(point);
-    const scene = this.options.scene();
-    const item = scene?.imageAtPoint(world);
-    return { point, world, item, color: sample && item?.assetId ? this.options.sample(point, final) : undefined };
+    const color = sample && inside ? this.options.sample(point, final) : undefined;
+    const item = inside && sample && !color ? this.options.scene()?.imageAtPoint(world) : undefined;
+    return { point, world, inside, item, color };
   }
 
   private release(pointerId: number) {
@@ -195,7 +302,8 @@ export class ColorPickerController {
     this.pointerType = undefined;
     this.lastClientPoint = undefined;
     this.lastPreviewColor = undefined;
-    this.lastPreviewClient = undefined;
+    this.nativeGesture = false;
+    this.gestureHost = undefined;
     try {
       if (this.options.element.hasPointerCapture?.(pointerId)) this.options.element.releasePointerCapture(pointerId);
     } catch { /* The pointer may already have been canceled by Windows Ink. */ }
@@ -219,29 +327,16 @@ export class ColorPickerController {
 
   private finish(pointerId: number, clientPoint: Point) {
     const previewColor = this.lastPreviewColor;
-    const previewClient = this.lastPreviewClient;
-    const reusePreview = Boolean(
-      previewColor
-      && previewClient
-      && Math.hypot(clientPoint.x - previewClient.x, clientPoint.y - previewClient.y)
-        <= this.previewReuseMaxDistancePx(),
-    );
-    // Hit-test without a final GPU sample when reusing the last preview color.
-    const target = this.sampleTarget(clientPoint.x, clientPoint.y, !reusePreview, !reusePreview);
+    const target = this.sampleTarget(clientPoint.x, clientPoint.y, !previewColor, !previewColor);
     const token = this.request;
     this.release(pointerId);
-    // The gesture has ended even when the final source-pixel read is async.
-    // Clear the reticle immediately instead of leaving a stale marker visible
-    // while Photoshop synchronization or the fallback read completes.
-    this.options.position();
-    this.options.preview(undefined);
-    if (!target.item?.assetId) {
+    if (!target.inside) {
       this.state = 'canceled';
       this.options.position();
       this.options.preview(undefined);
       return;
     }
-    if (reusePreview && previewColor) {
+    if (previewColor) {
       this.commit(previewColor);
       return;
     }
@@ -249,12 +344,21 @@ export class ColorPickerController {
       this.commit(target.color);
       return;
     }
+    const item = target.item;
+    if (!item?.assetId) {
+      this.state = 'canceled';
+      this.options.position();
+      this.options.preview(undefined);
+      return;
+    }
+    this.options.position(target.point);
+    this.options.pending?.();
     const sampleSource = this.options.sampleSource ?? ((item: SceneItem, point: Point) => {
       if (!window.refCanvas) return Promise.reject(new Error('桌面取色服务不可用'));
       const pixel = sourcePixel(item, point);
       return window.refCanvas.sampleImagePixel(item.assetId as string, pixel.x, pixel.y);
     });
-    void sampleSource(target.item, target.world).then((rgba) => {
+    void sampleSource(item, target.world).then((rgba) => {
       if (token !== this.request) return;
       this.commit(colorFromRgba(rgba));
     }).catch((error: unknown) => {

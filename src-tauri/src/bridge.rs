@@ -11,7 +11,6 @@ use uuid::Uuid;
 
 use crate::{
     image_pipeline,
-    native::TaskbarPointerInput,
     photoshop::{automation_error, blocked_result},
     project::{build_compaction_candidate, BlobSource},
     state::AppState,
@@ -357,10 +356,30 @@ fn available_export_path(directory: &Path, name: &str, reserved: &mut std::colle
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn photoshop_set_foreground(state: State<'_, AppState>, color: PickedColor, return_focus: Option<bool>) -> PhotoshopColorSyncResult {
-    // Color COM sync must not race with blur Z-order repair during collab handoff.
-    state.native.extend_pick_critical(std::time::Duration::from_millis(500));
-    state.photoshop.set_foreground(color, return_focus.unwrap_or(false), &state.native.mode())
+pub async fn photoshop_set_foreground(
+    state: State<'_, AppState>,
+    color: PickedColor,
+    return_focus: Option<bool>,
+) -> CommandResult<PhotoshopColorSyncResult> {
+    let native = state.native.clone();
+    let photoshop = state.photoshop.clone();
+    let requested = return_focus.unwrap_or(false);
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        // Cover one COM attempt, one restart retry, the 80ms blur delay, and slack
+        // so Z-order repair cannot race an in-flight color submit.
+        native.extend_pick_critical(Duration::from_millis(2500));
+        let result = photoshop.set_foreground(color, requested, &native.mode());
+        native.extend_pick_critical(Duration::from_millis(800));
+        result
+    }).await.unwrap_or_else(|_| PhotoshopColorSyncResult {
+        ok: false,
+        status: "automation-error".into(),
+        sync_status: "automation-error".into(),
+        focus_status: "skipped".into(),
+        copied: false,
+        sync_latency_ms: 0.0,
+        message: Some("Photoshop 颜色同步任务中断".into()),
+    }))
 }
 
 #[tauri::command]
@@ -506,11 +525,6 @@ pub fn window_set_title(window: WebviewWindow, title: String) { let title = titl
 #[tauri::command] pub fn window_close(window: WebviewWindow) { let _ = window.close(); }
 #[tauri::command(rename_all = "camelCase")] pub fn window_close_response(state: State<'_, AppState>, should_close: bool) { state.native.respond_close(should_close); }
 #[tauri::command(rename_all = "camelCase")] pub fn window_dirty(state: State<'_, AppState>, dirty: bool, _revision: Option<u64>) { state.native.set_dirty(dirty); }
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn taskbar_pen_start(state: State<'_, AppState>, input: TaskbarPointerInput) -> String { state.native.taskbar_pen_start(&input) }
-#[tauri::command(rename_all = "camelCase")]
-pub fn taskbar_pen_pointer(window: WebviewWindow, state: State<'_, AppState>, input: TaskbarPointerInput) { let _ = state.native.taskbar_pen_pointer(&window, input); }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn logs_write(state: State<'_, AppState>, entries: Vec<Value>) -> CommandResult<()> { command_result(state.append_logs(&entries)) }

@@ -77,7 +77,6 @@ pub fn run() {
             bridge::window_is_key_down, bridge::window_set_title, bridge::window_minimize,
             bridge::window_toggle_maximize, bridge::window_move_start, bridge::window_move_update,
             bridge::window_move_end, bridge::window_close, bridge::window_close_response, bridge::window_dirty,
-            bridge::taskbar_pen_start, bridge::taskbar_pen_pointer,
             bridge::logs_write, bridge::logs_open_folder, bridge::logs_copy_diagnostics, bridge::logs_recent_problems,
             bridge::performance_record_manual_wheel,
         ]);
@@ -103,9 +102,6 @@ fn handle_window_event(app: &tauri::AppHandle, event: &WindowEvent) {
         WindowEvent::Focused(false) => {
             let native = state.native.clone();
             thread::spawn(move || { thread::sleep(Duration::from_millis(80)); native.repair_after_blur(); });
-        }
-        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-            state.native.sync_pen_windows();
         }
         WindowEvent::DragDrop(DragDropEvent::Drop { paths, position }) => {
             if let Some(window) = app.get_webview_window("main") {
