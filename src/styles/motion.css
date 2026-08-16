@@ -85,7 +85,6 @@ input, textarea, select {
 }
 
 .ui-icon,
-.group-list-swatch,
 .outline-thumb,
 .color-control-checker,
 .group-color-presets i,
@@ -202,10 +201,8 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
 /* Content changes remain subtle so large boards do not feel busy. */
 .photoshop-version-card,
 .empty-recent-list > button,
-.group-list > button,
 .outline-row,
-.version-compare-state,
-.group-inspector-summary {
+.version-compare-state {
   transition: color var(--duration-fast) var(--ease-standard),
     background-color var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
@@ -215,8 +212,7 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
 }
 
 .photoshop-version-card:hover,
-.empty-recent-list > button:hover,
-.group-inspector-summary:hover {
+.empty-recent-list > button:hover {
   transform: translateY(-1px);
 }
 
@@ -257,6 +253,5 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
   button:not(:disabled):active > .ui-icon,
   .photoshop-version-card:hover,
   .empty-recent-list > button:hover,
-  .group-inspector-summary:hover,
   .scene-name-badge { transform: none; }
 }

@@ -7,7 +7,7 @@ import type {
   VisualNoteTool,
   VisualNoteWidth,
 } from '../../types';
-import type { VisualNotesToolState } from '../../canvas/interaction/VisualNotesController';
+import type { VisualNotesToolState } from '../../canvas/publicTypes';
 
 interface UseVisualNotesOptions {
   notes: VisualNotesState;

@@ -2,16 +2,16 @@ import { Application } from 'pixi.js';
 import type { PickedColor, Scene, Viewport, VisualNotesState } from '../../types';
 import { boundedDevicePixelRatio } from '../runtime/CanvasConfig';
 import { ImageRenderer } from './ImageRenderer';
-import { VideoRenderer, type VideoTransportState } from './VideoRenderer';
+import { VideoRenderer } from './VideoRenderer';
+import type { VideoTransportState } from './VideoTypes';
 import { RenderLayers } from './RenderLayers';
 import { SelectionOverlay, type TransformHandle } from '../selection/SelectionOverlay';
-import type { LassoPoint } from '../selection/SelectionController';
+import type { GroupResizeHandle, LassoPoint } from '../publicTypes';
 import type { SceneItem } from '../../types';
 import { TextureManager } from '../textures/TextureManager';
 import { performanceMonitor } from '../../runtime/performanceMonitor';
 import { GroupRenderer } from './GroupRenderer';
 import { GroupResizeOverlay } from '../selection/GroupResizeOverlay';
-import type { GroupResizeHandle } from '../selection/GroupResizeController';
 import type { GroupHeaderAction } from '../selection/HitTestService';
 import { VisualNotesRenderer } from './VisualNotesRenderer';
 import type { VisualMark } from '../../types';
@@ -181,6 +181,7 @@ export class PixiRenderer {
   pauseVideo(id: string) { return this.videos?.pause(id) ?? false; }
   beginVideoTimelineSeek(id: string) { return this.videos?.beginTimelineSeek(id) ?? false; }
   seekVideoTimeline(id: string, time: number) { return this.videos?.seekTimeline(id, time) ?? false; }
+  seekVideoTimelineFrame(id: string, frame: number) { return this.videos?.seekTimelineFrame(id, frame) ?? false; }
   endVideoTimelineSeek(id: string) { return this.videos?.endTimelineSeek(id) ?? false; }
   beginCanvasVideoJog(id: string) { return this.videos?.beginCanvasJog(id) ?? false; }
   jogCanvasVideoFrames(id: string, frameOffset: number) { return this.videos?.jogCanvasFrames(id, frameOffset) ?? false; }

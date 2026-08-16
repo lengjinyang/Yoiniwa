@@ -1,5 +1,5 @@
-import type { Scene } from '../../types';
-import { toSceneItem } from '../../domain/media';
+import type { Scene } from '../types';
+import { toSceneItem } from '../domain/media';
 
 /** Runtime-only selection, GPU handles, requests and previews never cross this boundary. */
 export function serializeProjectScene(scene: Scene): Scene {

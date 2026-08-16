@@ -60,7 +60,7 @@ impl AssetService {
             let priority = url.query_pairs().find(|(key, _)| key == "priority")
                 .and_then(|(_, value)| value.parse::<i32>().ok()).unwrap_or(10);
             if let Some(bytes) = self.read_video_poster(id, edge) {
-                return Ok(ok_asset_bytes(id, "image/png", bytes)?);
+                return ok_asset_bytes(id, "image/png", bytes);
             }
             return Ok(match self.wait_job(self.enqueue_video_poster(id, edge, priority)) {
                 Ok(bytes) => ok_asset_bytes(id, "image/png", bytes)?,
@@ -81,12 +81,12 @@ impl AssetService {
         if variant == "mip" {
             let edge = query_u32(&url, "edge")?;
             if let Some(bytes) = self.read_mip(id, edge) {
-                return Ok(ok_asset_bytes(id, "image/webp", bytes)?);
+                return ok_asset_bytes(id, "image/webp", bytes);
             }
             // Electron: whole-image mips up to 4096 reuse the thumbnail pipeline when the edge matches.
             if matches!(edge, 128 | 256 | 512 | 1024) {
                 if let Some(bytes) = self.read_thumbnail(id, edge) {
-                    return Ok(ok_asset_bytes(id, "image/png", bytes)?);
+                    return ok_asset_bytes(id, "image/png", bytes);
                 }
                 return Ok(match self.wait_job(self.enqueue_thumbnail(id, edge, priority.max(if edge <= 128 { 20 } else { 10 }))) {
                     Ok(bytes) => ok_asset_bytes(id, "image/png", bytes)?,
@@ -103,7 +103,7 @@ impl AssetService {
             let column = query_u32(&url, "column")?;
             let row = query_u32(&url, "row")?;
             if let Some(bytes) = self.read_tile(id, level, column, row) {
-                return Ok(ok_asset_bytes(id, "image/webp", bytes)?);
+                return ok_asset_bytes(id, "image/webp", bytes);
             }
             // Electron contract: wait for pyramid level OUTSIDE the tile job slot,
             // so concurrent tiles cannot deadlock the worker pool on one level encode.
@@ -114,7 +114,7 @@ impl AssetService {
         }
         if let Some(edge) = variant.strip_prefix("thumb").and_then(|value| value.parse::<u32>().ok()) {
             if let Some(bytes) = self.read_thumbnail(id, edge) {
-                return Ok(ok_asset_bytes(id, "image/png", bytes)?);
+                return ok_asset_bytes(id, "image/png", bytes);
             }
             // Optional UI thumbs: fire-and-forget + 404 (listeners use thumbnail-ready).
             // Thumb128 is critical — wait like Electron so import preview never blanks.

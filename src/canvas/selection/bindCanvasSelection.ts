@@ -7,8 +7,8 @@ import type { InputRouter } from '../interaction/InputRouter';
 import type { PixiRenderer } from '../renderer/PixiRenderer';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
 import type { SceneStore } from '../scene/SceneStore';
-import type { GroupFrameBounds } from './GroupResizeController';
-import { SelectionController, type LassoPoint } from './SelectionController';
+import type { GroupFrameBounds, LassoPoint } from '../publicTypes';
+import { SelectionController } from './SelectionController';
 
 export interface CanvasSelectionHost {
   container: HTMLElement;

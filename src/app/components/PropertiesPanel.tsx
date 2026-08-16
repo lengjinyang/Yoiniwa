@@ -4,7 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import type { CacheInfo } from '../../types';
-import { SHORTCUT_LABELS, shortcutDisplayName, type ShortcutId, type ShortcutPreferences } from '../../keyboardShortcuts';
+import { SHORTCUT_LABELS, shortcutDisplayName, type ShortcutId, type ShortcutPreferences } from '../keyboardShortcuts';
 import { Button, formatBytes } from './CommonControls';
 import { UiIcon } from './UiIcon';
 

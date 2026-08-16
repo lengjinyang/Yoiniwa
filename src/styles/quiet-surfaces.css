@@ -157,23 +157,6 @@
 .property-panel h3 { margin-bottom: 9px; color: var(--text-secondary); font-size: 10px; font-weight: 600; letter-spacing: .7px; }
 .selection-summary, .property-panel label { color: var(--text-secondary); }
 
-.group-inspector-summary { padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); box-shadow: none; }
-.group-inspector-summary strong, .group-list strong { color: var(--text-primary); }
-.group-inspector-summary small, .group-list small { color: var(--text-muted); }
-.group-state-grid { gap: 5px; }
-.group-state-grid button { height: 62px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-secondary); background: var(--surface-2); }
-.group-state-grid button:hover { border-color: var(--border-strong); color: var(--text-primary); background: var(--surface-hover); }
-.group-state-grid button.active { border-color: var(--accent-border) !important; color: var(--accent-text); background: var(--accent-soft) !important; box-shadow: none; }
-.group-state-grid button.active small { color: var(--accent-text-muted); }
-.group-danger-actions { border-color: var(--border); }
-.group-danger-actions button { background: transparent; }
-.group-danger-actions button.danger { color: var(--danger); }
-.group-danger-actions button.danger:hover { border-color: var(--danger-border); color: var(--danger-hover); background: var(--danger-soft); }
-.group-list { gap: 2px; }
-.group-list > button { min-height: 34px; border: 1px solid transparent; border-radius: var(--radius-sm); }
-.group-list > button:hover { border-color: transparent; background: var(--surface-hover); }
-.group-list > button.selected { border-color: var(--accent-border); background: var(--accent-soft); }
-
 .outline-panel {
   top: 30px;
   left: 10px;
@@ -277,7 +260,6 @@
 .color-picker-hud { border: 1px solid var(--border); border-radius: var(--radius-panel); color: var(--text-primary); background: var(--surface-1); box-shadow: var(--shadow-panel); backdrop-filter: none; }
 .color-picker-values strong { color: var(--text-primary); font-weight: 600; }
 .color-picker-values small { color: var(--text-secondary); }
-.empty-icon { width: 50px; height: 50px; border: 1px solid var(--border); border-radius: var(--radius-panel); color: var(--accent-text-muted); background: var(--surface-1); }
 .empty-state { width: min(560px, calc(100vw - 40px)); }
 .empty-state h1 { color: var(--text-primary); font-size: 18px; font-weight: 600; }
 .empty-state p, .empty-state small { color: var(--text-secondary); }
@@ -331,6 +313,7 @@
   user-select: none;
   contain: layout paint;
 }
+.group-title-text-layer * { pointer-events: none; }
 
 .group-header-icon {
   position: absolute;

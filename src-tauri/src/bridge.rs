@@ -5,18 +5,18 @@ use arboard::{Clipboard, ImageData};
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tauri::{ipc::{InvokeBody, Request, Response}, AppHandle, Manager, State, WebviewWindow};
 use uuid::Uuid;
 
 use crate::{
     image_pipeline,
     photoshop::{automation_error, blocked_result},
-    project::{build_compaction_candidate, BlobSource},
+    photoshop_versions::{self, CreatePhotoshopVersion},
+    project::build_compaction_candidate,
     state::AppState,
     types::{
         CacheInfo, ImportedImage, PhotoshopColorSyncResult, PhotoshopDocumentResult,
-        PhotoshopProjectMetadata, PhotoshopVersionRecord, PickedColor, ProjectCommitRequest,
+        PhotoshopProjectMetadata, PickedColor, ProjectCommitRequest,
         ProjectCommitResult, ProjectStorageStats, RecentScene, Scene, WindowState, WindowStatePatch,
     },
 };
@@ -122,6 +122,11 @@ pub fn videos_cancel_playback(state: State<'_, AppState>, asset_id: String) -> C
 #[tauri::command(rename_all = "camelCase")]
 pub fn videos_prepare_index(state: State<'_, AppState>, asset_id: String) -> CommandResult<()> {
     command_result(state.assets.enqueue_video_index(&asset_id))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn videos_frame_index(state: State<'_, AppState>, asset_id: String) -> CommandResult<Value> {
+    command_result(state.assets.video_frame_index(&asset_id))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -291,7 +296,7 @@ pub fn image_export_originals(state: State<'_, AppState>, items: Vec<OriginalExp
             }
             return Ok(serde_json::json!({ "canceled": false, "path": target, "count": 1 }));
         }
-        let Some(directory) = rfd::FileDialog::new().set_title(&format!("选择保存 {} 张原图的文件夹", prepared.len())).pick_folder() else {
+        let Some(directory) = rfd::FileDialog::new().set_title(format!("选择保存 {} 张原图的文件夹", prepared.len())).pick_folder() else {
             return Ok(serde_json::json!({ "canceled": true }));
         };
         let mut reserved = std::collections::HashSet::new();
@@ -428,38 +433,16 @@ pub fn photoshop_take_preview(state: State<'_, AppState>, request: Request<'_>) 
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub fn photoshop_create_version(
     app: AppHandle, state: State<'_, AppState>, session_id: Option<String>, scene: Scene, metadata: PhotoshopProjectMetadata,
     name: String, note: Option<String>, revision: Option<u64>, preview: Option<Vec<u8>>,
 ) -> CommandResult<ProjectCommitResult> {
     command_result((|| {
         if state.native.document_blocked() { return Ok(ProjectCommitResult { canceled: Some(false), message: Some("无焦点取色模式期间不能保存 Photoshop 版本，请先退出协作模式或解除锁定置顶".into()), ..Default::default() }); }
-        let name = name.trim().chars().take(160).collect::<String>(); if name.is_empty() { return Ok(ProjectCommitResult { canceled: Some(false), message: Some("请输入版本名称".into()), ..Default::default() }); }
-        let directory = state.temp_dir.join(format!("yoiniwa-photoshop-version-{}", Uuid::new_v4())); fs::create_dir_all(&directory)?;
-        let version_id = Uuid::new_v4().to_string(); let psd = directory.join(format!("{version_id}.psd")); let psb = directory.join(format!("{version_id}.psb")); let preview_path = directory.join(format!("{version_id}.jpg"));
-        let capture = state.photoshop.run_document(&serde_json::json!({ "kind": "capture-version", "archivePsdPath": psd, "archivePsbPath": psb, "previewPath": preview_path }), Duration::from_secs(120));
-        if !capture.ok { let _ = fs::remove_dir_all(directory); return Ok(ProjectCommitResult { canceled: Some(false), message: capture.message, ..Default::default() }); }
-        let archive_path = capture.archive_path.clone().ok_or_else(|| anyhow!("Photoshop 版本缺少归档路径"))?;
-        let archive_bytes = fs::read(&archive_path)?; let sha256 = format!("{:x}", Sha256::digest(&archive_bytes));
-        let preview_bytes = fs::read(capture.preview_path.as_ref().unwrap_or(&preview_path.to_string_lossy().into_owned()))?;
-        let preview_image = state.assets.register_bytes(format!("{name}.jpg"), &preview_bytes, None, "file")?;
-        let version = PhotoshopVersionRecord {
-            id: version_id, name: name.clone(), note: note.map(|value| value.trim().chars().take(4000).collect()).filter(|value: &String| !value.is_empty()),
-            created_at: chrono::Utc::now().to_rfc3339(), document_name: capture.document_name.unwrap_or_else(|| name.clone()),
-            width: capture.width.unwrap_or(0), height: capture.height.unwrap_or(0), color_mode: capture.color_mode.unwrap_or_else(|| "RGB".into()),
-            bit_depth: capture.bit_depth.unwrap_or(8), layer_count: capture.layer_count.unwrap_or(0), format: capture.format.unwrap_or_else(|| "psd".into()),
-            byte_length: archive_bytes.len() as u64, sha256: sha256.clone(), blob_id: Some(sha256.clone()), archive_entry: None,
-            preview_asset_id: preview_image.asset_id.clone(), preview_asset: preview_image.asset.clone(),
-        };
-        let mut next_metadata = metadata; next_metadata.versions.push(version.clone());
-        let request = ProjectCommitRequest { session_id, scene, photoshop_project: next_metadata, renderer_revision: revision, preview, reason: "version-add".into() };
-        let source = BlobSource { id: sha256, source_path: PathBuf::from(archive_path), source_offset: 0, byte_length: archive_bytes.len() as u64, kind: "photoshop-version".into(), mime_type: Some("image/vnd.adobe.photoshop".into()) };
-        let mut project = state.project.lock();
-        let mut result = if project.current_session_id().is_some() { project.commit(request, vec![source])? } else {
-            let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.yoi", name)).add_filter("Yoiniwa 画板", &["yoi"]).save_file() else { return Ok(ProjectCommitResult { canceled: Some(true), ..Default::default() }); };
-            project.save_as_to(request, &path.with_extension("yoi"), vec![source])?
-        };
-        result.version = Some(version); let _ = fs::remove_dir_all(directory);
+        let result = photoshop_versions::create_version(&state, CreatePhotoshopVersion {
+            session_id, scene, metadata, name, note, revision, preview,
+        })?;
         schedule_background_compaction(&app, &result);
         Ok(result)
     })())
@@ -479,6 +462,7 @@ pub fn photoshop_open_version(state: State<'_, AppState>, session_id: Option<Str
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub fn photoshop_delete_version(
     app: AppHandle, state: State<'_, AppState>, session_id: Option<String>, scene: Scene, mut metadata: PhotoshopProjectMetadata,
     version_id: String, revision: Option<u64>, preview: Option<Vec<u8>>,
@@ -503,8 +487,8 @@ pub fn window_get_collaboration_shortcut(state: State<'_, AppState>) -> Value { 
 #[tauri::command(rename_all = "camelCase")]
 pub fn window_set_collaboration_shortcut(app: AppHandle, state: State<'_, AppState>, shortcut: String) -> Value {
     if state.native.mode().collaboration_mode { return serde_json::json!({ "ok": false, "shortcut": state.native.shortcut(), "message": "请先退出协作模式，再更改协作快捷键" }); }
-    if !crate::app::valid_collaboration_shortcut(&shortcut) { return serde_json::json!({ "ok": false, "shortcut": state.native.shortcut(), "message": "全局快捷键需要包含 Ctrl 或 Alt，且不能使用固定退出兜底键" }); }
-    match crate::app::replace_collaboration_shortcut(&app, &state.native.shortcut(), &shortcut) {
+    if !crate::collaboration_shortcut::valid_collaboration_shortcut(&shortcut) { return serde_json::json!({ "ok": false, "shortcut": state.native.shortcut(), "message": "全局快捷键需要包含 Ctrl 或 Alt，且不能使用固定退出兜底键" }); }
+    match crate::collaboration_shortcut::replace_collaboration_shortcut(&app, &state.native.shortcut(), &shortcut) {
         Ok(()) => {
             state.native.set_shortcut_value(shortcut.clone()); let mut persisted = state.read_persisted_state();
             if let Some(object) = persisted.as_object_mut() { object.insert("shortcuts".into(), serde_json::json!({ "collaboration": shortcut })); }

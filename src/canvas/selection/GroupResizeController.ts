@@ -1,17 +1,5 @@
 import type { ImageGroup } from '../../types';
-
-export type GroupResizeHandle =
-  | 'north-west' | 'north' | 'north-east'
-  | 'west' | 'east'
-  | 'south-west' | 'south' | 'south-east'
-  | 'rotate';
-
-export interface GroupFrameBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+import type { GroupFrameBounds, GroupResizeHandle } from '../publicTypes';
 
 const MIN_GROUP_WIDTH = 64;
 const MIN_GROUP_HEIGHT = 48;

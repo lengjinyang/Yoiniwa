@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Scene } from '../../types';
+import type { Scene } from '../types';
 import { AutosaveCoordinator } from './AutosaveCoordinator';
 import { loadProjectScene } from './ProjectLoader';
 import { serializeProjectScene } from './ProjectSerializer';

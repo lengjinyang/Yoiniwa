@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_SHORTCUTS } from '../../keyboardShortcuts';
+import { DEFAULT_SHORTCUTS } from '../keyboardShortcuts';
 import {
   createAppShortcutCommandRegistry,
   dispatchAppShortcutKeyDown,

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { UiIcon } from './app/components/UiIcon';
+import { UiIcon } from './UiIcon';
 
 export type ContextMenuEntry =
   | { type: 'separator' }

@@ -6,19 +6,19 @@ import { FrameScheduler } from './FrameScheduler';
 import { RuntimeLifecycle } from './RuntimeLifecycle';
 import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
-import type { LassoPoint, SelectionController } from '../selection/SelectionController';
+import type { SelectionController } from '../selection/SelectionController';
 import type { PickedColor, SceneItem, SceneItemPatch } from '../../types';
 import { PREFETCH_VIEWPORT_MARGIN } from '../textures/TextureConfig';
 import { performanceMonitor } from '../../runtime/performanceMonitor';
 import { ColorPickerController } from '../interaction/ColorPickerController';
 import { groupHeaderActionAtPoint, groupHeaderAtPoint, topmostImageAtPoint } from '../selection/HitTestService';
 import { WindowMoveController } from '../interaction/WindowMoveController';
-import type { GroupFrameBounds } from '../selection/GroupResizeController';
+import type { GroupFrameBounds, LassoPoint, VisualNotesToolState } from '../publicTypes';
 import { groupHeaderScreenWidth, groupHeaderWorldY } from '../groups/GroupPresentation';
-import { VisualNotesController, type VisualNotesToolState } from '../interaction/VisualNotesController';
-import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../interactions';
+import { VisualNotesController } from '../interaction/VisualNotesController';
+import { isAltColorPickerPointer, type ColorPickerShortcut } from '../../shared/pointerPolicy';
 import { isVideoItem } from '../../domain/media';
-import type { VideoTransportState } from '../renderer/VideoRenderer';
+import type { VideoTransportState } from '../renderer/VideoTypes';
 import type { VideoPlaybackHost } from '../video/videoPlaybackHost';
 import type { ImageResourceBoost } from '../textures/imageResourceBoost';
 import type { SpaceKeyQuery } from './spaceKeyQuery';
@@ -416,6 +416,7 @@ export class CanvasRuntime {
   toggleVideoPlayback(id: string) { return this.renderer.toggleVideoPlayback(id); }
   beginVideoTimelineSeek(id: string) { return this.renderer.beginVideoTimelineSeek(id); }
   seekVideoTimeline(id: string, time: number) { return this.renderer.seekVideoTimeline(id, time); }
+  seekVideoTimelineFrame(id: string, frame: number) { return this.renderer.seekVideoTimelineFrame(id, frame); }
   endVideoTimelineSeek(id: string) { return this.renderer.endVideoTimelineSeek(id); }
   beginCanvasVideoJog(id: string) { return this.renderer.beginCanvasVideoJog(id); }
   jogCanvasVideoFrames(id: string, frameOffset: number) { return this.renderer.jogCanvasVideoFrames(id, frameOffset); }

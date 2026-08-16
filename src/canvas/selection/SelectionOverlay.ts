@@ -1,6 +1,6 @@
 import { Graphics, type Container } from 'pixi.js';
 import type { BoardItem } from '../../types';
-import type { LassoPoint } from './SelectionController';
+import type { LassoPoint } from '../publicTypes';
 import type { SceneBounds } from '../scene/SceneNode';
 import { unionImageBounds } from './HitTestService';
 import { GROUP_RESIZE_HANDLE_SCREEN_SIZE } from '../groups/GroupPresentation';

@@ -1,4 +1,4 @@
-import type { AssetRecord, BoardItem, MediaKind, SceneItem, VideoClipFields, VideoItem } from '../types';
+import type { AssetRecord, BoardItem, MediaKind, SceneItem, VideoClipFields, VideoItem } from './sceneTypes';
 
 export const MEDIA_FILE_PATTERN = /\.(png|jpe?g|webp|bmp|gif|mp4|webm|mov|m4v)$/i;
 

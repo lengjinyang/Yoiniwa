@@ -50,7 +50,6 @@
   --ease-emphasized: cubic-bezier(.16, 1, .3, 1);
 
   /* Compatibility aliases for the pre-theme stylesheet. */
-  --panel: var(--surface-1);
   --panel-2: var(--surface-2);
   --line: var(--border);
   --muted: var(--text-secondary);

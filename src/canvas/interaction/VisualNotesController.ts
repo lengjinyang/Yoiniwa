@@ -2,22 +2,12 @@ import type { Camera } from '../camera/Camera';
 import type { InputRouter } from './InputRouter';
 import type { RuntimeLifecycle } from '../runtime/RuntimeLifecycle';
 import type { SceneStore } from '../scene/SceneStore';
-import type { EraserSize, VisualMark, VisualNotesState, VisualNoteTool, VisualNoteWidth } from '../../types';
+import type { EraserSize, VisualMark, VisualNotesState, VisualNoteWidth } from '../../types';
 import { topmostImageAtPoint } from '../selection/HitTestService';
-import { markWorldPoints, moveMarkInWorld, pointToAnchor } from '../../visualNotes/VisualNoteGeometry';
+import { markWorldPoints, moveMarkInWorld, pointToAnchor } from '../../domain/visualNoteGeometry';
 import { simplifyBrushPoints, widthFactorForSample, type RawBrushSample } from '../../visualNotes/BrushEngine';
 import { eraseArrow, eraseStroke } from '../../visualNotes/EraserEngine';
-
-export interface VisualNotesToolState {
-  enabled: boolean;
-  tool: VisualNoteTool;
-  color: string;
-  opacity: number;
-  width: VisualNoteWidth;
-  pressureEnabled: boolean;
-  eraserSize: EraserSize;
-  selectedMarkId?: string;
-}
+import type { VisualNotesToolState } from '../publicTypes';
 
 interface VisualNotesControllerOptions {
   element: HTMLElement;

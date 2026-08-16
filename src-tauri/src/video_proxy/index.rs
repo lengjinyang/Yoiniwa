@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 use super::{
     ffprobe_path, parse_rate, ready_source_index, seconds_to_i64_us, seconds_to_us,
@@ -43,8 +42,6 @@ pub(crate) fn ensure_source_index(
     let index = VideoScrubIndex {
         version: SCRUB_INDEX_VERSION,
         asset_id: asset_id.to_string(),
-        codec: metadata.codec_name.clone(),
-        description_base64: String::new(),
         width: metadata.width,
         height: metadata.height,
         fps: metadata.fps,
@@ -60,7 +57,6 @@ pub(crate) fn ensure_source_index(
         frame_accurate: !frames.is_empty(),
         unsupported_reason,
         frames,
-        packets: Vec::new(),
     };
     write_index(&source_index_path(cache_root, asset_id), &index)?;
     Ok(index)
@@ -93,16 +89,10 @@ pub(crate) fn build_proxy_index(
     }
     validate_packet_correspondence(&frames, &packets)?;
     validate_gop(&packets, 6)?;
-    let description = read_avcc(proxy)?;
-    let codec = format!(
-        "avc1.{:02X}{:02X}{:02X}",
-        description[1], description[2], description[3]
-    );
+    let _ = read_avcc(proxy)?;
     Ok(VideoScrubIndex {
         version: SCRUB_INDEX_VERSION,
         asset_id: asset_id.to_string(),
-        codec,
-        description_base64: BASE64.encode(description),
         width: metadata.width,
         height: metadata.height,
         fps: source.fps,
@@ -118,7 +108,6 @@ pub(crate) fn build_proxy_index(
         frame_accurate: true,
         unsupported_reason: None,
         frames,
-        packets,
     })
 }
 
@@ -327,7 +316,7 @@ pub(crate) fn probe_packets(source: &Path, canceled: &AtomicBool) -> Result<Vec<
             "v:0",
             "-show_packets",
             "-show_entries",
-            "packet=pts_time,duration_time,pos,size,flags",
+            "packet=pts_time,flags",
             "-of",
             "compact=p=0:nk=0",
         ])
@@ -339,7 +328,7 @@ pub(crate) fn probe_packets(source: &Path, canceled: &AtomicBool) -> Result<Vec<
         .stdout
         .take()
         .ok_or_else(|| anyhow!("ffprobe stdout 不可用"))?;
-    let mut raw = Vec::<(i64, u64, u64, u32, bool)>::new();
+    let mut raw = Vec::<(i64, bool)>::new();
     for line in BufReader::new(stdout).lines() {
         if canceled.load(Ordering::SeqCst) {
             let _ = child.kill();
@@ -353,21 +342,8 @@ pub(crate) fn probe_packets(source: &Path, canceled: &AtomicBool) -> Result<Vec<
         else {
             continue;
         };
-        let duration = values
-            .get("duration_time")
-            .and_then(|value| value.parse::<f64>().ok())
-            .map(seconds_to_us)
-            .unwrap_or(0);
-        let offset = values
-            .get("pos")
-            .and_then(|value| value.parse::<u64>().ok())
-            .ok_or_else(|| anyhow!("packet offset 无效"))?;
-        let size = values
-            .get("size")
-            .and_then(|value| value.parse::<u32>().ok())
-            .ok_or_else(|| anyhow!("packet size 无效"))?;
         let key = values.get("flags").is_some_and(|value| value.contains('K'));
-        raw.push((seconds_to_i64_us(pts), duration, offset, size, key));
+        raw.push((seconds_to_i64_us(pts), key));
     }
     let status = child.wait()?;
     if !status.success() || raw.is_empty() {
@@ -380,10 +356,7 @@ pub(crate) fn probe_packets(source: &Path, canceled: &AtomicBool) -> Result<Vec<
         .map(|(index, value)| VideoPacketIndexEntry {
             frame_index: index as u32,
             pts_us: value.0 - origin,
-            duration_us: value.1,
-            offset: value.2,
-            size: value.3,
-            key_frame: value.4,
+            key_frame: value.1,
         })
         .collect())
 }

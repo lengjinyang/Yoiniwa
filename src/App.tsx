@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSceneHistory } from './useSceneHistory';
+import { useSceneHistory } from './app/hooks/useSceneHistory';
 import { performanceMonitor } from './runtime/performanceMonitor';
 import { PHOTOSHOP_VERSION_PREVIEW_MIME } from './app/components/PhotoshopVersionsPanel';
 import { AppOverlays, AppWorkspace } from './app/components/AppPresentation';

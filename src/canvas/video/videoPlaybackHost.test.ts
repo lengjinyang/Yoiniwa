@@ -3,13 +3,8 @@ import { videoPlaybackHostFromApi } from './videoPlaybackHost';
 import type { VideoPreparationResult } from '../../types';
 
 const result: VideoPreparationResult = {
-  assetId: 'abc',
   fps: 24,
   ready: true,
-  indexReady: true,
-  playbackReady: true,
-  vfr: false,
-  state: 'ready',
 };
 
 describe('videoPlaybackHostFromApi', () => {

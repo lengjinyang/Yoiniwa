@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { produce } from 'immer';
-import { cloneScene, createScene, normalizeScene } from './domain/scene';
-import type { Scene } from './types';
-import { createStressScene } from './stressScene';
-import { createRevisionTracker } from './revisionTracker';
+import { cloneScene, createScene, normalizeScene } from '../../domain/scene';
+import type { Scene } from '../../types';
+import { createStressScene } from '../../stressScene';
+import { createRevisionTracker } from '../../revisionTracker';
 
 const stressFixture = (index: number) => {
   const hue = index * 47 % 360;

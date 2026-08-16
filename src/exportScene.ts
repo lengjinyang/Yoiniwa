@@ -3,7 +3,7 @@ import { exportVisibility } from './domain/exportVisibility';
 import type { ImageGroup, SceneItem, VisualNotesState } from './types';
 import { imageSource } from './runtime/imageResources';
 import ExportSceneWorker from './workers/exportScene.worker?worker';
-import { markWorldBounds } from './visualNotes/VisualNoteGeometry';
+import { markWorldBounds } from './domain/visualNoteGeometry';
 
 function combinedBounds(items: SceneItem[], groups: ImageGroup[], visualNotes?: VisualNotesState) {
   const parts = [...(items.length ? [sceneBounds(items)] : []), ...groups.map(groupVisibleBounds),

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DisplayableMedia, ImageThumbnailReady, BoardItem } from '../types';
 import { performanceMonitor } from './performanceMonitor';
 import { boundedCpuImageBudget } from '../shared/imagePipelineConfig';
-import { calculateDesiredMip, rotatedScreenBounds } from '../rendering/textureSelection';
-import { assetResourceUrl, isAssetResourceUrl } from '../assetResourceUrl';
+import { calculateDesiredMip, rotatedScreenBounds } from '../shared/textureSelection';
+import { assetResourceUrl, isAssetResourceUrl } from './assetResourceUrl';
 import { displayAssetId } from '../domain/media';
 
 export type ImageVariant = 'thumb128' | 'thumb256' | 'thumb512' | 'thumb768' | 'thumb1024' | 'original';

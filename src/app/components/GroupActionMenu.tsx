@@ -1,4 +1,4 @@
-import { ContextMenu, type ContextMenuEntry, type MenuPosition } from '../../ContextMenu';
+import { ContextMenu, type ContextMenuEntry, type MenuPosition } from './ContextMenu';
 import type { ImageGroup } from '../../types';
 
 interface GroupActionMenuProps {

@@ -1,7 +1,7 @@
 import { Container, Graphics, MeshSimple, Text, Texture } from 'pixi.js';
 import type { SceneItem, VisualMark, VisualNotePoint, VisualNotesState } from '../../types';
-import { markWorldPoints } from '../../visualNotes/VisualNoteGeometry';
-import { markWorldBounds } from '../../visualNotes/VisualNoteGeometry';
+import { markWorldPoints } from '../../domain/visualNoteGeometry';
+import { markWorldBounds } from '../../domain/visualNoteGeometry';
 
 interface RenderedMark { container: Container; signature: string }
 

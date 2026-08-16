@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { shouldAutoPhotoshopRoundTrip } from '../../shared/photoshopIntegration';
 import type { WindowState } from '../../types';
-import { logError, logInfo, logWarn } from '../../logger';
+import { logError, logInfo, logWarn } from '../../runtime/logger';
 
 const initialWindowState: WindowState = {
   alwaysOnTop: false,

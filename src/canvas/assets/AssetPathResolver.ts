@@ -1,5 +1,5 @@
 import type { BoardItem, Scene } from '../../types';
-import { assetResourceUrl } from '../../assetResourceUrl';
+import { assetResourceUrl } from '../../runtime/assetResourceUrl';
 
 export type CanvasImageVariant = 'thumb128' | 'thumb256' | 'thumb512' | 'thumb1024' | 'original';
 

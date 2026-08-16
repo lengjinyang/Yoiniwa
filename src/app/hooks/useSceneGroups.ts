@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ColorControlHandle } from '../../ColorControl';
-import type { MenuPosition } from '../../ContextMenu';
+import type { ColorControlHandle } from '../components/ColorControl';
+import type { MenuPosition } from '../components/ContextMenu';
 import {
   addMemberToGroup,
   createGroupFrame,
@@ -13,9 +13,9 @@ import {
   reconcileMemberBounds,
 } from '../../domain/scene';
 import { deleteSceneSelection } from '../../domain/sceneCommands';
-import type { GroupFrameBounds } from '../../canvas/selection/GroupResizeController';
+import type { GroupFrameBounds } from '../../canvas/publicTypes';
 import type { ImageGroup } from '../../types';
-import type { SceneHistoryController } from '../../useSceneHistory';
+import type { SceneHistoryController } from './useSceneHistory';
 
 export function useSceneGroups({
   history,

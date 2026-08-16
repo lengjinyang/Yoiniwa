@@ -1,4 +1,4 @@
-import { IMAGE_MIP_EDGES, MIP_OVERSAMPLE } from '../shared/imagePipelineConfig';
+import { IMAGE_MIP_EDGES, MIP_OVERSAMPLE } from './imagePipelineConfig';
 
 export interface DesiredMipParams {
   sourceWidth: number;

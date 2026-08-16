@@ -41,10 +41,7 @@ jobs:
         run: npm run check:rust
       - name: Unit tests
         run: npm run test:rust
-      # Advisory for now: the crate carries ~40 clippy warnings, most of them
-      # unused video_service/video_proxy entry points that still need a
-      # keep-or-drop decision. Once those are resolved, ratchet this to
-      # `npm run lint:rust -- -- -D warnings` so it gates like the TS lint.
-      - name: Clippy (advisory)
-        run: npm run lint:rust
-        continue-on-error: true
+      - name: Clippy warnings gate
+        # native.rs is frozen for collaboration / Windows Ink. The two allows cover
+        # lints that currently only fire there; do not "clean" that module for CI.
+        run: npm run lint:rust -- -- -D warnings -A clippy::let_unit_value -A clippy::unnecessary_cast

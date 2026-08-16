@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AutosaveCoordinator } from '../../canvas/persistence/AutosaveCoordinator';
-import { loadProjectScene } from '../../canvas/persistence/ProjectLoader';
-import { serializeProjectScene } from '../../canvas/persistence/ProjectSerializer';
+import { AutosaveCoordinator } from '../../persistence/AutosaveCoordinator';
+import { loadProjectScene } from '../../persistence/ProjectLoader';
+import { serializeProjectScene } from '../../persistence/ProjectSerializer';
 import { createScene, validateScene } from '../../domain/scene';
 import { mergeSceneInto } from '../../domain/sceneMerge';
 import { EMPTY_PHOTOSHOP_PROJECT_METADATA } from '../../shared/photoshopVersions';

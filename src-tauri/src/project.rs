@@ -763,8 +763,14 @@ fn read_legacy_project(path: &Path, assets: &SharedAssets) -> Result<(Scene, Pho
         loop {
             let read = entry.read(&mut buffer)?;
             if read == 0 { break; }
+            copied += read as u64;
+            if copied > record.byte_length {
+                drop(output);
+                let _ = fs::remove_file(&temporary);
+                return Err(anyhow!("场景资源大小超过记录: {}", record.id));
+            }
             output.write_all(&buffer[..read])?;
-            hasher.update(&buffer[..read]); copied += read as u64;
+            hasher.update(&buffer[..read]);
         }
         output.sync_all()?;
         if copied != record.byte_length || format!("{:x}", hasher.finalize()) != record.hash {
@@ -966,7 +972,7 @@ fn read_head(path: &Path) -> Result<(Vec<Superblock>, String)> {
     let mut heads = SUPERBLOCK_OFFSETS.iter().filter_map(|offset| {
         parse_superblock(&header[*offset as usize..*offset as usize + SUPERBLOCK_SIZE])
     }).filter(|head| head.end_offset <= file_size).collect::<Vec<_>>();
-    heads.sort_by(|left, right| right.generation.cmp(&left.generation));
+    heads.sort_by_key(|head| std::cmp::Reverse(head.generation));
     if heads.is_empty() { return Err(anyhow!("YoiStorage 没有有效提交")); }
     Ok((heads, file_id))
 }

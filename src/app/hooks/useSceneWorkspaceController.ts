@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { LassoPoint } from '../../canvas/selection/SelectionController';
+import type { LassoPoint } from '../../canvas/publicTypes';
 import {
   memberBounds,
   reconcileMemberBounds,
@@ -8,7 +8,7 @@ import {
 import { captureSceneSelection, pasteScenePayload } from '../../domain/sceneClipboard';
 import { deleteSceneSelection } from '../../domain/sceneCommands';
 import type { ImageGroup, SceneItem } from '../../types';
-import type { SceneHistoryController } from '../../useSceneHistory';
+import type { SceneHistoryController } from './useSceneHistory';
 import { useSceneClipboard } from './useSceneClipboard';
 import { useSceneGroups } from './useSceneGroups';
 import { useSceneViewport } from './useSceneViewport';

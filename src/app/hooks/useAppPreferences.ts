@@ -4,7 +4,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import type { ColorPickerShortcut } from '../../interactions';
+import type { ColorPickerShortcut } from '../../shared/pointerPolicy';
 import {
   DEFAULT_SHORTCUTS,
   loadShortcutPreferences,
@@ -15,7 +15,7 @@ import {
   SHORTCUT_PREFERENCES_STORAGE_KEY,
   type ShortcutId,
   type ShortcutPreferences,
-} from '../../keyboardShortcuts';
+} from '../keyboardShortcuts';
 import type { CacheInfo } from '../../types';
 
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';

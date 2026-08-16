@@ -1,4 +1,6 @@
-const IMAGE_CACHE_FORMAT_VERSION = 3;
+import imageCacheFormat from './imageCacheFormat.json';
+
+export const IMAGE_CACHE_FORMAT_VERSION = imageCacheFormat.version;
 const MIP_ALGORITHM_VERSION = 2;
 
 export const IMAGE_MIP_EDGES = [128, 256, 512, 1024, 2048, 4096, 8192, 16384] as const;

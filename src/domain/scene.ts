@@ -1,4 +1,4 @@
-import type { BoardItem, CropRect, GroupMember, ImageGroup, Scene } from '../types';
+import type { BoardItem, CropRect, GroupMember, ImageGroup, Scene } from './sceneTypes';
 import { normalizeTags } from './tags';
 import { toSceneItem } from './media';
 import { markWorldBounds, moveSceneMark } from './visualNoteGeometry';

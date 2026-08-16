@@ -1,0 +1,19 @@
+# Build / deps (also in .gitignore; keep explicit for indexing)
+node_modules/
+dist/
+dist-electron/
+src-tauri/target/
+release/
+.vite/
+
+# Local runtime / benches / sessions
+.dev-runtime/
+.dev-smoke-user-data/
+.project-bench-user-data*/
+.refcanvas-test-session/
+performance-results/
+tmp/
+
+# Logs and scratch
+*.log
+*.jsonl

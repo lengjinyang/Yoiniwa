@@ -1,6 +1,7 @@
 import type {
   VideoPreparationProgress,
   VideoPreparationResult,
+  VideoFrameTimingIndex,
   VideoProxyFailed,
   VideoProxyReady,
 } from '../../types';
@@ -11,6 +12,7 @@ export interface VideoPlaybackHost {
   cancelPlayback?(assetId: string): void;
   /** Fire-and-forget background index so jogging gets real fps before first play. */
   prepareIndex?(assetId: string): void;
+  loadFrameIndex?(assetId: string): Promise<VideoFrameTimingIndex | null>;
   onProxyReady(callback: (payload: VideoProxyReady) => void): () => void;
   onProxyFailed?(callback: (payload: VideoProxyFailed) => void): () => void;
   onPreparationProgress?(callback: (payload: VideoPreparationProgress) => void): () => void;
@@ -22,6 +24,7 @@ export function videoPlaybackHostFromApi(api: Window['refCanvas'] | undefined): 
     ensurePlayback: (assetId) => api.ensureVideoPlayback!(assetId),
     cancelPlayback: api.cancelVideoPlayback?.bind(api),
     prepareIndex: api.prepareVideoIndex?.bind(api),
+    loadFrameIndex: api.getVideoFrameIndex?.bind(api),
     onProxyReady: api.onVideoProxyReady
       ? (callback) => api.onVideoProxyReady!(callback)
       : () => () => undefined,

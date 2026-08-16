@@ -1,5 +1,5 @@
 import { groupVisibleBounds, sceneBounds } from './scene';
-import type { AssetRecord, ImageGroup, SceneItem, Scene, VisualNotesState } from '../types';
+import type { AssetRecord, ImageGroup, SceneItem, Scene, VisualNotesState } from './sceneTypes';
 import { markWorldBounds, moveSceneMark } from './visualNoteGeometry';
 
 export interface SceneClipboardPayload {

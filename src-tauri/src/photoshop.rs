@@ -282,7 +282,7 @@ fn run_document_process(script: &Path, request: &Value, timeout: Duration) -> Re
     if let Some(mut stdout) = child.stdout.take() { stdout.read_to_string(&mut output)?; }
     if let Some(mut err) = child.stderr.take() { err.read_to_string(&mut stderr)?; }
     cleanup_temp_script(script, &runnable);
-    let line = output.lines().filter(|line| !line.trim().is_empty()).next_back();
+    let line = output.lines().rfind(|line| !line.trim().is_empty());
     let Some(line) = line else {
         let detail = stderr.lines().find(|line| !line.trim().is_empty()).unwrap_or("Photoshop 文档桥没有返回结果");
         return Err(anyhow!("Photoshop 文档桥失败: {}", detail.chars().take(400).collect::<String>()));

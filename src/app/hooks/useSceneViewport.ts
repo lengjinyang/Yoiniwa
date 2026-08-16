@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { applyLayout, type LayoutAction } from '../../domain/layout';
-import { MAX_ZOOM, MIN_ZOOM } from '../../interactions';
+import { MAX_ZOOM, MIN_ZOOM } from '../../shared/pointerPolicy';
 import {
   groupVisibleBounds,
   itemBounds,
@@ -10,7 +10,7 @@ import {
 } from '../../domain/scene';
 import { applyImageChanges, layoutSceneImages, moveImageLayer } from '../../domain/sceneCommands';
 import type { ImageGroup, SceneItem, SceneItemPatch } from '../../types';
-import type { SceneHistoryController } from '../../useSceneHistory';
+import type { SceneHistoryController } from './useSceneHistory';
 
 export function useSceneViewport({
   history,

@@ -1,4 +1,4 @@
-import type { ImageGroup } from '../types';
+import type { ImageGroup } from './sceneTypes';
 
 export function exportVisibility(groups: ImageGroup[]) {
   const hiddenImages = new Set<string>();

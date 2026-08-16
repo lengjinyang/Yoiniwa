@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import type { MenuPosition } from '../../ContextMenu';
+import type { MenuPosition } from '../components/ContextMenu';
 
 export function useContextMenu() {
   const [position, setPosition] = useState<MenuPosition>();

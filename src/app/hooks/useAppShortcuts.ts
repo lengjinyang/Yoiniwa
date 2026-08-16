@@ -4,7 +4,7 @@ import {
   shortcutReleasedByKeyboardEvent,
   type ShortcutId,
   type ShortcutPreferences,
-} from '../../keyboardShortcuts';
+} from '../keyboardShortcuts';
 
 export type AppShortcutCommandId =
   | 'colorPicker.press' | 'colorPicker.release' | 'settings.toggle'

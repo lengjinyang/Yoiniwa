@@ -1,5 +1,5 @@
 import type { ImagePipelinePerformanceStats } from '../types';
-import type { VideoRuntimeStats } from '../canvas/renderer/VideoRenderer';
+import type { VideoRuntimeStats } from './videoRuntimeStats';
 
 interface ImageRenderStats {
   drawCalls: number; instances: number; gpuBytes: number; textureUploads: number; textureCount: number;
@@ -50,9 +50,6 @@ export interface PerformanceSnapshot {
   droppedVideoFps: number;
   proxyActive: number;
   proxyQueued: number;
-  ffmpegActive: number;
-  ffmpegDecodeRequests: number;
-  ffmpegDecodeMs: number;
 }
 
 const initiallyEnabled = typeof window !== 'undefined'
@@ -219,9 +216,6 @@ class PerformanceMonitor {
       droppedVideoFps: this.videoStats.droppedFps,
       proxyActive: this.pipelineStats.proxyActive ?? 0,
       proxyQueued: this.pipelineStats.proxyQueued ?? 0,
-      ffmpegActive: this.pipelineStats.videoDecodeActive ?? 0,
-      ffmpegDecodeRequests: this.pipelineStats.videoDecodeRequests ?? 0,
-      ffmpegDecodeMs: this.pipelineStats.videoDecodeMs ?? 0,
       ...this.runtimeStats,
     };
   }

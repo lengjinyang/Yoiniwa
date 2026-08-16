@@ -373,12 +373,6 @@ pub struct ImagePipelinePerformanceStats {
     pub proxy_active: u64,
     #[serde(default)]
     pub proxy_queued: u64,
-    #[serde(default)]
-    pub video_decode_active: u64,
-    #[serde(default)]
-    pub video_decode_requests: u64,
-    #[serde(default)]
-    pub video_decode_ms: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

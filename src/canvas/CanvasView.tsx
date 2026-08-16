@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SceneItem, SceneItemPatch, PickedColor, Scene, Viewport } from '../types';
 import { CanvasRuntime } from './runtime/CanvasRuntime';
-import type { GroupFrameBounds } from './selection/GroupResizeController';
-import type { VisualNotesToolState } from './interaction/VisualNotesController';
+import type { GroupFrameBounds, LassoPoint, VisualNotesToolState } from './publicTypes';
 import type { VisualNotesState } from '../types';
-import type { ColorPickerShortcut } from '../interactions';
-import type { LassoPoint } from './selection/SelectionController';
+import type { ColorPickerShortcut } from '../shared/pointerPolicy';
 import { VideoTransportBar } from './overlays/VideoTransportBar';
 import type { VideoPlaybackHost } from './video/videoPlaybackHost';
 import type { ImageResourceBoost } from './textures/imageResourceBoost';
@@ -384,7 +382,7 @@ export function CanvasView({
           }
         }}
         onTimelineSeekStart={() => { runtimeRef.current?.beginVideoTimelineSeek(videoId); }}
-        onTimelineSeek={(time) => { runtimeRef.current?.seekVideoTimeline(videoId, time); }}
+        onTimelineSeekFrame={(frame) => { runtimeRef.current?.seekVideoTimelineFrame(videoId, frame); }}
         onTimelineSeekEnd={() => { runtimeRef.current?.endVideoTimelineSeek(videoId); }}
         onToggleMute={() => {
           const currentMuted = runtimeRef.current?.getVideoTransport(videoId)?.muted

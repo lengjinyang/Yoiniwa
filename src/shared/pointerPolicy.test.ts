@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { edgeAutoPanDelta, exceededWindowMoveThreshold, getImageDragMode, isAltColorPickerPointer, isPrimaryPointerButton, matchesColorPickerShortcut, MAX_ZOOM, MIN_ZOOM, offsetPointOutward, zoomViewportAtPoint } from './interactions';
+import { edgeAutoPanDelta, exceededWindowMoveThreshold, getImageDragMode, isAltColorPickerPointer, isPrimaryPointerButton, matchesColorPickerShortcut, MAX_ZOOM, MIN_ZOOM, offsetPointOutward, zoomViewportAtPoint } from './pointerPolicy';
 
 describe('PureRef-style image gestures', () => {
   it('supports very small overview scales without allowing zero zoom', () => {

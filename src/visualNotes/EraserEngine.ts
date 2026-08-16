@@ -1,5 +1,5 @@
 import type { ArrowVisualMark, BoardItem, BrushVisualMark, VisualMark, VisualNotePoint } from '../types';
-import { markWorldPoints, pointToAnchor, type Point } from './VisualNoteGeometry';
+import { markWorldPoints, pointToAnchor, type Point } from '../domain/visualNoteGeometry';
 
 function segmentDistance(point: Point, start: Point, end: Point) {
   const dx = end.x - start.x; const dy = end.y - start.y;

@@ -1,4 +1,4 @@
-import type { OperationState } from '../../operationState';
+import type { OperationState } from '../operationState';
 
 interface StatusToastProps {
   status: string;

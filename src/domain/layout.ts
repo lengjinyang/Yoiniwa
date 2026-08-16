@@ -1,4 +1,4 @@
-import type { BoardItem } from '../types';
+import type { BoardItem } from './sceneTypes';
 import { itemBounds } from './scene';
 
 export type LayoutAction =

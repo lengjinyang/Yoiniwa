@@ -1,6 +1,6 @@
 import { applyLayout } from './layout';
 import { sceneBounds } from './scene';
-import type { BoardItem, Viewport } from '../types';
+import type { BoardItem, Viewport } from './sceneTypes';
 
 export function arrangeImportedItems<T extends BoardItem>(
   items: T[], viewport: Viewport, screenX: number, screenY: number,

@@ -11,7 +11,7 @@ import { TileRenderer } from './TileRenderer';
 import type { SceneBounds } from '../scene/SceneNode';
 import { shouldUseTiledImage } from '../textures/TileSelector';
 
-import { imageGrayscaleContrast } from '../../imageAdjustments';
+import { imageGrayscaleContrast } from '../../domain/imageAdjustments';
 
 interface PendingSwap { entry: GpuTextureEntry; mip: number; token: number }
 interface ImageRenderObject {

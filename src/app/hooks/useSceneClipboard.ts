@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { captureSceneSelection, pasteScenePayload, type SceneClipboardPayload } from '../../domain/sceneClipboard';
 import type { ImageGroup } from '../../types';
-import type { SceneHistoryController } from '../../useSceneHistory';
+import type { SceneHistoryController } from './useSceneHistory';
 
 export function useSceneClipboard({
   history,

@@ -1,5 +1,8 @@
 import type { Sprite, Graphics, Texture, CanvasSource } from 'pixi.js';
 import type { VideoFrameSize } from './VideoPerformancePolicy';
+import type { VideoRuntimeStats } from '../../runtime/videoRuntimeStats';
+
+export type { VideoRuntimeStats };
 
 type VideoPlaybackPhase = 'paused' | 'loading' | 'playing' | 'suspended' | 'proxy-pending' | 'error';
 export type VideoSeekInteractionKind = 'timeline' | 'canvas-jog';
@@ -12,23 +15,14 @@ export interface VideoTransportState {
   currentTime: number;
   duration: number;
   fps: number;
+  frameCount?: number;
+  targetFrame: number;
+  displayedFrame: number;
   preparationStage?: string;
   preparationProgress: number;
   muted: boolean;
   rate: number;
   ready: boolean;
-}
-
-export interface VideoRuntimeStats {
-  playbackIntents: number;
-  activeDecoders: number;
-  suspendedVideos: number;
-  posterTextures: number;
-  frameUploads: number;
-  frameUploadBytes: number;
-  droppedFrames: number;
-  uploadFps: number;
-  droppedFps: number;
 }
 
 export interface VideoRenderObject {
@@ -69,8 +63,11 @@ export interface VideoRenderObject {
   displayedFrame: number;
   seekInteraction?: { kind: VideoSeekInteractionKind; originFrame: number; resumeAfter: boolean };
   interactionEnding?: boolean;
+  interactionTargetTime?: number;
+  interactionTargetFrame?: number;
   pendingSeekTime?: number;
   seekFrame?: number;
+  interactionSeekInFlight: boolean;
   seekGeneration: number;
   preparationStage?: string;
   preparationProgress: number;

@@ -1,4 +1,4 @@
-import type { BoardItem, VisualMark, VisualNoteAnchor, VisualNotePoint } from '../types';
+import type { BoardItem, VisualMark, VisualNoteAnchor, VisualNotePoint } from './sceneTypes';
 
 export interface Point { x: number; y: number }
 

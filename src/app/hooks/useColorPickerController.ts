@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ColorPickerShortcut } from '../../interactions';
+import type { ColorPickerShortcut } from '../../shared/pointerPolicy';
 import type { PhotoshopColorSyncResult, PickedColor } from '../../types';
-import { logWarn } from '../../logger';
+import { logWarn } from '../../runtime/logger';
 
 interface UseColorPickerControllerOptions {
   api: Window['refCanvas'];

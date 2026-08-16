@@ -1,5 +1,5 @@
 import { Graphics, Sprite, Texture } from 'pixi.js';
-import { assetResourceUrl } from '../../assetResourceUrl';
+import { assetResourceUrl } from '../../runtime/assetResourceUrl';
 import type { VideoItem } from '../../types';
 
 function updateTransform(sprite: Sprite, item: VideoItem, textureWidth: number, textureHeight: number) {

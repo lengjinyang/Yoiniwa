@@ -1,7 +1,7 @@
 import {
   forwardRef, useEffect, useImperativeHandle, useRef, useState, type CSSProperties,
 } from 'react';
-import { UiIcon } from './app/components/UiIcon';
+import { UiIcon } from './UiIcon';
 
 const PRESET_COLORS = [
   '#20242b', '#536778', '#2677ff', '#16a4b8', '#2da66f', '#8bad38',

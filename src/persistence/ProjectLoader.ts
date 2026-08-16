@@ -1,5 +1,5 @@
-import type { Scene } from '../../types';
-import { normalizeScene } from '../../domain/scene';
+import type { Scene } from '../types';
+import { normalizeScene } from '../domain/scene';
 import { migrateProjectScene } from './ProjectMigration';
 
 export function loadProjectScene(input: unknown): Scene | undefined {

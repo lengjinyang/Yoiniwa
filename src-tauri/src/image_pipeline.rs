@@ -95,7 +95,7 @@ fn bands(image: &VipsImage) -> usize { unsafe { vips_image_get_bands(image.0).ma
 pub fn metadata(path: &Path, stats: &Mutex<ImagePipelinePerformanceStats>) -> Result<ImageMetadata> {
     let started = Instant::now(); let _guard = VIPS_LOCK.lock(); let image = load(path)?;
     let (raw_width, raw_height) = dimensions(&image); if raw_width < 1 || raw_height < 1 { return Err(anyhow!("图片尺寸无效")); }
-    let orientation = unsafe { vips_image_get_orientation(image.0) }; let swaps = matches!(orientation, 5 | 6 | 7 | 8);
+    let orientation = unsafe { vips_image_get_orientation(image.0) }; let swaps = matches!(orientation, 5..=8);
     let mut current = stats.lock(); current.metadata_count += 1; current.metadata_ms += started.elapsed().as_secs_f64() * 1000.0;
     Ok(ImageMetadata {
         width: if swaps { raw_height } else { raw_width } as u32,
@@ -162,6 +162,7 @@ pub fn level_webp(path: &Path, width: u32, height: u32) -> Result<Vec<u8>> {
     webp(&thumbnail_file_with_size(path, width.max(1) as i32, height.max(1) as i32, 3)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn tile_from_level(
     level_path: &Path, natural_width: u32, natural_height: u32, level: u32, column: u32, row: u32, tile_size: u32, gutter: u32,
 ) -> Result<Vec<u8>> {

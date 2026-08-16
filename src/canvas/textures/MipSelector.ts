@@ -1,5 +1,5 @@
 import type { BoardItem, Viewport } from '../../types';
-import { calculateDesiredMip, rotatedScreenBounds } from '../../rendering/textureSelection';
+import { calculateDesiredMip, rotatedScreenBounds } from '../../shared/textureSelection';
 import { CANVAS_MIP_EDGES, CANVAS_MIP_OVERSAMPLE } from './TextureConfig';
 
 export interface MipSelectionState {

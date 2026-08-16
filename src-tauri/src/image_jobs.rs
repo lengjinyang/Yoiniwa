@@ -45,12 +45,6 @@ pub struct ImageJobStats {
     pub concurrency: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ImageJobStatus {
-    pub running: bool,
-    pub queue_position: Option<usize>,
-}
-
 pub struct ImageJobQueue {
     state: Arc<Mutex<QueueState>>,
     concurrency: usize,
@@ -188,22 +182,6 @@ impl ImageJobQueue {
             inflight: state.inflight.len(),
             concurrency: self.concurrency,
         }
-    }
-
-    pub fn job_status(&self, key: &str) -> Option<ImageJobStatus> {
-        let state = self.state.lock();
-        let meta = state.inflight.get(key)?;
-        if meta.running {
-            return Some(ImageJobStatus { running: true, queue_position: None });
-        }
-        let mut pending = state.pending.iter()
-            .filter(|job| !job.canceled.load(Ordering::SeqCst))
-            .collect::<Vec<_>>();
-        pending.sort_by(|left, right| {
-            right.priority.cmp(&left.priority).then(left.sequence.cmp(&right.sequence))
-        });
-        let position = pending.iter().position(|job| job.key == key).map(|index| index + 1);
-        Some(ImageJobStatus { running: false, queue_position: position })
     }
 
     pub fn completed(&self) -> u64 { self.completed.load(Ordering::Relaxed) }

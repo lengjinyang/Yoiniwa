@@ -1,4 +1,5 @@
 import type { VideoItem } from '../../types';
+import { cachedVideoFrameAtTime } from '../../runtime/videoUrl';
 import { bindVideoSprite } from './VideoPresentation';
 import type { RenderObjectRegistry } from './RenderObjectRegistry';
 import type { VideoStatsTracker } from './VideoStatsTracker';
@@ -74,12 +75,13 @@ export class VideoFrameUploader {
     try {
       const presentedTime = object.presentedTime ?? video.currentTime;
       if (!force && !videoPresentedFrameIsNew(presentedTime, object.lastUploadedTime)) return false;
-      const mappedFrame = videoFrameState(
-        presentedTime,
-        resolvedVideoDuration(item.durationSec, video.duration),
-        object.fps,
-        object.frameCount,
-      ).currentFrame;
+      const mappedFrame = (item.assetId ? cachedVideoFrameAtTime(item.assetId, presentedTime) : undefined)
+        ?? videoFrameState(
+          presentedTime,
+          resolvedVideoDuration(item.durationSec, video.duration),
+          object.fps,
+          object.frameCount,
+        ).currentFrame;
       // Blit through a 2D canvas. Pixi VideoSource does not refresh from a
       // hidden decoder element, and destroying it mid-batch crashes WebGL.
       surfaceContext.drawImage(video, 0, 0, surface.width, surface.height);
@@ -89,7 +91,10 @@ export class VideoFrameUploader {
       object.displayedFrame = mappedFrame;
       object.lastUploadedTime = presentedTime;
       object.lastUploadAt = now;
-      this.host.emitTransport(item.id, false);
+      // During Timeline Scrub / Canvas Jog, including the final paused upload
+      // after release, the counter must follow the texture that was actually
+      // uploaded instead of the seek target set earlier.
+      this.host.emitTransport(item.id, Boolean(object.seekInteraction) || object.phase === 'paused');
       return true;
     } catch {
       return false;

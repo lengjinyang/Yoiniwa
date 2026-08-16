@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { LassoPoint } from '../../canvas/selection/SelectionController';
+import type { LassoPoint } from '../../canvas/publicTypes';
 import { renderItems } from '../../exportScene';
 import type { SceneItem, Scene } from '../../types';
 import type { useVisualNotes } from './useVisualNotes';

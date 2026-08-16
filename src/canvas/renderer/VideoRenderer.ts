@@ -2,7 +2,9 @@ import { CanvasSource, Graphics, Sprite, Texture, type Container } from 'pixi.js
 import { isVideoItem } from '../../domain/media';
 import type { VideoItem, Scene, Viewport } from '../../types';
 import {
+  cachedVideoFrameAtTime,
   cachedVideoFrameCount,
+  cachedVideoFrameTime,
   cachedVideoFps,
 } from '../../runtime/videoUrl';
 import type { TextureManager } from '../textures/TextureManager';
@@ -216,18 +218,28 @@ export class VideoRenderer {
     const item = this.items.get(id);
     if (!object || !item) return undefined;
     const video = object.video;
+    const currentTime = object.interactionTargetTime ?? video?.currentTime ?? object.currentTime;
+    const indexedFrame = item.assetId ? cachedVideoFrameAtTime(item.assetId, currentTime) : undefined;
+    const fallbackFrame = Math.max(0, Math.floor(currentTime * Math.max(1, object.fps) + 1e-4));
     return {
       id,
       phase: object.phase,
       playing: object.intent,
       loading: object.phase === 'loading' || object.phase === 'proxy-pending' || object.buffering,
-      currentTime: video?.currentTime ?? object.currentTime,
+      // Keep the controlled timeline thumb attached to the latest pointer
+      // target. The decoder's currentTime can lag behind while a coalesced
+      // seek is still pending; displayedFrame separately tracks the texture
+      // that has actually reached the canvas.
+      currentTime,
       duration: resolvedVideoDuration(
         item.durationSec,
         video?.duration,
         item.assetId ? this.scene?.assets[item.assetId]?.durationSec : undefined,
       ),
       fps: object.fps,
+      frameCount: object.frameCount,
+      targetFrame: object.interactionTargetFrame ?? indexedFrame ?? fallbackFrame,
+      displayedFrame: object.displayedFrame,
       preparationStage: object.preparationStage,
       preparationProgress: object.preparationProgress,
       muted: object.video ? object.video.muted : item.muted !== false,
@@ -278,6 +290,25 @@ export class VideoRenderer {
     return true;
   }
 
+  seekTimelineFrame(id: string, frame: number) {
+    const object = this.objects.get(id);
+    const item = this.items.get(id);
+    if (!object || !item) return false;
+    if (object.seekInteraction?.kind !== 'timeline' && !this.beginSeekInteraction(id, 'timeline')) return false;
+    const fps = Math.max(1, object.fps || cachedVideoFps(item.assetId ?? id));
+    const duration = resolvedVideoDuration(
+      item.durationSec,
+      object.video?.duration,
+      item.assetId ? this.scene?.assets[item.assetId]?.durationSec : undefined,
+    );
+    const maxFrame = Math.max(0, (object.frameCount ?? (Math.round(duration * fps) || 1)) - 1);
+    const targetFrame = Math.max(0, Math.min(maxFrame, Math.round(frame)));
+    const time = (item.assetId ? cachedVideoFrameTime(item.assetId, targetFrame) : undefined)
+      ?? videoFrameTime(targetFrame, duration, fps, object.frameCount);
+    this.queueInteractionSeek(object, item, time, targetFrame);
+    return true;
+  }
+
   endTimelineSeek(id: string) {
     return this.endSeekInteraction(id, 'timeline');
   }
@@ -298,10 +329,13 @@ export class VideoRenderer {
       item.assetId ? this.scene?.assets[item.assetId]?.durationSec : undefined,
     );
     const frame = interaction.originFrame + Math.trunc(frameOffset);
-    const time = duration > 0
-      ? videoFrameTime(frame, duration, fps, object.frameCount)
-      : Math.max(0, (frame + 0.5) / fps);
-    this.queueInteractionSeek(object, item, time);
+    const maxFrame = Math.max(0, (object.frameCount ?? (Math.round(duration * fps) || 1)) - 1);
+    const targetFrame = Math.max(0, Math.min(maxFrame, Math.round(frame)));
+    const time = (item.assetId ? cachedVideoFrameTime(item.assetId, targetFrame) : undefined)
+      ?? (duration > 0
+        ? videoFrameTime(targetFrame, duration, fps, object.frameCount)
+        : Math.max(0, (targetFrame + 0.5) / fps));
+    this.queueInteractionSeek(object, item, time, targetFrame);
     return true;
   }
 
@@ -320,6 +354,7 @@ export class VideoRenderer {
       if (!item || item.assetId !== assetId) return;
       object.fps = cachedVideoFps(assetId);
       object.frameCount = cachedVideoFrameCount(assetId);
+      this.emitTransport(id, true);
     });
   }
 
@@ -348,8 +383,11 @@ export class VideoRenderer {
       if (item?.assetId !== assetId || object.phase !== 'proxy-pending') return;
       object.intent = false;
       object.pendingSeekTime = undefined;
+      object.interactionTargetTime = undefined;
+      object.interactionTargetFrame = undefined;
       object.seekInteraction = undefined;
       object.interactionEnding = false;
+      object.interactionSeekInFlight = false;
       object.seekGeneration += 1;
       if (object.seekFrame !== undefined) window.cancelAnimationFrame(object.seekFrame);
       object.seekFrame = undefined;
@@ -449,15 +487,31 @@ export class VideoRenderer {
     const object = this.objects.get(id);
     const item = this.items.get(id);
     if (!object || !item || item.hidden) return false;
-    if (object.seekInteraction?.kind === kind) return true;
-    const originTime = object.video?.currentTime ?? object.currentTime;
+    const existing = object.seekInteraction;
+    if (existing?.kind === kind && !object.interactionEnding) return true;
+    if (existing && existing.kind !== kind) return false;
+    const continuing = existing?.kind === kind && object.interactionEnding;
+    const originTime = (continuing ? object.interactionTargetTime : undefined)
+      ?? object.video?.currentTime ?? object.currentTime;
     const fps = Math.max(1, object.fps || cachedVideoFps(item.assetId ?? id));
-    const originFrame = Math.max(0, Math.floor(originTime * fps + 1e-4));
-    const resumeAfter = kind === 'timeline' && object.intent;
+    const originFrame = (continuing ? object.interactionTargetFrame : undefined)
+      ?? (item.assetId ? cachedVideoFrameAtTime(item.assetId, originTime) : undefined)
+      ?? Math.max(0, Math.floor(originTime * fps + 1e-4));
+    const resumeAfter = kind === 'timeline' && (continuing ? Boolean(existing?.resumeAfter) : object.intent);
+    if (continuing) {
+      this.cancelDecoderRelease(object);
+      object.seekInteraction = { kind, originFrame, resumeAfter };
+      object.interactionEnding = false;
+      this.emitTransport(id, true);
+      return true;
+    }
     if (object.intent) this.pauseObject(object, item, true);
     this.cancelDecoderRelease(object);
     object.seekInteraction = { kind, originFrame, resumeAfter };
     object.interactionEnding = false;
+    object.interactionSeekInFlight = false;
+    object.interactionTargetTime = undefined;
+    object.interactionTargetFrame = undefined;
     object.pendingSeekTime = undefined;
     this.emitTransport(id, true);
     return true;
@@ -471,7 +525,7 @@ export class VideoRenderer {
     return true;
   }
 
-  private queueInteractionSeek(object: VideoRenderObject, item: VideoItem, time: number) {
+  private queueInteractionSeek(object: VideoRenderObject, item: VideoItem, time: number, targetFrame?: number) {
     const duration = resolvedVideoDuration(
       item.durationSec,
       object.video?.duration,
@@ -479,6 +533,9 @@ export class VideoRenderer {
     );
     const target = Math.max(0, Math.min(duration || Math.max(0, time), time));
     object.pendingSeekTime = target;
+    object.interactionTargetTime = target;
+    object.interactionTargetFrame = targetFrame
+      ?? (item.assetId ? cachedVideoFrameAtTime(item.assetId, target) : undefined);
     object.currentTime = target;
     object.phase = object.video ? 'paused' : 'loading';
     this.emitTransport(item.id, true);
@@ -487,7 +544,9 @@ export class VideoRenderer {
   }
 
   private scheduleInteractionSeek(object: VideoRenderObject, item: VideoItem) {
-    if (object.seekFrame !== undefined) return;
+    // Match the VFX Player's responsive seek controller: keep at most one seek
+    // in flight and let pendingSeekTime retain only the newest pointer target.
+    if (object.seekFrame !== undefined || object.interactionSeekInFlight) return;
     object.seekFrame = requestAnimationFrame(() => {
       object.seekFrame = undefined;
       void this.applyInteractionSeek(object, item);
@@ -499,9 +558,11 @@ export class VideoRenderer {
       this.finishSeekInteractionIfSettled(object);
       return;
     }
+    object.interactionSeekInFlight = true;
     try {
       await this.playback.ensureLiveVideo(object, item);
     } catch (error) {
+      object.interactionSeekInFlight = false;
       if (error instanceof Error && error.message === 'playback-pending') {
         object.phase = 'proxy-pending';
         this.emitTransport(item.id, true);
@@ -513,14 +574,22 @@ export class VideoRenderer {
     }
     const video = object.video;
     const target = object.pendingSeekTime;
-    if (!video || target === undefined) return;
+    if (!video || target === undefined) {
+      object.interactionSeekInFlight = false;
+      this.finishSeekInteractionIfSettled(object);
+      return;
+    }
     object.pendingSeekTime = undefined;
     const generation = ++object.seekGeneration;
     video.pause();
     object.phase = 'paused';
     const finish = () => {
       video.removeEventListener('seeked', finish);
-      if (object.video !== video || object.seekGeneration !== generation) return;
+      if (object.video !== video || object.seekGeneration !== generation) {
+        object.interactionSeekInFlight = false;
+        return;
+      }
+      object.interactionSeekInFlight = false;
       object.currentTime = video.currentTime;
       object.presentedTime = video.currentTime;
       object.frameDirty = true;
@@ -537,10 +606,13 @@ export class VideoRenderer {
 
   private finishSeekInteractionIfSettled(object: VideoRenderObject) {
     if (!object.interactionEnding || object.pendingSeekTime !== undefined || object.seekFrame !== undefined
-      || object.video?.seeking) return;
+      || object.interactionSeekInFlight) return;
     const interaction = object.seekInteraction;
     object.seekInteraction = undefined;
     object.interactionEnding = false;
+    object.interactionSeekInFlight = false;
+    object.interactionTargetTime = undefined;
+    object.interactionTargetFrame = undefined;
     const item = this.items.get(object.id);
     if (interaction?.resumeAfter && item && object.visible) this.startIntent(object, item);
     else {
@@ -734,7 +806,7 @@ export class VideoRenderer {
         id: item.id, assetId: item.assetId, sprite, badge,
         frameDirty: false, frameSequence: 0, lastUploadedTime: -1, lastUploadAt: 0,
         posterLoading: false, posterToken: 0, intent: false, intentOrder: 0, phase: 'paused', currentTime: 0,
-        displayedFrame: 0, seekGeneration: 0,
+        displayedFrame: 0, interactionSeekInFlight: false, seekGeneration: 0,
         preparationProgress: 0,
         playToken: 0, loadToken: 0, fps: cachedVideoFps(item.assetId ?? item.id),
         frameCount: cachedVideoFrameCount(item.assetId ?? item.id), rate: 1, buffering: false,

@@ -11,25 +11,19 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-mod decode;
 mod h264;
 mod index;
 
-pub use decode::{decode_source_frame_rgba, packet_batch};
 pub use h264::ensure_h264_proxy_with_progress;
 pub use index::ensure_source_frame_index;
 
 static FFMPEG: OnceLock<Option<PathBuf>> = OnceLock::new();
 pub const PROXY_CACHE_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
-pub const MAX_PACKET_BATCH_FRAMES: usize = 32;
-pub const MAX_PACKET_BATCH_BYTES: u64 = 32 * 1024 * 1024;
 pub(crate) const PROXY_MIN_TIMEOUT: Duration = Duration::from_secs(180);
 pub(crate) const PROXY_POLL: Duration = Duration::from_millis(200);
-pub(crate) const SOURCE_FRAME_DECODE_TIMEOUT: Duration = Duration::from_secs(15);
-pub const MAX_SOURCE_FRAME_BYTES: u64 = 192 * 1024 * 1024;
-const PROXY_FORMAT_VERSION: &str = "scrub-v4-frame-index";
-const SOURCE_INDEX_VERSION: u32 = 1;
-pub(crate) const SCRUB_INDEX_VERSION: u32 = 1;
+const PROXY_FORMAT_VERSION: &str = "scrub-v5-frame-index";
+const SOURCE_INDEX_VERSION: u32 = 2;
+pub(crate) const SCRUB_INDEX_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,14 +34,10 @@ pub struct VideoFrameIndexEntry {
     pub key_frame: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct VideoPacketIndexEntry {
     pub frame_index: u32,
-    pub offset: u64,
-    pub size: u32,
     pub pts_us: i64,
-    pub duration_us: u64,
     pub key_frame: bool,
 }
 
@@ -56,8 +46,6 @@ pub struct VideoPacketIndexEntry {
 pub struct VideoScrubIndex {
     pub version: u32,
     pub asset_id: String,
-    pub codec: String,
-    pub description_base64: String,
     pub width: u32,
     pub height: u32,
     pub fps: f64,
@@ -73,8 +61,6 @@ pub struct VideoScrubIndex {
     pub frame_accurate: bool,
     pub unsupported_reason: Option<String>,
     pub frames: Vec<VideoFrameIndexEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub packets: Vec<VideoPacketIndexEntry>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,14 +79,6 @@ pub(crate) struct StreamMetadata {
 
 pub fn find_ffmpeg() -> Option<PathBuf> {
     FFMPEG.get_or_init(discover_ffmpeg).clone()
-}
-
-pub fn source_decoder_available() -> bool {
-    find_ffmpeg().is_some()
-}
-
-pub fn source_indexer_available() -> bool {
-    find_ffmpeg().is_some_and(|ffmpeg| ffmpeg.with_file_name("ffprobe.exe").is_file())
 }
 
 fn discover_ffmpeg() -> Option<PathBuf> {
@@ -220,8 +198,7 @@ pub fn cleanup_stale_proxy_temps(cache_root: &Path) {
             if name.starts_with('.')
                 && (name.ends_with(".tmp.mp4")
                     || name.ends_with(".tmp.json")
-                    || name.ends_with(".progress")
-                    || (name.starts_with(".source-frame-") && name.ends_with(".rgba")))
+                    || name.ends_with(".progress"))
             {
                 let _ = fs::remove_file(entry.path());
             }
@@ -341,34 +318,12 @@ fn seconds_to_us(value: f64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::decode::{previous_keyframe_index, scrub_keyframe_skip};
     use super::h264::ensure_h264_proxy;
     use super::index::{
-        is_vfr, validate_frame_correspondence, validate_gop, validate_monotonic_frames,
-        validate_packet_correspondence,
+        is_vfr, probe_packets, validate_frame_correspondence, validate_gop,
+        validate_monotonic_frames, validate_packet_correspondence,
     };
     use std::{fs, path::Path, process::Command, sync::atomic::AtomicBool};
-
-    #[test]
-    fn scrubs_from_the_previous_keyframe_instead_of_the_target_pts() {
-        let frames = (0..12)
-            .map(|frame_index| VideoFrameIndexEntry {
-                frame_index,
-                pts_us: i64::from(frame_index) * 40_000,
-                duration_us: 40_000,
-                key_frame: frame_index % 4 == 0,
-            })
-            .collect::<Vec<_>>();
-        let index = VideoScrubIndex {
-            frames,
-            ..test_index("asset")
-        };
-        assert_eq!(previous_keyframe_index(&index.frames, 0), 0);
-        assert_eq!(previous_keyframe_index(&index.frames, 5), 4);
-        assert_eq!(previous_keyframe_index(&index.frames, 11), 8);
-        assert_eq!(scrub_keyframe_skip(&index, 5), (160_000, 1));
-        assert_eq!(scrub_keyframe_skip(&index, 8), (320_000, 0));
-    }
 
     #[test]
     fn detects_vfr_and_rejects_non_monotonic_pts() {
@@ -402,10 +357,7 @@ mod tests {
     fn validates_gop_boundaries() {
         let packet = |index: u32, key_frame| VideoPacketIndexEntry {
             frame_index: index,
-            offset: 0,
-            size: 1,
             pts_us: index as i64,
-            duration_us: 1,
             key_frame,
         };
         assert!(validate_gop(
@@ -459,10 +411,7 @@ mod tests {
             .iter()
             .map(|frame| VideoPacketIndexEntry {
                 frame_index: frame.frame_index,
-                offset: 0,
-                size: 1,
                 pts_us: frame.pts_us,
-                duration_us: frame.duration_us,
                 key_frame: frame.key_frame,
             })
             .collect::<Vec<_>>();
@@ -470,30 +419,6 @@ mod tests {
         let mut invalid = proxy;
         invalid[1].pts_us += 1_000;
         assert!(validate_frame_correspondence(&frames, &invalid).is_err());
-    }
-
-    #[test]
-    fn bounds_packet_batches_and_serializes_header() {
-        let root = std::env::temp_dir().join(format!("yoiniwa-packet-test-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        let proxy = root.join("proxy.mp4");
-        fs::write(&proxy, [1_u8, 2, 3, 4]).unwrap();
-        let mut index = test_index("asset");
-        index.proxy_ready = true;
-        index.packets = vec![VideoPacketIndexEntry {
-            frame_index: 0,
-            offset: 1,
-            size: 2,
-            pts_us: 0,
-            duration_us: 1,
-            key_frame: true,
-        }];
-        let bytes = packet_batch(&index, &proxy, 0, 1).unwrap();
-        assert_eq!(&bytes[..4], b"YSB1");
-        assert_eq!(&bytes[bytes.len() - 2..], &[2, 3]);
-        assert!(packet_batch(&index, &proxy, 0, 33).is_err());
-        assert!(packet_batch(&index, &proxy, u32::MAX, 1).is_err());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -529,14 +454,11 @@ mod tests {
         let directory = proxy_directory(&root);
         fs::create_dir_all(&directory).unwrap();
         let stale = directory.join(".asset-unique.tmp.mp4");
-        let stale_frame = directory.join(".source-frame-stale.rgba");
         let cached = directory.join("asset.mp4");
         fs::write(&stale, [1_u8]).unwrap();
-        fs::write(&stale_frame, [1_u8]).unwrap();
         fs::write(&cached, [2_u8]).unwrap();
         cleanup_stale_proxy_temps(&root);
         assert!(!stale.exists());
-        assert!(!stale_frame.exists());
         assert!(cached.exists());
         let _ = fs::remove_dir_all(root);
     }
@@ -587,28 +509,16 @@ mod tests {
                 Uuid::new_v4()
             ));
             let canceled = AtomicBool::new(false);
-            let source_index = ensure_source_frame_index(&root, &asset_id, &source, &canceled)
+            ensure_source_frame_index(&root, &asset_id, &source, &canceled)
                 .expect("source index");
             assert!(ready_proxy_path(&root, &asset_id).is_none(), "indexing must not create a proxy");
-            let decoded = decode_source_frame_rgba(
-                &root,
-                &source,
-                Some(&source_index),
-                expected_frames / 2,
-                3,
-                320,
-                180,
-                0,
-                &|| false,
-            ).expect("decode source frame");
-            assert_eq!(decoded.len(), 320 * 180 * 4 * 3, "{name}");
             let output = ensure_h264_proxy(&root, &asset_id, &source, &canceled).expect("proxy");
             let index = ready_scrub_index(&root, &asset_id).expect("index");
             assert!(output.exists());
             assert_eq!(index.frame_count, expected_frames, "{name}");
             assert_eq!((index.width, index.height), (2560, 1440), "{name}");
-            assert!(index.description_base64.len() > 8);
-            assert!(validate_gop(&index.packets, 6).is_ok());
+            let packets = probe_packets(&output, &canceled).expect("proxy packets");
+            assert!(validate_gop(&packets, 6).is_ok());
             let ssim = measure_ssim(&ffmpeg, &source, &output).expect("ssim");
             assert!(ssim >= 0.995, "{name} SSIM {ssim} < 0.995");
             let _ = fs::remove_dir_all(root);
@@ -638,8 +548,6 @@ mod tests {
         VideoScrubIndex {
             version: SCRUB_INDEX_VERSION,
             asset_id: asset_id.into(),
-            codec: "avc1.640028".into(),
-            description_base64: String::new(),
             width: 1,
             height: 1,
             fps: 30.0,
@@ -660,7 +568,6 @@ mod tests {
                 duration_us: 1,
                 key_frame: true,
             }],
-            packets: Vec::new(),
         }
     }
 }

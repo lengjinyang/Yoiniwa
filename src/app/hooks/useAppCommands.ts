@@ -1,7 +1,7 @@
 import { useMemo, type Dispatch, type SetStateAction } from 'react';
 import { resetImageTransform } from '../../domain/scene';
 import type { WindowState } from '../../types';
-import type { useSceneHistory } from '../../useSceneHistory';
+import type { useSceneHistory } from './useSceneHistory';
 import { appCommand, createAppCommandRegistry } from '../AppCommand';
 import { buildAppMenuEntries } from '../appMenuEntries';
 import type { useAppPreferences } from './useAppPreferences';

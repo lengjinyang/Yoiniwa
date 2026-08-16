@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { serializeProjectScene } from '../../canvas/persistence/ProjectSerializer';
+import { serializeProjectScene } from '../../persistence/ProjectSerializer';
 import type {
   ImportedImage,
   PhotoshopProjectMetadata,

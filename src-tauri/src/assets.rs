@@ -3,7 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, OnceLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -29,7 +29,17 @@ const MAX_IMAGE_BYTES: u64 = 200 * 1024 * 1024;
 const MAX_VIDEO_BYTES: u64 = 500 * 1024 * 1024;
 const ASSET_CACHE_BUDGET: u64 = 2 * 1024 * 1024 * 1024;
 const VIDEO_RANGE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
-const IMAGE_CACHE_VERSION: u32 = 3;
+
+fn image_cache_version() -> u32 {
+    #[derive(serde::Deserialize)]
+    struct Format { version: u32 }
+    static VERSION: OnceLock<u32> = OnceLock::new();
+    *VERSION.get_or_init(|| {
+        serde_json::from_str::<Format>(include_str!("../../src/shared/imageCacheFormat.json"))
+            .expect("src/shared/imageCacheFormat.json")
+            .version
+    })
+}
 
 #[derive(Clone, Debug)]
 pub struct AssetEntry {
@@ -112,7 +122,7 @@ impl AssetService {
     }
 
     pub fn asset_cache_dir(&self) -> PathBuf { self.cache_root().join("asset-cache") }
-    pub fn image_cache_dir(&self) -> PathBuf { self.cache_root().join(format!("image-cache/v{IMAGE_CACHE_VERSION}")) }
+    pub fn image_cache_dir(&self) -> PathBuf { self.cache_root().join(format!("image-cache/v{}", image_cache_version())) }
     pub fn derived_cache_dir(&self) -> PathBuf { self.cache_root().join("derived-cache") }
 
     pub fn entry(&self, id: &str) -> Option<AssetEntry> { self.registry.read().get(id).cloned() }
@@ -205,6 +215,29 @@ impl AssetService {
         self.video.enqueue_index(self.cache_root(), asset_id, source, self.app.lock().clone())
     }
 
+    pub(crate) fn video_frame_index(&self, asset_id: &str) -> Result<serde_json::Value> {
+        if asset_id.len() != 64 || !asset_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(anyhow!("资源标识无效"));
+        }
+        let cache_root = self.cache_root();
+        let Some(index) = video_proxy::ready_source_index(&cache_root, asset_id)
+            .or_else(|| video_proxy::ready_scrub_index(&cache_root, asset_id))
+        else {
+            return Ok(serde_json::Value::Null);
+        };
+        let frames = index.frames.iter().map(|frame| {
+            serde_json::json!([frame.pts_us, frame.duration_us])
+        }).collect::<Vec<_>>();
+        Ok(serde_json::json!({
+            "assetId": index.asset_id,
+            "fps": index.fps,
+            "frameCount": index.frame_count,
+            "durationUs": index.duration_us,
+            "vfr": index.vfr,
+            "frames": frames,
+        }))
+    }
+
     pub(crate) fn enqueue_video_proxy(&self, asset_id: &str) -> Result<()> {
         if video_proxy::ready_proxy_path(&self.cache_root(), asset_id).is_some() { return Ok(()); }
         let source = self.ensure_file(asset_id)?;
@@ -223,6 +256,7 @@ impl AssetService {
         self.video.ensure_playback(self.cache_root(), asset_id, source, self.app.lock().clone())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_record(
         &self,
         hash: String,
@@ -241,7 +275,7 @@ impl AssetService {
                 id: hash.clone(), asset_id: Some(hash.clone()), hash: hash.clone(), mime_type: mime.to_string(),
                 byte_length, source_size: Some(byte_length), source_mtime_ms,
                 natural_width: meta.width.max(1), natural_height: meta.height.max(1), orientation: Some(1),
-                has_alpha: Some(false), content_hash: Some(hash), cache_version: Some(IMAGE_CACHE_VERSION),
+                has_alpha: Some(false), content_hash: Some(hash), cache_version: Some(image_cache_version()),
                 original_name: name, source_path, kind: Some("video".into()), duration_sec: meta.duration_sec,
             });
         }
@@ -250,7 +284,7 @@ impl AssetService {
             id: hash.clone(), asset_id: Some(hash.clone()), hash: hash.clone(), mime_type: mime.to_string(),
             byte_length, source_size: Some(byte_length), source_mtime_ms,
             natural_width: image.width, natural_height: image.height, orientation: Some(image.orientation),
-            has_alpha: Some(image.has_alpha), content_hash: Some(hash), cache_version: Some(IMAGE_CACHE_VERSION),
+            has_alpha: Some(image.has_alpha), content_hash: Some(hash), cache_version: Some(image_cache_version()),
             original_name: name, source_path, kind: Some("image".into()), duration_sec: None,
         })
     }
@@ -304,10 +338,6 @@ impl AssetService {
         let video_jobs = self.video.stats();
         stats.proxy_active = video_jobs.active as u64;
         stats.proxy_queued = video_jobs.pending as u64;
-        let (decode_active, decode_requests, decode_ms) = self.video.decode_stats();
-        stats.video_decode_active = decode_active;
-        stats.video_decode_requests = decode_requests;
-        stats.video_decode_ms = decode_ms;
         stats
     }
 
@@ -353,10 +383,10 @@ impl AssetService {
                     if let Ok(edge) = query_u32(&url, "edge") {
                         if matches!(edge, 128 | 256 | 512 | 1024) {
                             let _ = self.enqueue_thumbnail(id, edge, priority);
-                            return self.jobs.boost(|job| job == &format!("thumbnail:{id}:{edge}"), priority);
+                            return self.jobs.boost(|job| job == format!("thumbnail:{id}:{edge}"), priority);
                         }
                         let _ = self.enqueue_mip(id, edge, priority);
-                        return self.jobs.boost(|job| job == &format!("mip:{id}:{edge}"), priority);
+                        return self.jobs.boost(|job| job == format!("mip:{id}:{edge}"), priority);
                     }
                 } else if variant == "tile" {
                     if let (Ok(level), Ok(column), Ok(row)) = (query_u32(&url, "level"), query_u32(&url, "column"), query_u32(&url, "row")) {
@@ -367,12 +397,12 @@ impl AssetService {
                             let _ = self.enqueue_tile(id, level, column, row, priority, level_path);
                         }
                         return self.jobs.boost(|job| {
-                            job == &format!("tile:{id}:{level}:{column}:{row}") || job == &format!("level:{id}:{level}")
+                            job == format!("tile:{id}:{level}:{column}:{row}") || job == format!("level:{id}:{level}")
                         }, priority);
                     }
                 } else if let Some(edge) = variant.strip_prefix("thumb").and_then(|value| value.parse::<u32>().ok()) {
                     let _ = self.enqueue_thumbnail(id, edge, priority);
-                    return self.jobs.boost(|job| job == &format!("thumbnail:{id}:{edge}"), priority);
+                    return self.jobs.boost(|job| job == format!("thumbnail:{id}:{edge}"), priority);
                 }
             }
         }
@@ -727,12 +757,17 @@ impl AssetService {
         let source = previous_override.as_ref().map(|path| path.join("RefCanvas")).unwrap_or_else(|| self.user_data.clone());
         let target = parent.as_ref().map(|path| path.join("RefCanvas")).unwrap_or_else(|| self.user_data.clone());
         if source != target {
+            // No producer may retain or write an old cache path while the
+            // directories and registry are being migrated.
+            self.shutdown();
+            if !cache_jobs_idle(self.jobs.stats().active, self.video.stats().active) {
+                return Err(anyhow!("缓存任务未能及时停止，请稍后重试"));
+            }
             fs::create_dir_all(&target)?;
             copy_directory_if_exists(&source.join("asset-cache"), &target.join("asset-cache"))?;
             copy_directory_if_exists(&source.join("derived-cache"), &target.join("derived-cache"))?;
             copy_directory_if_exists(&source.join("image-cache"), &target.join("image-cache"))?;
             *self.cache_override.write() = parent.clone();
-            self.video.clear_indexes();
             self.persist_cache_override(parent.as_deref())?;
             for entry in self.registry.write().values_mut() {
                 entry.cache_path = target.join("asset-cache").join(entry.cache_path.file_name().unwrap_or_default());
@@ -746,7 +781,6 @@ impl AssetService {
 
     pub fn clear_regenerable_cache(&self) -> Result<CacheInfo> {
         self.shutdown();
-        self.video.clear_indexes();
         let _ = fs::remove_dir_all(self.derived_cache_dir());
         let _ = fs::remove_dir_all(self.image_cache_dir());
         self.cache_info()
@@ -972,6 +1006,10 @@ fn emit_derivative_ready_app(
     }));
 }
 
+fn cache_jobs_idle(image_active: usize, video_active: usize) -> bool {
+    image_active == 0 && video_active == 0
+}
+
 pub type SharedAssets = Arc<AssetService>;
 
 #[cfg(test)]
@@ -1011,5 +1049,18 @@ mod tests {
         );
         assert_eq!(status, http::StatusCode::OK);
         assert_eq!(end, 20 * 1024 * 1024 - 1);
+    }
+
+    #[test]
+    fn cache_migration_requires_both_job_pools_to_be_idle() {
+        assert!(cache_jobs_idle(0, 0));
+        assert!(!cache_jobs_idle(1, 0));
+        assert!(!cache_jobs_idle(0, 1));
+        assert!(!cache_jobs_idle(2, 3));
+    }
+
+    #[test]
+    fn image_cache_version_comes_from_the_shared_frontend_format_file() {
+        assert_eq!(image_cache_version(), 3);
     }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { performanceMonitor, type PerformanceSnapshot } from './runtime/performanceMonitor';
+import { performanceMonitor, type PerformanceSnapshot } from '../../runtime/performanceMonitor';
 
 const formatBytes = (bytes?: number) => bytes === undefined ? 'n/a'
   : bytes >= 1024 * 1024 * 1024 ? `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
@@ -58,8 +58,6 @@ export function PerformancePanel() {
     ['video upload / drop fps', `${snapshot.videoUploadFps} / ${snapshot.droppedVideoFps}`],
     ['video upload bytes', formatBytes(snapshot.videoFrameUploadBytes)],
     ['proxy active / queued', `${snapshot.proxyActive} / ${snapshot.proxyQueued}`],
-    ['FFmpeg active / requests', `${snapshot.ffmpegActive} / ${snapshot.ffmpegDecodeRequests}`],
-    ['FFmpeg decode avg', formatMs(snapshot.ffmpegDecodeMs)],
     ['JS Heap', formatBytes(snapshot.jsHeapBytes)],
     ['pointermove / s', snapshot.pointerMovesPerSecond.toFixed(0)],
     ['React renders / s', snapshot.reactRendersPerSecond.toFixed(1)],

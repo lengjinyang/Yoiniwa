@@ -1,11 +1,12 @@
-import { assetResourceUrl } from '../assetResourceUrl';
-import type { VideoPreparationResult } from '../types';
+import { assetResourceUrl } from './assetResourceUrl';
+import type { VideoFrameTimingIndex, VideoPreparationResult } from '../types';
 
 type PlaybackUrlKind = 'original' | 'proxy';
 
 const playbackUrlCache = new Map<string, { url: string; fps: number; frameCount?: number; kind: PlaybackUrlKind }>();
 const fpsHints = new Map<string, number>();
 const frameCountHints = new Map<string, number>();
+const frameTimingIndexes = new Map<string, VideoFrameTimingIndex>();
 const pendingProxy = new Set<string>();
 const rejectedOriginals = new Set<string>();
 
@@ -20,11 +21,70 @@ export function videoPlaybackLookupFromApi(api: Window['refCanvas'] | undefined)
 }
 
 export function cachedVideoFps(assetId: string) {
-  return fpsHints.get(assetId) ?? playbackUrlCache.get(assetId)?.fps ?? 30;
+  return frameTimingIndexes.get(assetId)?.fps ?? fpsHints.get(assetId) ?? playbackUrlCache.get(assetId)?.fps ?? 30;
 }
 
 export function cachedVideoFrameCount(assetId: string) {
-  return frameCountHints.get(assetId) ?? playbackUrlCache.get(assetId)?.frameCount;
+  return frameTimingIndexes.get(assetId)?.frameCount ?? frameCountHints.get(assetId) ?? playbackUrlCache.get(assetId)?.frameCount;
+}
+
+export function hasCachedVideoFrameIndex(assetId: string) {
+  return frameTimingIndexes.has(assetId);
+}
+
+export function rememberVideoFrameIndex(index: VideoFrameTimingIndex) {
+  if (!index.assetId || !Number.isFinite(index.fps) || index.fps <= 0
+    || !Number.isFinite(index.frameCount) || index.frameCount <= 0
+    || index.frames.length !== Math.round(index.frameCount)) return false;
+  let previousPts = -1;
+  const frames: Array<[number, number]> = [];
+  for (const entry of index.frames) {
+    const ptsUs = Number(entry?.[0]);
+    const durationUs = Number(entry?.[1]);
+    if (!Number.isFinite(ptsUs) || ptsUs < 0 || ptsUs <= previousPts
+      || !Number.isFinite(durationUs) || durationUs < 0) return false;
+    frames.push([ptsUs, durationUs]);
+    previousPts = ptsUs;
+  }
+  const normalized: VideoFrameTimingIndex = {
+    ...index,
+    frameCount: frames.length,
+    frames,
+  };
+  frameTimingIndexes.set(index.assetId, normalized);
+  rememberVideoTiming(index.assetId, index.fps, frames.length);
+  return true;
+}
+
+export function cachedVideoFrameTime(assetId: string, frame: number) {
+  const index = frameTimingIndexes.get(assetId);
+  if (!index?.frames.length) return undefined;
+  const targetFrame = Math.max(0, Math.min(index.frames.length - 1, Math.round(frame)));
+  const [ptsUs, declaredDurationUs] = index.frames[targetFrame];
+  const nextPtsUs = index.frames[targetFrame + 1]?.[0];
+  const inferredDurationUs = nextPtsUs !== undefined && nextPtsUs > ptsUs
+    ? nextPtsUs - ptsUs
+    : Math.max(1, declaredDurationUs || Math.round(1_000_000 / Math.max(1, index.fps)));
+  const durationUs = declaredDurationUs > 0
+    ? Math.min(declaredDurationUs, inferredDurationUs)
+    : inferredDurationUs;
+  const midpointUs = ptsUs + Math.max(1, durationUs) / 2;
+  const lastSafeUs = index.durationUs > 0 ? Math.max(0, index.durationUs - 1) : midpointUs;
+  return Math.min(lastSafeUs, midpointUs) / 1_000_000;
+}
+
+export function cachedVideoFrameAtTime(assetId: string, time: number) {
+  const frames = frameTimingIndexes.get(assetId)?.frames;
+  if (!frames?.length || !Number.isFinite(time)) return undefined;
+  const targetUs = Math.max(0, time) * 1_000_000;
+  let low = 0;
+  let high = frames.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (frames[middle][0] <= targetUs + 0.5) low = middle;
+    else high = middle - 1;
+  }
+  return low;
 }
 
 export function isVideoProxyPending(assetId: string) {
@@ -120,7 +180,7 @@ export function rememberVideoTiming(assetId: string, fps = 30, frameCount?: numb
   }
 }
 
-export function rememberVideoProxy(assetId: string, _path: string, fps = 30, frameCount?: number) {
+export function rememberVideoProxy(assetId: string, fps = 30, frameCount?: number) {
   pendingProxy.delete(assetId);
   rememberVideoTiming(assetId, fps, frameCount);
   playbackUrlCache.set(assetId, {

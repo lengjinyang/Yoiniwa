@@ -1,4 +1,5 @@
 import {
+  cachedVideoFrameAtTime,
   cachedVideoFrameCount,
   cachedVideoFps,
   isOriginalVideoPlayback,
@@ -272,8 +273,21 @@ export class VideoPlaybackController {
         }
         object.lastPresentedFrames = metadata.presentedFrames;
         object.lastPresentedMediaTime = metadata.mediaTime;
+        if (object.seekInteraction && object.interactionTargetTime !== undefined) {
+          const indexedFrame = object.assetId ? cachedVideoFrameAtTime(object.assetId, metadata.mediaTime) : undefined;
+          const wrongIndexedFrame = indexedFrame !== undefined && object.interactionTargetFrame !== undefined
+            && indexedFrame !== object.interactionTargetFrame;
+          const tolerance = 0.75 / Math.max(1, object.fps);
+          if (wrongIndexedFrame || (indexedFrame === undefined
+            && Math.abs(metadata.mediaTime - object.interactionTargetTime) > tolerance)) {
+            next();
+            return;
+          }
+        }
         object.presentedTime = metadata.mediaTime;
-        if (!object.intent && object.phase !== 'playing' && object.phase !== 'loading') {
+        // A paused video still presents decoded frames while Timeline Scrub or
+        // Canvas Jog is active. Upload each presented preview immediately.
+        if (!object.seekInteraction && !object.intent && object.phase !== 'playing' && object.phase !== 'loading') {
           next();
           return;
         }

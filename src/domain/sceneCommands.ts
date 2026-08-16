@@ -1,6 +1,6 @@
 import { applyLayout, type LayoutAction } from './layout';
 import { fitAutoGroupsToContents, itemBounds, memberBounds, normalizeZIndexes, reconcileMemberBounds } from './scene';
-import type { Scene, SceneItemPatch } from '../types';
+import type { Scene, SceneItemPatch } from './sceneTypes';
 
 export type ImageChange = SceneItemPatch;
 

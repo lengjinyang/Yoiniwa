@@ -45,7 +45,7 @@ button:disabled { opacity: .34; cursor: default; }
 .shortcut-capture.active { border-color: var(--accent-border) !important; color: var(--accent-text) !important; background: var(--accent-soft) !important; }
 
 input[type="text"], input[type="number"], textarea,
-.tag-input-row input, .color-control-hex input, .group-rename-card input {
+.color-control-hex input, .group-rename-card input {
   min-height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -56,9 +56,9 @@ input[type="text"], input[type="number"], textarea,
   transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
 }
 input[type="text"]:hover, input[type="number"]:hover, textarea:hover,
-.tag-input-row input:hover, .color-control-hex input:hover { border-color: var(--border-strong); }
+.color-control-hex input:hover { border-color: var(--border-strong); }
 input[type="text"]:focus, input[type="number"]:focus, textarea:focus,
-.tag-input-row input:focus, .color-control-hex input:focus, .group-rename-card input:focus {
+.color-control-hex input:focus, .group-rename-card input:focus {
   border-color: var(--accent);
   box-shadow: none;
 }
@@ -66,8 +66,6 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 
 input[type="range"] { height: 4px; border: 0; border-radius: 2px; accent-color: var(--accent); }
 input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
-.check-row { min-height: 28px; gap: 8px; color: var(--text-secondary) !important; }
-
 .color-control-trigger {
   min-height: 32px;
   padding: 4px 7px !important;
@@ -179,7 +177,6 @@ input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var
 .color-tool-icon { width: 14px; height: 14px; flex: 0 0 14px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .color-tool-icon .filled { fill: currentColor; stroke: none; opacity: .42; }
 
-.tag-list button { border-color: var(--accent-border); border-radius: var(--radius-xs); color: var(--accent-text); background: var(--accent-soft); }
 .cache-location { border-color: var(--border); border-radius: var(--radius-xs); color: var(--text-secondary); background: var(--surface-0); }
 .cache-notice { color: var(--text-secondary); }
 .cache-warning { color: var(--warning); }

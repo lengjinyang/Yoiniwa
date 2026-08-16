@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { renderItems } from '../../exportScene';
-import type { SceneHistoryController } from '../../useSceneHistory';
+import type { SceneHistoryController } from './useSceneHistory';
 import type { useVisualNotes } from './useVisualNotes';
 
 interface UseAppHarnessOptions {

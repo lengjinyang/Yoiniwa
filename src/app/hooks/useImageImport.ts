@@ -4,7 +4,7 @@ import { preloadImagePreview } from '../../runtime/imageResources';
 import { isSupportedMediaFile, isVideoAsset, MEDIA_FILE_PATTERN, toSceneItem } from '../../domain/media';
 import { memberBounds, reconcileMemberBounds } from '../../domain/scene';
 import type { ImagePrewarmProgress, ImportedImage, Scene, SceneItem } from '../../types';
-import { enrichImportedMedia, enrichImportedMediaBatch, mapWithConcurrency } from '../../videoProbe';
+import { enrichImportedMedia, enrichImportedMediaBatch, mapWithConcurrency } from '../../runtime/videoProbe';
 
 export type InternalImageDropHandler = (
   value: string,

@@ -1,7 +1,7 @@
 import { ColorMatrixFilter, Container, Graphics, Sprite } from 'pixi.js';
 import { IMAGE_TILE_GUTTER, IMAGE_TILE_SIZE } from '../../shared/imagePipelineConfig';
 import type { SceneItem, Scene } from '../../types';
-import { imageGrayscaleContrast } from '../../imageAdjustments';
+import { imageGrayscaleContrast } from '../../domain/imageAdjustments';
 import { resolveCanvasTileUrl } from '../assets/AssetPathResolver';
 import type { SceneBounds } from '../scene/SceneNode';
 import type { GpuTextureEntry } from '../textures/GpuTextureCache';

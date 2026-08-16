@@ -1,4 +1,4 @@
-import type { Scene } from '../../types';
+import type { Scene } from '../types';
 import { serializeProjectScene } from './ProjectSerializer';
 
 const DEFAULT_AUTOSAVE_DELAY_MS = 10 * 1000;

@@ -1,6 +1,6 @@
 import { groupVisibleBounds, GROUP_TITLE_HEIGHT } from '../domain/scene';
 import type { BoardItem, ImageGroup, VisualNotesState } from '../types';
-import { markWorldPoints } from '../visualNotes/VisualNoteGeometry';
+import { markWorldPoints } from '../domain/visualNoteGeometry';
 
 interface ExportImage extends BoardItem { resourceUrl: string }
 interface ExportRequest {

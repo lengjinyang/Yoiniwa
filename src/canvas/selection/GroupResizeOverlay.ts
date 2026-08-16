@@ -1,7 +1,7 @@
 import { Graphics, type Container } from 'pixi.js';
 import type { ImageGroup } from '../../types';
 import { GROUP_RESIZE_HANDLE_SCREEN_SIZE, groupHeaderWorldBounds } from '../groups/GroupPresentation';
-import type { GroupResizeHandle } from './GroupResizeController';
+import type { GroupResizeHandle } from '../publicTypes';
 
 export class GroupResizeOverlay {
   private readonly graphics = new Graphics();

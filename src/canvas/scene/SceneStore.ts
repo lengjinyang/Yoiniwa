@@ -2,7 +2,7 @@ import type { ImageGroup, Scene, SceneItem, SceneItemPatch, VisualNotesState } f
 import type { SceneNode } from './SceneNode';
 import { SpatialIndex } from './SpatialIndex';
 import { fitAutoGroupsToContents } from '../../domain/scene';
-import { moveSceneMark } from '../../visualNotes/VisualNoteGeometry';
+import { moveSceneMark } from '../../domain/visualNoteGeometry';
 import { pointInImage } from '../selection/HitTestService';
 
 export class SceneStore {

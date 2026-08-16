@@ -1,6 +1,6 @@
-import { isVideoAsset } from './domain/media';
-import type { AssetRecord, ImportedImage } from './types';
-import { resolveVideoPlaybackUrl, videoPlaybackLookupFromApi } from './runtime/videoUrl';
+import { isVideoAsset } from '../domain/media';
+import type { AssetRecord, ImportedImage } from '../types';
+import { resolveVideoPlaybackUrl, videoPlaybackLookupFromApi } from './videoUrl';
 
 interface ProbedVideo {
   width: number;

@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   ImagePrewarmProgress, ImageThumbnailReady, ImageDerivativeReady, NativePointerInput, RefCanvasAPI,
-  VideoPreparationProgress, VideoProxyFailed, VideoProxyReady,
+  VideoFrameTimingIndex, VideoPreparationProgress, VideoProxyFailed, VideoProxyReady,
 } from '../types';
 import { createPhotoshopSyncQueue } from '../shared/photoshopSyncQueue';
 
@@ -98,6 +98,7 @@ export function installTauriRefCanvasApi() {
     // Best-effort background work: a missing or unreadable asset must not surface
     // as an unhandled rejection every time the user selects a video.
     prepareVideoIndex: (assetId) => { void command('videos_prepare_index', { assetId }).catch(() => undefined); },
+    getVideoFrameIndex: (assetId) => command<VideoFrameTimingIndex | null>('videos_frame_index', { assetId }),
     onVideoProxyReady: (callback) => onEvent('videos:proxy-ready', callback),
     onVideoProxyFailed: (callback) => onEvent('videos:proxy-failed', callback),
     onVideoPreparationProgress: (callback) => onEvent('videos:preparation-progress', callback),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { clearOperation, settleOperation, startOperation, type OperationKind, type OperationState } from '../../operationState';
+import { clearOperation, settleOperation, startOperation, type OperationKind, type OperationState } from '../operationState';
 
 export function useStatusOperations() {
   const [status, setStatus] = useState('');

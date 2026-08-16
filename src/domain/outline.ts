@@ -1,4 +1,4 @@
-import type { ImageGroup, SceneItem, Scene } from '../types';
+import type { ImageGroup, SceneItem, Scene } from './sceneTypes';
 
 export type OutlineObject = SceneItem | ImageGroup;
 

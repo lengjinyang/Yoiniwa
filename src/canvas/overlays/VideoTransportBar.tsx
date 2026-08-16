@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import type { VideoTransportState } from '../renderer/VideoRenderer';
+import type { VideoTransportState } from '../renderer/VideoTypes';
 
 const RATES = [0.25, 0.5, 1, 1.5, 2] as const;
 
@@ -36,7 +36,7 @@ export interface VideoTransportBarProps {
   preparing?: boolean;
   onPlayPause(): void;
   onTimelineSeekStart(): void;
-  onTimelineSeek(time: number): void;
+  onTimelineSeekFrame(frame: number): void;
   onTimelineSeekEnd(): void;
   onToggleMute(): void;
   onRateChange(rate: number): void;
@@ -47,16 +47,9 @@ function stopCanvasSteal(event: { stopPropagation(): void }) {
   event.stopPropagation();
 }
 
-function formatTime(seconds: number) {
-  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
-  const minutes = Math.floor(safe / 60);
-  const remaining = Math.floor(safe % 60);
-  return `${minutes}:${String(remaining).padStart(2, '0')}`;
-}
-
 export function VideoTransportBar({
   visible, locked, resolutionLabel, barStyle, resolutionStyle, transport, preparing,
-  onPlayPause, onTimelineSeekStart, onTimelineSeek, onTimelineSeekEnd,
+  onPlayPause, onTimelineSeekStart, onTimelineSeekFrame, onTimelineSeekEnd,
   onToggleMute, onRateChange, onToggleLock,
 }: VideoTransportBarProps) {
   const timelineActive = useRef(false);
@@ -67,6 +60,12 @@ export function VideoTransportBar({
   const loading = Boolean(transport?.loading);
   const currentTime = transport?.currentTime ?? 0;
   const duration = transport?.duration ?? 0;
+  const fps = Math.max(1, transport?.fps || 30);
+  const frameCount = Math.max(1, Math.round(transport?.frameCount || duration * fps || 1));
+  const maxFrame = frameCount - 1;
+  const targetFrame = Math.min(maxFrame, Math.max(0,
+    transport?.targetFrame ?? Math.floor(currentTime * fps + 1e-4)));
+  const displayedFrame = Math.min(maxFrame, Math.max(0, transport?.displayedFrame ?? targetFrame));
   const beginTimeline = () => {
     if (timelineActive.current) return;
     timelineActive.current = true;
@@ -90,10 +89,9 @@ export function VideoTransportBar({
           <TransportIcon kind={playing ? 'pause' : 'play'} />
         </button>
       </div>
-      <label className="video-transport-timeline" title="Timeline Scrub：拖动到视频中的绝对位置">
-        <input type="range" min={0} max={Math.max(duration, 0.001)} step="any"
-          value={Math.min(Math.max(currentTime, 0), Math.max(duration, 0.001))}
-          aria-label="视频时间轴"
+      <label className="video-transport-timeline" title="Timeline Scrub：按 Frame Index 跳转">
+        <input type="range" min={0} max={maxFrame} step={1} value={targetFrame}
+          aria-label="视频帧时间轴" aria-valuetext={`帧编号 ${displayedFrame}，共 ${frameCount} 帧`}
           onPointerDown={(event) => { stopCanvasSteal(event); beginTimeline(); }}
           onPointerUp={(event) => { stopCanvasSteal(event); endTimeline(); }}
           onPointerCancel={(event) => { stopCanvasSteal(event); endTimeline(); }}
@@ -101,9 +99,9 @@ export function VideoTransportBar({
             if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) beginTimeline();
           }}
           onKeyUp={endTimeline} onBlur={endTimeline}
-          onInput={(event) => onTimelineSeek(event.currentTarget.valueAsNumber)} />
-        <span className="video-transport-time" title="Canvas Jog：在视频画面上按住左键左右拖动（8 px/帧）">
-          {formatTime(currentTime)} / {formatTime(duration)}
+          onInput={(event) => onTimelineSeekFrame(event.currentTarget.valueAsNumber)} />
+        <span className="video-transport-time" title="逐帧：在视频画面上按住左键左右拖动（8 px/帧），或使用 ← / →">
+          FRAME {String(displayedFrame).padStart(5, '0')}
         </span>
       </label>
       <div className="video-transport-cluster">

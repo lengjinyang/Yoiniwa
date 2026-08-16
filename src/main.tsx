@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import { PerformancePanel } from './PerformancePanel';
-import './logger';
+import { PerformancePanel } from './app/components/PerformancePanel';
+import './runtime/logger';
 import { installTauriRefCanvasApi } from './platform/refCanvasTauri';
 
 installTauriRefCanvasApi();

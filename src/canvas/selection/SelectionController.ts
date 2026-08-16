@@ -9,8 +9,9 @@ import { SceneSelection } from './SceneSelection';
 import type { TransformHandle } from './SelectionOverlay';
 import { boxFromPoints, collapsedGroupInSelectionBox, imagesInSelectionBox } from './BoxSelectionController';
 import { transformImageSelection } from './TransformController';
-import { resizeGroupFrameByDelta, type GroupFrameBounds, type GroupResizeHandle } from './GroupResizeController';
+import { resizeGroupFrameByDelta } from './GroupResizeController';
 import { groupHeaderWorldBounds } from '../groups/GroupPresentation';
+import type { GroupFrameBounds, GroupResizeHandle, LassoPoint } from '../publicTypes';
 
 const rotationCursor = (degrees: 0 | 90 | 180 | 270) => `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18' fill='none'%3E%3Cg transform='rotate(${degrees}%209%209)' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 4.5h-7q-3 0-3 3v7M12.1 2.1l2.4 2.4-2.4 2.4M2.1 12.1l2.4 2.4 2.4-2.4' stroke='%23101317' stroke-width='2.8'/%3E%3Cpath d='M14.5 4.5h-7q-3 0-3 3v7M12.1 2.1l2.4 2.4-2.4 2.4M2.1 12.1l2.4 2.4 2.4-2.4' stroke='%23f1f3f8' stroke-width='1.15'/%3E%3C/g%3E%3C/svg%3E") 9 9, crosshair`;
 
@@ -22,13 +23,12 @@ const ROTATE_CURSORS = {
 } as const;
 
 type ImageChange = SceneItemPatch;
-export type LassoPoint = { x: number; y: number };
 interface VideoJogSession {
   update(frameOffset: number): void;
   end(): void;
 }
 const VIDEO_JOG_DRAG_THRESHOLD_PX = 4;
-const VIDEO_JOG_PIXELS_PER_FRAME = 8;
+const VIDEO_JOG_FRAMES_PER_PIXEL = 0.125;
 type Drag =
   | { kind: 'move'; start: { x: number; y: number }; originals: SceneItem[] }
   | { kind: 'box'; start: { x: number; y: number }; additive: string[] }
@@ -37,7 +37,7 @@ type Drag =
   | { kind: 'group-rotate'; start: { x: number; y: number }; originals: SceneItem[]; bounds: GroupFrameBounds }
   | { kind: 'group'; start: { x: number; y: number }; last: { x: number; y: number }; id: string }
   | { kind: 'video-jog-pending'; id: string; start: { x: number; y: number }; startClientX: number; startClientY: number; originals: SceneItem[] }
-  | { kind: 'video-jog'; lastClientX: number; remainderX: number; frameOffset: number; direction: number; session: VideoJogSession }
+  | { kind: 'video-jog'; startClientX: number; frameOffset: number; session: VideoJogSession }
   | { kind: 'group-resize'; start: { x: number; y: number }; id: string; original: ImageGroup; handle: GroupResizeHandle; bounds: GroupFrameBounds };
 
 interface SelectionControllerOptions {
@@ -305,11 +305,11 @@ export class SelectionController {
     if (this.drag.kind === 'video-jog-pending') {
       const deltaX = event.clientX - this.drag.startClientX;
       const deltaY = event.clientY - this.drag.startClientY;
-      if (Math.abs(deltaX) < VIDEO_JOG_DRAG_THRESHOLD_PX && Math.abs(deltaY) < VIDEO_JOG_DRAG_THRESHOLD_PX) return;
+      if (Math.hypot(deltaX, deltaY) < VIDEO_JOG_DRAG_THRESHOLD_PX) return;
       if (Math.abs(deltaX) >= Math.abs(deltaY)) {
         const session = this.options.beginVideoJog(this.drag.id);
         if (session) {
-          this.drag = { kind: 'video-jog', lastClientX: this.drag.startClientX, remainderX: 0, frameOffset: 0, direction: 0, session };
+          this.drag = { kind: 'video-jog', startClientX: this.drag.startClientX, frameOffset: 0, session };
           this.setTransformOverlaysHidden(true);
           this.updateVideoJog(event);
           return;
@@ -409,18 +409,13 @@ export class SelectionController {
 
   private updateVideoJog(event: PointerEvent) {
     if (this.drag?.kind !== 'video-jog') return;
-    const deltaX = event.clientX - this.drag.lastClientX;
-    this.drag.lastClientX = event.clientX;
-    const direction = Math.sign(deltaX);
-    if (!direction) return;
-    if (this.drag.direction && direction !== this.drag.direction) this.drag.remainderX = 0;
-    this.drag.direction = direction;
-    this.drag.remainderX += deltaX;
-    const frames = Math.trunc(this.drag.remainderX / VIDEO_JOG_PIXELS_PER_FRAME);
-    if (frames) {
-      this.drag.remainderX -= frames * VIDEO_JOG_PIXELS_PER_FRAME;
-      this.drag.frameOffset += frames;
-      this.drag.session.update(this.drag.frameOffset);
+    // Keep the VFX Player's origin-relative jog curve, tuned down for a
+    // zoomable canvas: 8 px contributes one frame. Rounding the accumulated
+    // offset preserves sub-frame motion without drift and reverses naturally.
+    const frameOffset = Math.round((event.clientX - this.drag.startClientX) * VIDEO_JOG_FRAMES_PER_PIXEL);
+    if (frameOffset !== this.drag.frameOffset) {
+      this.drag.frameOffset = frameOffset;
+      this.drag.session.update(frameOffset);
     }
     this.options.element.style.cursor = 'ew-resize';
   }

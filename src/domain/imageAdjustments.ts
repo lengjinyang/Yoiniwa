@@ -1,4 +1,4 @@
-import type { BoardItem } from './types';
+import type { BoardItem } from './sceneTypes';
 
 export function imageGrayscaleContrast(item: Pick<BoardItem, 'grayscaleContrast'>) {
   const contrast = item.grayscaleContrast;

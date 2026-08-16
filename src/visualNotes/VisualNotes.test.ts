@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { migrateProjectScene } from '../canvas/persistence/ProjectMigration';
+import { migrateProjectScene } from '../persistence/ProjectMigration';
 import { deleteSceneSelection } from '../domain/sceneCommands';
 import { createScene } from '../domain/scene';
 import { captureSceneSelection, pasteScenePayload } from '../domain/sceneClipboard';
 import type { BrushVisualMark, ImageItem } from '../types';
 import { appendBrushSample, simplifyBrushPoints, widthFactorForSample } from './BrushEngine';
 import { eraseStroke, eraserHitsArrow } from './EraserEngine';
-import { imageSourceToWorld, worldToImageSource } from './VisualNoteGeometry';
+import { imageSourceToWorld, worldToImageSource } from '../domain/visualNoteGeometry';
 
 const image: ImageItem = {
   id: 'image', name: 'image', sourceType: 'file', naturalWidth: 1000, naturalHeight: 500,

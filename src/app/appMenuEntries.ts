@@ -1,8 +1,8 @@
-import type { ContextMenuEntry } from '../ContextMenu';
+import type { ContextMenuEntry } from './components/ContextMenu';
 import type { LayoutAction } from '../domain/layout';
 import type { ImageGroup, SceneItem, RecentScene, Scene, WindowState } from '../types';
-import { shortcutDisplayName, type ShortcutPreferences } from '../keyboardShortcuts';
-import { imageGrayscaleContrast, setImageGrayscaleContrast } from '../imageAdjustments';
+import { shortcutDisplayName, type ShortcutPreferences } from './keyboardShortcuts';
+import { imageGrayscaleContrast, setImageGrayscaleContrast } from '../domain/imageAdjustments';
 import { appCommand, type AppCommandRegistry } from './AppCommand';
 import { isVideoItem } from '../domain/media';
 

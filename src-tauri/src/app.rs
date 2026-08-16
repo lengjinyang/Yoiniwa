@@ -1,14 +1,13 @@
 use std::{str::FromStr, thread, time::Duration};
 
-use anyhow::{anyhow, Result};
 use tauri::{DragDropEvent, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-use crate::{bridge, state::AppState};
+use crate::{bridge, collaboration_shortcut::{
+    valid_collaboration_shortcut, DEFAULT_COLLABORATION_SHORTCUT, FALLBACK_SHORTCUT,
+}, state::AppState};
 
-const FALLBACK_SHORTCUT: &str = "Ctrl+Alt+Shift+Y";
 const CLICK_THROUGH_ESCAPE: &str = "Ctrl+Alt+Shift+T";
-const DEFAULT_COLLABORATION_SHORTCUT: &str = "Ctrl+Alt+Y";
 
 pub fn run() {
     let args = std::env::args().collect::<Vec<_>>();
@@ -61,6 +60,7 @@ pub fn run() {
             bridge::images_import, bridge::images_register_paths, bridge::images_register_urls,
             bridge::images_register_clipboard, bridge::images_register_bytes, bridge::images_asset_path,
             bridge::videos_ensure_playback, bridge::videos_cancel_playback, bridge::videos_prepare_index,
+            bridge::videos_frame_index,
             bridge::images_start_native_drag, bridge::images_prewarm,
             bridge::images_cancel_prewarm, bridge::images_boost_resource, bridge::images_performance_stats,
             bridge::images_sample_pixel, bridge::project_open, bridge::project_commit, bridge::project_save_as,
@@ -134,31 +134,7 @@ fn register_shortcuts(app: &tauri::AppHandle, collaboration: &str) -> String {
     DEFAULT_COLLABORATION_SHORTCUT.to_string()
 }
 
-pub fn replace_collaboration_shortcut(app: &tauri::AppHandle, previous: &str, next: &str) -> Result<()> {
-    let previous = Shortcut::from_str(previous).map_err(|error| anyhow!("无效旧快捷键: {error}"))?;
-    let next = Shortcut::from_str(next).map_err(|error| anyhow!("无效快捷键: {error}"))?;
-    if app.global_shortcut().is_registered(next) { return Err(anyhow!("快捷键已被其他应用占用")); }
-    app.global_shortcut().register(next)?;
-    if previous != next { let _ = app.global_shortcut().unregister(previous); }
-    Ok(())
-}
-
 fn shortcut_matches(actual: &str, expected: &str) -> bool {
     normalize_shortcut(actual) == normalize_shortcut(expected)
 }
 fn normalize_shortcut(value: &str) -> String { value.replace("Control", "Ctrl").replace(' ', "").to_ascii_lowercase() }
-
-pub(crate) fn valid_collaboration_shortcut(value: &str) -> bool {
-    if value.len() > 80 || value == FALLBACK_SHORTCUT { return false; }
-    let parts = value.split('+').collect::<Vec<_>>();
-    let Some(key) = parts.last().copied().filter(|key| !key.is_empty()) else { return false; };
-    let modifiers = &parts[..parts.len() - 1];
-    if !modifiers.iter().any(|part| matches!(*part, "Ctrl" | "Alt"))
-        || modifiers.iter().any(|part| !matches!(*part, "Ctrl" | "Alt" | "Shift"))
-        || ["Ctrl", "Alt", "Shift"].iter().any(|modifier| modifiers.iter().filter(|part| *part == modifier).count() > 1) {
-        return false;
-    }
-    (key.len() == 1 && key.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()))
-        || key.strip_prefix('F').and_then(|number| number.parse::<u8>().ok()).is_some_and(|number| (1..=24).contains(&number))
-        || matches!(key, "Tab" | "Space" | "Delete" | "Escape" | "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight")
-}
