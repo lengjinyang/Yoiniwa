@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://lengjinyang.github.io/Yoiniwa/">项目主页</a> ·
   <a href="https://github.com/lengjinyang/Yoiniwa/releases"><img src="https://img.shields.io/github/v/release/lengjinyang/Yoiniwa?include_prereleases&label=release" alt="Release" /></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Windows" />
   <img src="https://img.shields.io/badge/Electron-43-47848F" alt="Electron" />
