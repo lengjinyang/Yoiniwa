@@ -114,17 +114,8 @@ npm run dev
 
 ## 项目文档
 
-- [架构说明](docs/ARCHITECTURE.md)
-- [调试指南](docs/DEBUGGING.md)
-- [性能审计](docs/performance/PERFORMANCE_AUDIT.md)
 - [`.yoi` v4 存储格式](docs/YOI_STORAGE_V4.md)
-- [版本记录](CHANGELOG.md)
-- [贡献指南](CONTRIBUTING.md)
 - [安全政策](SECURITY.md)
-
-## 参与贡献
-
-提交 Issue 或 Pull Request 前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。涉及协作模式、窗口焦点、Windows Ink、原生输入或 Photoshop 桥接的修改必须遵守其中的数位板验证要求。
 
 ## 许可证
 
