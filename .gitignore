@@ -9,5 +9,6 @@ performance-results/
 .project-bench-user-data*/
 .refcanvas-test-session/
 .dev-runtime/
-未命名画板.refcanvas
+*.refcanvas
+*.yoi
 tmp/
