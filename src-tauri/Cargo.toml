@@ -1,6 +1,6 @@
 [package]
 name = "yoiniwa"
-version = "0.2.0"
+version = "0.2.1"
 description = "Yoiniwa quiet offline reference board"
 authors = ["Yoiniwa"]
 edition = "2021"

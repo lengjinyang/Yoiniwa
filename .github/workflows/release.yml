@@ -50,7 +50,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Yoiniwa v__VERSION__
-          releaseBody: Yoiniwa 0.2.0 Windows 安装版。
+          releaseBody: Yoiniwa 0.2.1 Windows 安装版，修复启动时出现控制台窗口以及关闭该窗口导致程序退出的问题。
           releaseDraft: false
           uploadUpdaterJson: true
           args: --target x86_64-pc-windows-msvc --bundles nsis
