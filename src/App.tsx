@@ -18,6 +18,8 @@ import { useWindowCollaborationController } from './app/hooks/useWindowCollabora
 import { useColorPickerController } from './app/hooks/useColorPickerController';
 import { useAppShell, useNativeZoom } from './app/hooks/useAppShell';
 import { UnsavedChangesDialog } from './app/components/UnsavedChangesDialog';
+import { AppUpdateNotice } from './app/components/AppUpdateNotice';
+import { useAppUpdater } from './app/hooks/useAppUpdater';
 import './styles.css';
 import './styles/quiet-tokens.css';
 import './styles/quiet-controls.css';
@@ -122,6 +124,12 @@ export default function App() {
     beginOperation,
     settleOperation: settleCurrentOperation,
     clearOperation: clearCurrentOperation,
+  });
+  const updater = useAppUpdater({
+    api,
+    dirty: history.dirty,
+    collaborationMode: drawingCollaborationMode,
+    setStatus,
   });
   useEffect(() => api?.onCloseRequested(() => {
     setCloseSaving(false);
@@ -264,6 +272,7 @@ export default function App() {
       sceneNameVisible={sceneNameVisible}
       photoshopDocumentBlocked={photoshopDocumentBlocked}
     />
+    <AppUpdateNotice updater={updater} />
     <UnsavedChangesDialog
       open={closePromptOpen}
       saving={closeSaving}
@@ -271,6 +280,21 @@ export default function App() {
       onCancel={cancelClose}
       onDiscard={discardAndClose}
       onSave={() => { void saveAndClose(); }}
+    />
+    <UnsavedChangesDialog
+      open={Boolean(project.pendingChange) && !closePromptOpen}
+      saving={project.pendingChangeSaving}
+      sceneName={project.displaySceneName}
+      title={project.pendingChange?.kind === 'new' ? '保存更改后再新建画板？' : '保存更改后再打开其他画板？'}
+      description="当前画板还有尚未保存的更改。"
+      warning={project.pendingChange?.kind === 'new'
+        ? '不保存并新建将丢失当前更改，此操作无法撤销。'
+        : '不保存并打开其他画板将丢失当前更改，此操作无法撤销。'}
+      discardLabel={project.pendingChange?.kind === 'new' ? '不保存并新建' : '不保存并打开'}
+      saveLabel="保存并继续"
+      onCancel={project.cancelPendingChange}
+      onDiscard={project.discardPendingChange}
+      onSave={() => { void project.saveAndContinuePendingChange(); }}
     />
   </main>;
 }

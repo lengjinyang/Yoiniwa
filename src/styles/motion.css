@@ -200,7 +200,7 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
 
 /* Content changes remain subtle so large boards do not feel busy. */
 .photoshop-version-card,
-.empty-recent-list > button,
+.empty-recent-open,
 .outline-row,
 .version-compare-state {
   transition: color var(--duration-fast) var(--ease-standard),
@@ -212,21 +212,21 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
 }
 
 .photoshop-version-card:hover,
-.empty-recent-list > button:hover {
+.empty-recent-open:hover {
   transform: translateY(-1px);
 }
 
 .photoshop-version-list > .photoshop-version-card,
-.empty-recent-list > button {
+.empty-recent-item {
   animation: motion-surface-in var(--duration-slow) var(--ease-emphasized) both;
 }
 
 .photoshop-version-list > .photoshop-version-card:nth-child(2),
-.empty-recent-list > button:nth-child(2) { animation-delay: 24ms; }
+.empty-recent-item:nth-child(2) { animation-delay: 24ms; }
 .photoshop-version-list > .photoshop-version-card:nth-child(3),
-.empty-recent-list > button:nth-child(3) { animation-delay: 48ms; }
+.empty-recent-item:nth-child(3) { animation-delay: 48ms; }
 .photoshop-version-list > .photoshop-version-card:nth-child(4),
-.empty-recent-list > button:nth-child(4) { animation-delay: 72ms; }
+.empty-recent-item:nth-child(4) { animation-delay: 72ms; }
 
 .version-compare-side-by-side,
 .version-compare-wipe-current,
@@ -252,6 +252,6 @@ button:not(:disabled):active > .ui-icon { transform: scale(.96); }
   button:not(:disabled):hover > .ui-icon,
   button:not(:disabled):active > .ui-icon,
   .photoshop-version-card:hover,
-  .empty-recent-list > button:hover,
+  .empty-recent-open:hover,
   .scene-name-badge { transform: none; }
 }

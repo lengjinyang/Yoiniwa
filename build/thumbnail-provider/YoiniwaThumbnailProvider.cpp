@@ -27,6 +27,7 @@ const CLSID CLSID_YoiniwaThumbnailProvider = {
 namespace {
 constexpr wchar_t kClsid[] = L"{2B0F173D-5E7E-4C36-A901-9A9D75E2B7BF}";
 constexpr wchar_t kClsidKey[] = L"CLSID\\{2B0F173D-5E7E-4C36-A901-9A9D75E2B7BF}";
+constexpr wchar_t kUserClassesPrefix[] = L"Software\\Classes\\";
 constexpr char kPreviewEntry[] = "preview.png";
 constexpr uint32_t kLocalHeaderSignature = 0x04034b50;
 constexpr size_t kMaximumPreviewBytes = 4 * 1024 * 1024;
@@ -358,7 +359,8 @@ class ClassFactory final : public IClassFactory {
 
 HRESULT SetRegistryString(const wchar_t* keyName, const wchar_t* valueName, const wchar_t* value) {
   HKEY key = nullptr;
-  const LONG created = RegCreateKeyExW(HKEY_CLASSES_ROOT, keyName, 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr, &key, nullptr);
+  const std::wstring userKey = std::wstring(kUserClassesPrefix) + keyName;
+  const LONG created = RegCreateKeyExW(HKEY_CURRENT_USER, userKey.c_str(), 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr, &key, nullptr);
   if (created != ERROR_SUCCESS) return HRESULT_FROM_WIN32(created);
   const LONG written = RegSetValueExW(key, valueName, 0, REG_SZ, reinterpret_cast<const BYTE*>(value),
     static_cast<DWORD>((wcslen(value) + 1) * sizeof(wchar_t)));
@@ -396,6 +398,7 @@ extern "C" HRESULT __stdcall DllRegisterServer() {
 }
 
 extern "C" HRESULT __stdcall DllUnregisterServer() {
-  const LONG result = RegDeleteTreeW(HKEY_CLASSES_ROOT, kClsidKey);
+  const std::wstring userKey = std::wstring(kUserClassesPrefix) + kClsidKey;
+  const LONG result = RegDeleteTreeW(HKEY_CURRENT_USER, userKey.c_str());
   return result == ERROR_SUCCESS || result == ERROR_FILE_NOT_FOUND ? S_OK : HRESULT_FROM_WIN32(result);
 }

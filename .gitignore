@@ -1,16 +1,13 @@
 node_modules/
 dist/
-dist-electron/
 src-tauri/target/
 src-tauri/vendor/libvips/*.exp
-release/
 *.log
 .vite/
 performance-results/
 .dev-smoke-user-data/
 .project-bench-user-data*/
 .refcanvas-test-session/
-.dev-runtime/*.jsonl
-.dev-runtime/*.log
+.dev-runtime/
 未命名画板.refcanvas
 tmp/

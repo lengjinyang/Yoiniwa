@@ -403,12 +403,18 @@ export function AppOverlays({
       {project.recent.length > 0 && <section className="empty-recent" aria-label="最近的文件">
         <header><strong>最近的文件</strong><span>{project.recent.length}</span></header>
         <div className="empty-recent-list">
-          {project.recent.slice(0, 6).map((item) => <button type="button" key={item.path}
-            title={item.path} onClick={() => { void project.open(item.path); }}>
-            <span className="empty-recent-icon"><UiIcon name="file" size={17} /></span>
-            <span className="empty-recent-copy"><strong>{item.name}</strong><small>{item.path}</small></span>
-            <time dateTime={item.openedAt}>{new Date(item.openedAt).toLocaleDateString()}</time>
-          </button>)}
+          {project.recent.slice(0, 6).map((item) => <div className="empty-recent-item" key={item.path}>
+            <button className="empty-recent-open" type="button" title={item.path}
+              onClick={() => { void project.open(item.path); }}>
+              <span className="empty-recent-icon"><UiIcon name="file" size={17} /></span>
+              <span className="empty-recent-copy"><strong>{item.name}</strong><small>{item.path}</small></span>
+              <time dateTime={item.openedAt}>{new Date(item.openedAt).toLocaleDateString()}</time>
+            </button>
+            <button className="empty-recent-remove" type="button" title="从最近文件中移除"
+              aria-label={`从最近文件中移除 ${item.name}`} onClick={() => { void project.removeRecent(item.path); }}>
+              <UiIcon name="close" size={12} />
+            </button>
+          </div>)}
         </div>
       </section>}
     </div>}

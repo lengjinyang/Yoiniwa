@@ -14,6 +14,7 @@ pub fn run() {
     let startup_path = args.iter().find(|value| value.to_ascii_lowercase().ends_with(".yoi") || value.to_ascii_lowercase().ends_with(".refcanvas")).cloned();
     let startup_for_setup = startup_path.clone();
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app, shortcut, event| {
             if event.state != ShortcutState::Pressed { return; }
             let state = app.state::<AppState>();
@@ -22,8 +23,14 @@ pub fn run() {
             else { state.native.toggle_collaboration_requested(); }
         }).build())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if let Some(path) = argv.iter().find(|value| value.to_ascii_lowercase().ends_with(".yoi") || value.to_ascii_lowercase().ends_with(".refcanvas")) {
-                if let Some(state) = app.try_state::<AppState>() { state.set_startup_path(path.clone()); }
+            let path = argv.iter().find(|value| value.to_ascii_lowercase().ends_with(".yoi") || value.to_ascii_lowercase().ends_with(".refcanvas")).cloned();
+            if let Some(state) = app.try_state::<AppState>() {
+                if state.native.mode().collaboration_mode {
+                    if let Some(path) = path { state.queue_external_open(path); }
+                    return;
+                }
+            }
+            if let Some(path) = path {
                 let _ = app.emit("scene:external-open", path.clone());
             }
             if let Some(window) = app.get_webview_window("main") { let _ = window.unminimize(); let _ = window.show(); let _ = window.set_focus(); }
@@ -65,7 +72,7 @@ pub fn run() {
             bridge::images_cancel_prewarm, bridge::images_boost_resource, bridge::images_performance_stats,
             bridge::images_sample_pixel, bridge::project_open, bridge::project_commit, bridge::project_save_as,
             bridge::project_close, bridge::project_compact, bridge::project_stats, bridge::project_recover,
-            bridge::scene_startup_path, bridge::scene_recent, bridge::scene_import,
+            bridge::scene_startup_path, bridge::scene_recent, bridge::scene_recent_remove, bridge::scene_import,
             bridge::cache_info, bridge::cache_choose_location, bridge::cache_reset_location, bridge::cache_clear,
             bridge::image_export, bridge::image_export_originals, bridge::image_copy, bridge::image_copy_original, bridge::image_show_source,
             bridge::photoshop_set_foreground, bridge::photoshop_place_rendered, bridge::photoshop_place_rendered_layers,
@@ -79,6 +86,7 @@ pub fn run() {
             bridge::window_move_end, bridge::window_close, bridge::window_close_response, bridge::window_dirty,
             bridge::logs_write, bridge::logs_open_folder, bridge::logs_copy_diagnostics, bridge::logs_recent_problems,
             bridge::performance_record_manual_wheel,
+            bridge::app_update_check, bridge::app_update_install,
         ]);
 
     let app = builder.build(tauri::generate_context!()).expect("Yoiniwa Tauri initialization failed");

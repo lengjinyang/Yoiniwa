@@ -1,10 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, useId } from 'react';
 import { UiIcon } from './UiIcon';
 
 interface UnsavedChangesDialogProps {
   open: boolean;
   saving: boolean;
   sceneName: string;
+  title?: string;
+  description?: string;
+  warning?: string;
+  discardLabel?: string;
+  saveLabel?: string;
   onCancel(): void;
   onDiscard(): void;
   onSave(): void;
@@ -14,10 +19,16 @@ export function UnsavedChangesDialog({
   open,
   saving,
   sceneName,
+  title = '保存更改后再退出？',
+  description = '当前画板还有尚未保存的更改。',
+  warning = '不保存并退出将丢失这些更改，此操作无法撤销。',
+  discardLabel = '不保存',
+  saveLabel = '保存并退出',
   onCancel,
   onDiscard,
   onSave,
 }: UnsavedChangesDialogProps) {
+  const titleId = useId();
   useEffect(() => {
     if (!open) return undefined;
     const keyDown = (event: KeyboardEvent) => {
@@ -33,20 +44,20 @@ export function UnsavedChangesDialog({
   return <div className="close-confirm-backdrop no-drag" onPointerDown={(event) => {
     if (event.target === event.currentTarget && !saving) onCancel();
   }}>
-    <section className="close-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="close-confirm-title">
+    <section className="close-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <header>
         <span className="close-confirm-icon"><UiIcon name="warning" size={21} /></span>
-        <div><strong id="close-confirm-title">保存更改后再退出？</strong><span title={sceneName}>{sceneName}</span></div>
+        <div><strong id={titleId}>{title}</strong><span title={sceneName}>{sceneName}</span></div>
       </header>
       <div className="close-confirm-copy">
-        <p>当前画板还有尚未保存的更改。</p>
-        <small>不保存并退出将丢失这些更改，此操作无法撤销。</small>
+        <p>{description}</p>
+        <small>{warning}</small>
       </div>
       <footer>
         <button className="close-confirm-cancel" type="button" disabled={saving} onClick={onCancel}>取消</button>
-        <button className="close-confirm-discard" type="button" disabled={saving} onClick={onDiscard}>不保存</button>
+        <button className="close-confirm-discard" type="button" disabled={saving} onClick={onDiscard}>{discardLabel}</button>
         <button className="close-confirm-save" type="button" autoFocus disabled={saving} onClick={onSave}>
-          <UiIcon name="file" size={14} />{saving ? '正在保存…' : '保存并退出'}
+          <UiIcon name="file" size={14} />{saving ? '正在保存…' : saveLabel}
         </button>
       </footer>
     </section>

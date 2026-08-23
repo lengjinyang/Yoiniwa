@@ -5,7 +5,8 @@ use arboard::{Clipboard, ImageData};
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use serde_json::Value;
-use tauri::{ipc::{InvokeBody, Request, Response}, AppHandle, Manager, State, WebviewWindow};
+use tauri::{ipc::{InvokeBody, Request, Response}, AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_updater::UpdaterExt;
 use uuid::Uuid;
 
 use crate::{
@@ -23,6 +24,43 @@ use crate::{
 
 type CommandResult<T> = std::result::Result<T, String>;
 fn command_result<T>(value: Result<T>) -> CommandResult<T> { value.map_err(|error| error.to_string()) }
+
+#[tauri::command]
+pub async fn app_update_check(app: AppHandle) -> CommandResult<Value> {
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
+        return Ok(serde_json::json!({ "available": false }));
+    };
+    Ok(serde_json::json!({
+        "available": true,
+        "version": update.version,
+        "currentVersion": update.current_version,
+        "notes": update.body,
+        "date": update.date.map(|value| value.to_string()),
+    }))
+}
+
+#[tauri::command]
+pub async fn app_update_install(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Value> {
+    if state.native.mode().collaboration_mode {
+        return Err("请先退出 Photoshop 协作模式，再安装更新".into());
+    }
+    if state.native.should_intercept_close() {
+        return Err("请先保存当前画板，再安装更新".into());
+    }
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let update = updater.check().await.map_err(|error| error.to_string())?
+        .ok_or_else(|| "当前已是最新版本".to_string())?;
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(|error| error.to_string())?;
+    if state.native.mode().collaboration_mode {
+        return Err("已暂停安装：请先退出 Photoshop 协作模式".into());
+    }
+    if state.native.should_intercept_close() {
+        return Err("已暂停安装：请先保存当前画板".into());
+    }
+    update.install(bytes).map_err(|error| error.to_string())?;
+    app.restart();
+}
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn images_import(app: AppHandle, state: State<'_, AppState>, request_id: Option<String>) -> CommandResult<Vec<ImportedImage>> {
@@ -226,6 +264,10 @@ pub fn project_recover(state: State<'_, AppState>, session_id: Option<String>) -
 pub fn scene_startup_path(state: State<'_, AppState>) -> Option<String> { state.take_startup_path() }
 #[tauri::command]
 pub fn scene_recent(state: State<'_, AppState>) -> Vec<RecentScene> { state.recent_scenes() }
+#[tauri::command(rename_all = "camelCase")]
+pub fn scene_recent_remove(state: State<'_, AppState>, path: String) -> CommandResult<Vec<RecentScene>> {
+    command_result(state.remove_recent(&path))
+}
 #[tauri::command]
 pub fn scene_import(state: State<'_, AppState>) -> CommandResult<Value> {
     let Some(path) = rfd::FileDialog::new().add_filter("Yoiniwa 画板", &["yoi", "refcanvas"]).pick_file() else { return Ok(serde_json::json!({ "canceled": true })); };
@@ -476,7 +518,16 @@ pub fn photoshop_delete_version(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn window_set_mode(state: State<'_, AppState>, mode: WindowStatePatch) -> CommandResult<WindowState> { command_result(state.native.set_mode(mode)) }
+pub fn window_set_mode(app: AppHandle, state: State<'_, AppState>, mode: WindowStatePatch) -> CommandResult<WindowState> {
+    let previous = state.native.mode();
+    let current = command_result(state.native.set_mode(mode))?;
+    if previous.collaboration_mode && !current.collaboration_mode {
+        if let Some(path) = state.take_pending_external_open() {
+            let _ = app.emit("scene:external-open", path);
+        }
+    }
+    Ok(current)
+}
 #[tauri::command]
 pub fn window_get_mode(state: State<'_, AppState>) -> WindowState { state.native.mode() }
 #[derive(serde::Deserialize)] pub struct Point { x: f64, y: f64 }

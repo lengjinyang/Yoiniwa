@@ -8,7 +8,7 @@ const jsFiles = ['scripts/**/*.mjs'];
 export default tseslint.config(
   {
     ignores: [
-      'dist/**', 'release/**', 'src-tauri/target/**', 'node_modules/**', 'performance-results/**',
+      'dist/**', 'src-tauri/target/**', 'node_modules/**', 'performance-results/**',
       '.project-bench-user-data*/**', '.refcanvas-test-session/**',
     ],
   },

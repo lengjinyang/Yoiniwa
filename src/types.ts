@@ -138,6 +138,14 @@ interface ProjectStorageStats {
 
 export interface RecentScene { path: string; name: string; openedAt: string; assetIds?: string[] }
 
+export interface AppUpdateInfo {
+  available: boolean;
+  version?: string;
+  currentVersion?: string;
+  notes?: string;
+  date?: string;
+}
+
 export interface CacheInfo {
   root: string;
   isDefault: boolean;
@@ -281,6 +289,9 @@ export interface RefCanvasAPI {
   onExternalOpen(callback: (path: string) => void): () => void;
   importScene(): Promise<{ canceled: boolean; path?: string; scene?: Scene }>;
   recentScenes(): Promise<RecentScene[]>;
+  removeRecentScene(path: string): Promise<RecentScene[]>;
+  checkForUpdates(): Promise<AppUpdateInfo>;
+  installUpdate(): Promise<void>;
   getCacheInfo(): Promise<CacheInfo>;
   chooseCacheLocation(): Promise<{ canceled: boolean; info?: CacheInfo }>;
   resetCacheLocation(): Promise<CacheInfo>;

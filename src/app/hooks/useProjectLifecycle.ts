@@ -31,6 +31,8 @@ interface UseProjectLifecycleOptions {
   clearOperation(requestId: number): void;
 }
 
+type PendingProjectChange = { kind: 'open'; path?: string } | { kind: 'new' };
+
 export function useProjectLifecycle({
   api,
   history,
@@ -43,6 +45,8 @@ export function useProjectLifecycle({
   clearOperation,
 }: UseProjectLifecycleOptions) {
   const [recent, setRecent] = useState<RecentScene[]>([]);
+  const [pendingChange, setPendingChange] = useState<PendingProjectChange>();
+  const [pendingChangeSaving, setPendingChangeSaving] = useState(false);
   const [photoshopMetadata, setPhotoshopMetadata] = useState<PhotoshopProjectMetadata>(EMPTY_PHOTOSHOP_PROJECT_METADATA);
   const photoshopMetadataRef = useRef(photoshopMetadata);
   const projectSessionIdRef = useRef<string | undefined>(undefined);
@@ -89,6 +93,16 @@ export function useProjectLifecycle({
   const refreshRecent = useCallback(() => {
     if (!api) return;
     void api.recentScenes().then(setRecent).catch((error) => setStatus(`刷新最近画板失败：${String(error)}`));
+  }, [api, setStatus]);
+
+  const removeRecent = useCallback(async (path: string) => {
+    if (!api) return;
+    try {
+      setRecent(await api.removeRecentScene(path));
+      setStatus('已从最近文件中移除');
+    } catch (error) {
+      setStatus(`移除最近文件失败：${String(error)}`);
+    }
   }, [api, setStatus]);
 
   useEffect(() => {
@@ -141,9 +155,8 @@ export function useProjectLifecycle({
     }
   }, [api, beginOperation, clearOperation, history, refreshRecent, setStatus, settleOperation]);
 
-  const open = useCallback(async (path?: string) => {
+  const openNow = useCallback(async (path?: string) => {
     if (!api) return;
-    if (history.dirty && !window.confirm('当前更改尚未保存，仍要打开其他画板吗？')) return;
     beforeProjectChangeRef.current();
     const requestId = beginOperation('open', '正在打开画板…');
     try {
@@ -166,6 +179,14 @@ export function useProjectLifecycle({
     }
   }, [api, beforeProjectChangeRef, beginOperation, clearOperation, history, refreshRecent, setSelectedGroupId,
     setSelectedIds, settleOperation]);
+
+  const open = useCallback(async (path?: string) => {
+    if (history.dirty) {
+      setPendingChange({ kind: 'open', path });
+      return;
+    }
+    await openNow(path);
+  }, [history.dirty, openNow]);
   openRef.current = open;
 
   useEffect(() => {
@@ -212,10 +233,14 @@ export function useProjectLifecycle({
     }
   }, [api, beginOperation, clearOperation, history, setSelectedGroupId, setSelectedIds, settleOperation]);
 
-  const newScene = useCallback(() => {
-    if (history.dirty && !window.confirm('当前更改尚未保存，仍要新建画板吗？')) return;
+  const newSceneNow = useCallback(async () => {
     beforeProjectChangeRef.current();
-    void api?.closeProject(projectSessionIdRef.current);
+    try {
+      await api?.closeProject(projectSessionIdRef.current);
+    } catch (error) {
+      setStatus(`无法关闭当前画板：${String(error)}`);
+      return;
+    }
     projectSessionIdRef.current = undefined;
     history.load(createScene());
     setPhotoshopMetadata(EMPTY_PHOTOSHOP_PROJECT_METADATA);
@@ -223,6 +248,43 @@ export function useProjectLifecycle({
     setSelectedGroupId(undefined);
     setStatus('已新建画板');
   }, [api, beforeProjectChangeRef, history, setSelectedGroupId, setSelectedIds, setStatus]);
+
+  const newScene = useCallback(() => {
+    if (history.dirty) {
+      setPendingChange({ kind: 'new' });
+      return;
+    }
+    void newSceneNow();
+  }, [history.dirty, newSceneNow]);
+
+  const cancelPendingChange = useCallback(() => {
+    if (pendingChangeSaving) return;
+    setPendingChange(undefined);
+  }, [pendingChangeSaving]);
+
+  const continuePendingChange = useCallback(async (pending: PendingProjectChange) => {
+    if (pending.kind === 'open') await openNow(pending.path);
+    else await newSceneNow();
+  }, [newSceneNow, openNow]);
+
+  const discardPendingChange = useCallback(() => {
+    if (!pendingChange || pendingChangeSaving) return;
+    const next = pendingChange;
+    setPendingChange(undefined);
+    void continuePendingChange(next);
+  }, [continuePendingChange, pendingChange, pendingChangeSaving]);
+
+  const saveAndContinuePendingChange = useCallback(async () => {
+    if (!pendingChange || pendingChangeSaving) return;
+    setPendingChangeSaving(true);
+    const next = pendingChange;
+    const saved = await save(false);
+    if (saved) {
+      setPendingChange(undefined);
+      await continuePendingChange(next);
+    }
+    setPendingChangeSaving(false);
+  }, [continuePendingChange, pendingChange, pendingChangeSaving, save]);
 
   const displaySceneName = history.scene.name === '未命名画板' ? history.scene.name : `${history.scene.name}.yoi`;
   useEffect(() => {
@@ -238,14 +300,20 @@ export function useProjectLifecycle({
 
   return {
     recent,
+    removeRecent,
     photoshopMetadata,
     setPhotoshopMetadata,
     photoshopMetadataRef,
     projectSessionIdRef,
     liveViewportRef,
     displaySceneName,
+    pendingChange,
+    pendingChangeSaving,
     save,
     open,
+    cancelPendingChange,
+    discardPendingChange,
+    saveAndContinuePendingChange,
     importScene,
     newScene,
     onViewportCommit,

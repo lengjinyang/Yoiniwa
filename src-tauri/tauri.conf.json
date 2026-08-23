@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "vite --strictPort",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build:web",
+    "beforeBuildCommand": "npm run build:thumbnail-provider && npm run build:web",
     "frontendDist": "../dist"
   },
   "app": {
@@ -39,6 +39,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "icon": ["../build/yoiniwa.ico"],
     "resources": {
@@ -52,7 +53,7 @@
     "windows": {
       "webviewInstallMode": { "type": "embedBootstrapper" },
       "nsis": {
-        "installMode": "perMachine",
+        "installMode": "currentUser",
         "displayLanguageSelector": true,
         "languages": ["SimpChinese", "English"],
         "startMenuFolder": "Yoiniwa",
@@ -65,5 +66,12 @@
       { "ext": ["yoi"], "name": "Yoiniwa Board", "description": "Yoiniwa reference board", "role": "Editor" },
       { "ext": ["refcanvas"], "name": "Yoiniwa Legacy Board", "description": "Legacy Yoiniwa reference board", "role": "Editor" }
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhGMzRBOTI2OThCMzlEMzQKUldRMG5iT1lKcWswajdWMHNsb21FcDkzTHdxODF4ZW9nZFNTTS9UcXZlaXYrekdhaHA2Mjdyd3kK",
+      "endpoints": ["https://github.com/lengjinyang/Yoiniwa/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
   }
 }
