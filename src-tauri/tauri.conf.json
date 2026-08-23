@@ -69,7 +69,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhGMzRBOTI2OThCMzlEMzQKUldRMG5iT1lKcWswajdWMHNsb21FcDkzTHdxODF4ZW9nZFNTTS9UcXZlaXYrekdhaHA2Mjdyd3kK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY3REMyNjhFQzZENDMyRUQKUldUdE10VEdqaWJjOTB3QTAxTnlvb1hzT2Z4Q0dOTTV5dEJjdzNJYmtTcEp1QTZzTVJ3b1lMdEEK",
       "endpoints": ["https://github.com/lengjinyang/Yoiniwa/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
