@@ -1,0 +1,11 @@
+Model Information:
+* title:	Ball Joint Doll Basemesh
+* source:	https://sketchfab.com/3d-models/ball-joint-doll-basemesh-df21b9e5b2f34283aafb8bacee141496
+* author:	ChamberSu1996 (https://sketchfab.com/chambersu1996)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Ball Joint Doll Basemesh" (https://sketchfab.com/3d-models/ball-joint-doll-basemesh-df21b9e5b2f34283aafb8bacee141496) by ChamberSu1996 (https://sketchfab.com/chambersu1996) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

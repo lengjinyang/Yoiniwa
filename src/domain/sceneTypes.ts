@@ -2,6 +2,96 @@ export type CropRect = { x: number; y: number; width: number; height: number };
 
 export type MediaKind = 'image' | 'video';
 
+export type Vec3 = { x: number; y: number; z: number };
+export type Quaternion = { x: number; y: number; z: number; w: number };
+export type BjdJointId =
+  | 'pelvis' | 'spineLower' | 'spineUpper' | 'neck' | 'head'
+  | 'shoulderL' | 'shoulderR' | 'elbowUpperL' | 'elbowUpperR' | 'elbowLowerL' | 'elbowLowerR'
+  | 'wristL' | 'wristR' | 'hipL' | 'hipR' | 'kneeUpperL' | 'kneeUpperR'
+  | 'kneeLowerL' | 'kneeLowerR' | 'ankleL' | 'ankleR'
+  | 'toeBaseL' | 'toeBaseR' | 'bigToeL' | 'bigToeR'
+  | 'thumbMetacarpalL' | 'thumbProximalL' | 'thumbDistalL'
+  | 'indexProximalL' | 'indexMiddleL' | 'indexDistalL'
+  | 'middleProximalL' | 'middleMiddleL' | 'middleDistalL'
+  | 'ringProximalL' | 'ringMiddleL' | 'ringDistalL'
+  | 'littleProximalL' | 'littleMiddleL' | 'littleDistalL'
+  | 'thumbMetacarpalR' | 'thumbProximalR' | 'thumbDistalR'
+  | 'indexProximalR' | 'indexMiddleR' | 'indexDistalR'
+  | 'middleProximalR' | 'middleMiddleR' | 'middleDistalR'
+  | 'ringProximalR' | 'ringMiddleR' | 'ringDistalR'
+  | 'littleProximalR' | 'littleMiddleR' | 'littleDistalR';
+export type BjdIkChainId = 'armL' | 'armR' | 'legL' | 'legR';
+export type PoseEditMode = 'move' | 'rotate';
+
+export interface PoseCameraState {
+  projection: 'perspective' | 'orthographic';
+  position: Vec3;
+  target: Vec3;
+  focalLengthMm: number;
+  orthographicHeight: number;
+  horizon: number;
+  lensShift: { x: number; y: number };
+  preserveFraming: boolean;
+}
+
+export interface PoseLightingState {
+  contrast: number;
+  directionalDirection: Vec3;
+}
+
+export interface PoseAppearanceState {
+  mode: 'clay' | 'silhouette';
+  outline: boolean;
+  bodyColor: string;
+  jointEmphasis: number;
+  background: { type: 'transparent' } | { type: 'solid'; color: string };
+  ground: boolean;
+  shadows: boolean;
+}
+
+/** The solver's continuation state for one semantic limb. */
+export interface PoseBendState {
+  /** Normal of the current bend plane in world space. */
+  planeNormal: Vec3;
+  /** Which side of the anatomical bend plane is active. */
+  bendSide: -1 | 1;
+  /** Current internal bend angle in radians. */
+  bendAngle: number;
+  /** Unwrapped rotation of the bend plane around the limb axis. */
+  bendPlaneAngle?: number;
+  /** Last stable state used while a target passes through a near-straight pose. */
+  previousStable?: {
+    planeNormal: Vec3;
+    bendSide: -1 | 1;
+    bendAngle: number;
+    bendPlaneAngle?: number;
+  };
+}
+
+export interface PoseDocumentV1 {
+  schemaVersion: 1;
+  modelId: 'chambersu-bjd-female-v1';
+  rigVersion: 1;
+  renderProfileId: 'bjd-clay-v1';
+  poseRevision: number;
+  renderedRevision: number;
+  rootTransform: { position: Vec3; rotation: Quaternion };
+  jointRotations: Partial<Record<BjdJointId, Quaternion>>;
+  /** User locks are branch-level runtime constraints persisted with the pose. */
+  lockedBranches?: Partial<Record<import('../pose/domain/controlTree').PoseBranchId, boolean>>;
+  ikState?: Partial<Record<BjdIkChainId, {
+    poleDirection: Vec3;
+    targetOrientation?: Quaternion;
+    bendState?: PoseBendState;
+    /** Runtime reconstructs the pinned target from the saved end-effector pose. */
+    pinned?: boolean;
+  }>>;
+  camera: PoseCameraState;
+  lighting: PoseLightingState;
+  appearance: PoseAppearanceState;
+  frame: { aspect: '1:1' | '3:4' | '4:3' | '16:9' };
+}
+
 /** Video-only optional fields. Serialized on video nodes; omitted from still images. */
 export interface VideoClipFields {
   /** Still-frame image asset used for board LOD, outline thumbs, and export. */
@@ -16,7 +106,9 @@ export interface BoardItem {
   id: string;
   name: string;
   sourcePath?: string;
-  sourceType: 'file' | 'clipboard' | 'drop';
+  sourceType: 'file' | 'clipboard' | 'drop' | 'generated';
+  contentKind?: 'pose';
+  pose?: PoseDocumentV1;
   assetId?: string;
   /** Only used by small unit-test fixtures. Version 2 scene files never persist data URLs. */
   dataUrl?: string;
@@ -45,16 +137,21 @@ export interface ImageItem extends BoardItem {
   mediaKind?: 'image';
 }
 
+export interface PoseItem extends BoardItem {
+  mediaKind?: 'image';
+  contentKind: 'pose';
+  pose: PoseDocumentV1;
+}
+
 export interface VideoItem extends BoardItem, VideoClipFields {
   mediaKind: 'video';
 }
 
-export type SceneItem = ImageItem | VideoItem;
+export type SceneItem = ImageItem | VideoItem | PoseItem;
 
 /** Patch applied to a board node. Video-only keys are ignored on still images. */
 export type SceneItemPatch = Partial<BoardItem> & Partial<VideoClipFields> & {
   id: string;
-  mediaKind?: MediaKind;
 };
 
 /** Still-display lookup for outline, export, and UI thumbs. */
@@ -185,7 +282,7 @@ interface CanvasSettings {
 
 export interface Scene {
   format: 'refcanvas';
-  version: 3;
+  version: 4;
   name: string;
   savedAt: string;
   viewport: Viewport;

@@ -22,7 +22,7 @@ interface ProjectHistory {
 interface UseProjectLifecycleOptions {
   api: Window['refCanvas'];
   history: ProjectHistory;
-  beforeProjectChangeRef: { current: () => void };
+  beforeProjectChangeRef: { current: () => Promise<boolean> };
   setSelectedIds(ids: string[]): void;
   setSelectedGroupId(id?: string): void;
   setStatus(message: string): void;
@@ -157,7 +157,6 @@ export function useProjectLifecycle({
 
   const openNow = useCallback(async (path?: string) => {
     if (!api) return;
-    beforeProjectChangeRef.current();
     const requestId = beginOperation('open', '正在打开画板…');
     try {
       const result = await api.openProject(path);
@@ -177,16 +176,17 @@ export function useProjectLifecycle({
     } catch (error) {
       settleOperation(requestId, 'error', `打开失败：${String(error)}`);
     }
-  }, [api, beforeProjectChangeRef, beginOperation, clearOperation, history, refreshRecent, setSelectedGroupId,
+  }, [api, beginOperation, clearOperation, history, refreshRecent, setSelectedGroupId,
     setSelectedIds, settleOperation]);
 
   const open = useCallback(async (path?: string) => {
+    if (!await beforeProjectChangeRef.current()) return;
     if (history.dirty) {
       setPendingChange({ kind: 'open', path });
       return;
     }
     await openNow(path);
-  }, [history.dirty, openNow]);
+  }, [beforeProjectChangeRef, history.dirty, openNow]);
   openRef.current = open;
 
   useEffect(() => {
@@ -234,7 +234,6 @@ export function useProjectLifecycle({
   }, [api, beginOperation, clearOperation, history, setSelectedGroupId, setSelectedIds, settleOperation]);
 
   const newSceneNow = useCallback(async () => {
-    beforeProjectChangeRef.current();
     try {
       await api?.closeProject(projectSessionIdRef.current);
     } catch (error) {
@@ -247,15 +246,16 @@ export function useProjectLifecycle({
     setSelectedIds([]);
     setSelectedGroupId(undefined);
     setStatus('已新建画板');
-  }, [api, beforeProjectChangeRef, history, setSelectedGroupId, setSelectedIds, setStatus]);
+  }, [api, history, setSelectedGroupId, setSelectedIds, setStatus]);
 
-  const newScene = useCallback(() => {
+  const newScene = useCallback(async () => {
+    if (!await beforeProjectChangeRef.current()) return;
     if (history.dirty) {
       setPendingChange({ kind: 'new' });
       return;
     }
-    void newSceneNow();
-  }, [history.dirty, newSceneNow]);
+    await newSceneNow();
+  }, [beforeProjectChangeRef, history.dirty, newSceneNow]);
 
   const cancelPendingChange = useCallback(() => {
     if (pendingChangeSaving) return;

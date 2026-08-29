@@ -42,7 +42,7 @@ export interface CanvasRuntimeOptions {
   onOpenGroupMenu?(id: string, position: { x: number; y: number }): void;
   onExpandGroup?(id: string): void;
   onGroupPreviewAnchor?(id: string, position: { x: number; y: number }): void;
-  onFocusItem?(item: SceneItem): void;
+  onActivateItem?(item: SceneItem): void;
   onContextMenu?(position: { x: number; y: number }): void;
   onExternalImageDrag?(items: SceneItem[]): (() => void) | undefined;
   colorPickerHeld?: boolean;
@@ -76,6 +76,8 @@ export class CanvasRuntime {
   private altPointerArmed = false;
   private windowLocked = false;
   private drawingCollaborationMode = false;
+  private interactionSuspended = false;
+  private readonly suspendedVideoIds = new Set<string>();
   private visualNotesController?: VisualNotesController;
   private visualNotesState: VisualNotesToolState;
   private colorPickerHud?: HTMLDivElement;
@@ -306,7 +308,7 @@ export class CanvasRuntime {
       if (isVideoItem(item, this.sceneStore?.snapshot().assets) && this.renderer.toggleVideoPlayback(item.id)) {
         return;
       }
-      this.options.onFocusItem?.(item);
+      this.options.onActivateItem?.(item);
     });
     this.lifecycle.add(() => { disposeContext(); disposeDouble(); });
     const observer = new ResizeObserver(() => this.scheduleRender());
@@ -333,6 +335,24 @@ export class CanvasRuntime {
     });
     this.scheduleRender();
     this.syncColorPickerArmedClass();
+  }
+
+  setInteractionSuspended(suspended: boolean) {
+    if (this.interactionSuspended === suspended) return;
+    this.interactionSuspended = suspended;
+    this.container.style.pointerEvents = suspended ? 'none' : '';
+    if (suspended) {
+      const assets = this.sceneStore?.snapshot().assets;
+      this.sceneStore?.images().forEach((item) => {
+        if (isVideoItem(item, assets) && this.renderer.isVideoPlaying(item.id)) {
+          this.suspendedVideoIds.add(item.id);
+          this.renderer.pauseVideo(item.id);
+        }
+      });
+      return;
+    }
+    this.suspendedVideoIds.forEach((id) => { void this.renderer.playVideo(id); });
+    this.suspendedVideoIds.clear();
   }
 
   private emitGroupPreviewAnchor(id: string) {

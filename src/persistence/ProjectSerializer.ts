@@ -7,7 +7,8 @@ export function serializeProjectScene(scene: Scene): Scene {
     ...scene,
     viewport: { ...scene.viewport }, canvas: { ...scene.canvas }, assets: { ...scene.assets },
     items: scene.items.map((item) => toSceneItem(
-      { ...item, crop: { ...item.crop }, tags: item.tags ? [...item.tags] : undefined },
+      { ...item, crop: { ...item.crop }, tags: item.tags ? [...item.tags] : undefined,
+        ...('pose' in item ? { pose: structuredClone(item.pose) } : {}) },
       scene.assets,
     )),
     groups: scene.groups.map((group) => ({ ...group, members: group.members.map((member) => ({ ...member })),

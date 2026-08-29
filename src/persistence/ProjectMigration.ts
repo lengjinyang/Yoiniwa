@@ -6,9 +6,9 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 export function migrateProjectScene(input: unknown): Scene | undefined {
   const source = record(input);
-  if (!source || source.format !== 'refcanvas' || ![1, 2, 3].includes(Number(source.version))) return undefined;
+  if (!source || source.format !== 'refcanvas' || ![1, 2, 3, 4].includes(Number(source.version))) return undefined;
   const migrated = structuredClone(source);
-  migrated.version = 3;
+  migrated.version = 4;
   migrated.name = typeof migrated.name === 'string' ? migrated.name : '未命名画板';
   migrated.savedAt = typeof migrated.savedAt === 'string' ? migrated.savedAt : new Date(0).toISOString();
   migrated.viewport = record(migrated.viewport) ?? { x: 0, y: 0, scale: 1 };

@@ -5,7 +5,7 @@
   "identifier": "com.yoiniwa.app",
   "build": {
     "beforeDevCommand": "vite --strictPort",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build:thumbnail-provider && npm run build:web",
     "frontendDist": "../dist"
   },

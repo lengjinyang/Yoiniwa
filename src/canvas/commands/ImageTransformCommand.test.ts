@@ -3,7 +3,7 @@ import type { Scene } from '../../types';
 import { ImageTransformCommand } from './ImageTransformCommand';
 
 const scene = {
-  format: 'refcanvas', version: 3, name: 'command', savedAt: '', viewport: { x: 0, y: 0, scale: 1 },
+  format: 'refcanvas', version: 4, name: 'command', savedAt: '', viewport: { x: 0, y: 0, scale: 1 },
   canvas: { background: '#000', padding: 0, snap: false, includeBackgroundOnExport: true }, assets: {},
   items: [{ id: 'a', name: 'a', sourceType: 'file', naturalWidth: 10, naturalHeight: 10,
     x: 1, y: 2, width: 10, height: 10, rotation: 0, flipX: false, flipY: false, opacity: 1,

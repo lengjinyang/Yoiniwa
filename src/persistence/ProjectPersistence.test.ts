@@ -5,7 +5,7 @@ import { loadProjectScene } from './ProjectLoader';
 import { serializeProjectScene } from './ProjectSerializer';
 
 const scene = {
-  format: 'refcanvas', version: 3, name: 'roundtrip', savedAt: '', viewport: { x: 12, y: -8, scale: 2 },
+  format: 'refcanvas', version: 4, name: 'roundtrip', savedAt: '', viewport: { x: 12, y: -8, scale: 2 },
   canvas: { background: '#000', padding: 20, snap: true, includeBackgroundOnExport: true },
   assets: {
     missing: { id: 'missing', hash: 'hash', mimeType: 'image/png', byteLength: 1, naturalWidth: 10, naturalHeight: 10, originalName: 'gone.png' },

@@ -694,7 +694,7 @@ fn prepare_scene(mut scene: Scene, metadata: &PhotoshopProjectMetadata, path: &P
         .chain(metadata.versions.iter().map(|version| version.preview_asset_id.clone())).collect();
     scene.assets.retain(|id, _| used.contains(id));
     for item in &mut scene.items { item.data_url = None; }
-    scene.version = 3;
+    scene.version = 4;
     scene.name = path.file_stem().and_then(|name| name.to_str()).unwrap_or("未命名画板").to_string();
     scene.saved_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     scene
@@ -798,8 +798,8 @@ fn normalize_scene_json(value: &mut serde_json::Value) -> Result<()> {
     let object = value.as_object_mut().ok_or_else(|| anyhow!("场景清单无效"))?;
     if object.get("format").and_then(|value| value.as_str()) != Some("refcanvas") { return Err(anyhow!("该场景版本不受支持")); }
     let version = object.get("version").and_then(|value| value.as_u64()).unwrap_or(0);
-    if !(1..=3).contains(&version) { return Err(anyhow!("该场景版本不受支持")); }
-    object.insert("version".into(), 3.into());
+    if !(1..=4).contains(&version) { return Err(anyhow!("该场景版本不受支持")); }
+    object.insert("version".into(), 4.into());
     object.entry("name").or_insert_with(|| "未命名画板".into());
     object.entry("savedAt").or_insert_with(|| "1970-01-01T00:00:00.000Z".into());
     object.entry("viewport").or_insert_with(|| serde_json::json!({ "x": 0, "y": 0, "scale": 1 }));

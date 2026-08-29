@@ -9,6 +9,8 @@ export type {
   EraserSize,
   ImageGroup,
   ImageItem,
+  PoseDocumentV1,
+  PoseItem,
   Scene,
   SceneItem,
   SceneItemPatch,

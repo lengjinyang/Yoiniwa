@@ -16,6 +16,7 @@ import type { useSceneWorkspaceController } from '../hooks/useSceneWorkspaceCont
 import type { useStatusOperations } from '../hooks/useStatusOperations';
 import type { useVisualNotes } from '../hooks/useVisualNotes';
 import type { useWindowCollaborationController } from '../hooks/useWindowCollaborationController';
+import type { PoseStudioController } from '../hooks/usePoseStudioController';
 import { Button } from './CommonControls';
 import { GroupActionMenu } from './GroupActionMenu';
 import { GroupRenameDialog } from './GroupRenameDialog';
@@ -60,6 +61,7 @@ interface AppWorkspaceProps {
   panels: PanelState;
   context: Context;
   photoshopDocumentBlocked: boolean;
+  pose: PoseStudioController;
 }
 
 export function AppWorkspace({
@@ -74,6 +76,7 @@ export function AppWorkspace({
   panels,
   context,
   photoshopDocumentBlocked,
+  pose,
 }: AppWorkspaceProps) {
   const videoPlayback = useMemo(() => videoPlaybackHostFromApi(api), [api]);
   const boostImageResource = useMemo(() => imageResourceBoostFromApi(api), [api]);
@@ -96,7 +99,7 @@ export function AppWorkspace({
         onLassoSelectionChange: workspace.setLassoPoints,
         onGroupSelectionChange: workspace.onGroupSelectionChange,
         onItemsChanged: workspace.commitItemChanges,
-        onFocusItem: workspace.focusItem,
+        onActivateItem: (item) => { if (!pose.openItem(item)) workspace.focusItem(item); },
       }}
       groups={{
         onGroupMoved: workspace.moveGroup,
@@ -114,6 +117,7 @@ export function AppWorkspace({
       }}
       windowInteraction={{
         drawingCollaborationMode: windowController.drawingCollaborationMode,
+        interactionSuspended: Boolean(pose.session),
         onContextMenu: (position) => {
           panels.setPropertiesOpen(false);
           workspace.setGroupActionMenu(undefined);

@@ -5,7 +5,7 @@ import { markWorldBounds, moveSceneMark } from './visualNoteGeometry';
 
 export const createScene = (): Scene => ({
   format: 'refcanvas',
-  version: 3,
+  version: 4,
   name: '未命名画板',
   savedAt: new Date().toISOString(),
   viewport: { x: 0, y: 0, scale: 1 },
@@ -22,7 +22,8 @@ export const cloneScene = (scene: Scene): Scene => ({
   viewport: { ...scene.viewport },
   canvas: { ...scene.canvas },
   assets: { ...scene.assets },
-  items: scene.items.map((item) => ({ ...item, crop: { ...item.crop }, tags: item.tags ? [...item.tags] : undefined })),
+  items: scene.items.map((item) => ({ ...item, crop: { ...item.crop }, tags: item.tags ? [...item.tags] : undefined,
+    ...('pose' in item ? { pose: structuredClone(item.pose) } : {}) })),
   groups: scene.groups.map((group) => ({ ...group, tags: group.tags ? [...group.tags] : undefined,
     detachedImageIds: group.detachedImageIds ? [...group.detachedImageIds] : undefined,
     members: group.members.map((member) => ({ ...member })) })),
@@ -462,7 +463,7 @@ export function resetImageTransform(item: BoardItem) {
 export function validateScene(value: unknown): value is Scene {
   if (!value || typeof value !== 'object') return false;
   const scene = value as Partial<Scene>;
-  return scene.format === 'refcanvas' && scene.version === 3 && Array.isArray(scene.items)
+  return scene.format === 'refcanvas' && scene.version === 4 && Array.isArray(scene.items)
     && !!scene.assets && typeof scene.assets === 'object' && !!scene.viewport && !!scene.canvas
     && !!scene.visualNotes && Array.isArray(scene.visualNotes.marks);
 }

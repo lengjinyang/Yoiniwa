@@ -34,7 +34,7 @@ interface CanvasSelectionProps {
   onLassoSelectionChange(points?: LassoPoint[]): void;
   onGroupSelectionChange(id?: string): void;
   onItemsChanged(changes: Array<SceneItemPatch>, snap?: boolean): void;
-  onFocusItem(item: SceneItem): void;
+  onActivateItem(item: SceneItem): void;
 }
 
 interface CanvasGroupsProps {
@@ -55,6 +55,7 @@ interface CanvasColorPickerProps {
 
 interface CanvasWindowInteractionProps {
   drawingCollaborationMode: boolean;
+  interactionSuspended: boolean;
   onContextMenu(position: { x: number; y: number }): void;
   onExternalImageDrag?(items: SceneItem[]): (() => void) | undefined;
   windowLocked: boolean;
@@ -95,7 +96,7 @@ export function CanvasView({
     onLassoSelectionChange,
     onGroupSelectionChange,
     onItemsChanged,
-    onFocusItem,
+    onActivateItem,
   } = selection;
   const {
     onGroupMoved,
@@ -109,6 +110,7 @@ export function CanvasView({
   const { colorPickerHeld, colorPickerShortcut, onColorPicked } = colorPicker;
   const {
     drawingCollaborationMode,
+    interactionSuspended,
     onContextMenu,
     onExternalImageDrag,
     windowLocked,
@@ -141,7 +143,7 @@ export function CanvasView({
   });
   const runtimeStateRef = useRef({
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, interactionSuspended,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   });
   const viewportCommitRef = useRef(onViewportCommit);
@@ -156,7 +158,7 @@ export function CanvasView({
   const expandGroupRef = useRef(onExpandGroup);
   const groupPreviewAnchorRef = useRef(onGroupPreviewAnchor);
   const colorPickedRef = useRef(onColorPicked);
-  const focusItemRef = useRef(onFocusItem); const contextMenuRef = useRef(onContextMenu);
+  const activateItemRef = useRef(onActivateItem); const contextMenuRef = useRef(onContextMenu);
   const externalImageDragRef = useRef(onExternalImageDrag);
   const windowMoveStartRef = useRef(onWindowMoveStart); const windowMoveRef = useRef(onWindowMove); const windowMoveEndRef = useRef(onWindowMoveEnd);
   const visualNotesChangedRef = useRef(visualNotes.onChanged);
@@ -173,14 +175,14 @@ export function CanvasView({
   expandGroupRef.current = onExpandGroup;
   groupPreviewAnchorRef.current = onGroupPreviewAnchor;
   colorPickedRef.current = onColorPicked;
-  focusItemRef.current = onFocusItem; contextMenuRef.current = onContextMenu;
+  activateItemRef.current = onActivateItem; contextMenuRef.current = onContextMenu;
   externalImageDragRef.current = onExternalImageDrag;
   windowMoveStartRef.current = onWindowMoveStart; windowMoveRef.current = onWindowMove; windowMoveEndRef.current = onWindowMoveEnd;
   visualNotesChangedRef.current = visualNotes.onChanged;
   visualNoteSelectionRef.current = visualNotes.onSelectionChange;
   runtimeStateRef.current = {
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, interactionSuspended,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   };
 
@@ -201,7 +203,7 @@ export function CanvasView({
       onOpenGroupMenu: (id, position) => openGroupMenuRef.current(id, position),
       onExpandGroup: (id) => expandGroupRef.current(id),
       onGroupPreviewAnchor: (id, position) => groupPreviewAnchorRef.current(id, position),
-      onColorPicked: (color) => colorPickedRef.current(color), onFocusItem: (item) => focusItemRef.current(item),
+      onColorPicked: (color) => colorPickedRef.current(color), onActivateItem: (item) => activateItemRef.current(item),
       onContextMenu: (position) => contextMenuRef.current(position),
       onExternalImageDrag: (items) => externalImageDragRef.current?.(items),
       onWindowMoveStart: () => windowMoveStartRef.current(), onWindowMove: () => windowMoveRef.current(),
@@ -227,6 +229,7 @@ export function CanvasView({
       runtime.setColorPickerShortcut(state.colorPickerShortcut);
       runtime.setWindowLocked(state.windowLocked);
       runtime.setDrawingCollaborationMode(state.drawingCollaborationMode);
+      runtime.setInteractionSuspended(state.interactionSuspended);
       runtime.setVisualNotesState(state.visualNotesState);
       runtime.setVisualNotesTemporaryHidden(state.visualNotesTemporaryHidden);
       runtime.setBackground(state.background, state.backgroundOpacity);
@@ -250,6 +253,8 @@ export function CanvasView({
     // rebuild the Pixi renderer whenever any of the seeded values changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeAttempt]);
+
+  useEffect(() => runtimeRef.current?.setInteractionSuspended(interactionSuspended), [interactionSuspended]);
 
   useEffect(() => {
     const videoId = selectedVideo?.id;
