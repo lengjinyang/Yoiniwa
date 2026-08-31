@@ -52,10 +52,6 @@ pub struct ImageItem {
     pub source_path: Option<String>,
     pub source_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pose: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poster_asset_id: Option<String>,

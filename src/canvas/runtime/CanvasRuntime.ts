@@ -76,8 +76,6 @@ export class CanvasRuntime {
   private altPointerArmed = false;
   private windowLocked = false;
   private drawingCollaborationMode = false;
-  private interactionSuspended = false;
-  private readonly suspendedVideoIds = new Set<string>();
   private visualNotesController?: VisualNotesController;
   private visualNotesState: VisualNotesToolState;
   private colorPickerHud?: HTMLDivElement;
@@ -335,24 +333,6 @@ export class CanvasRuntime {
     });
     this.scheduleRender();
     this.syncColorPickerArmedClass();
-  }
-
-  setInteractionSuspended(suspended: boolean) {
-    if (this.interactionSuspended === suspended) return;
-    this.interactionSuspended = suspended;
-    this.container.style.pointerEvents = suspended ? 'none' : '';
-    if (suspended) {
-      const assets = this.sceneStore?.snapshot().assets;
-      this.sceneStore?.images().forEach((item) => {
-        if (isVideoItem(item, assets) && this.renderer.isVideoPlaying(item.id)) {
-          this.suspendedVideoIds.add(item.id);
-          this.renderer.pauseVideo(item.id);
-        }
-      });
-      return;
-    }
-    this.suspendedVideoIds.forEach((id) => { void this.renderer.playVideo(id); });
-    this.suspendedVideoIds.clear();
   }
 
   private emitGroupPreviewAnchor(id: string) {

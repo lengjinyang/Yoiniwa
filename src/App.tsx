@@ -20,8 +20,6 @@ import { useAppShell, useNativeZoom } from './app/hooks/useAppShell';
 import { UnsavedChangesDialog } from './app/components/UnsavedChangesDialog';
 import { AppUpdateNotice } from './app/components/AppUpdateNotice';
 import { useAppUpdater } from './app/hooks/useAppUpdater';
-import { usePoseStudioController } from './app/hooks/usePoseStudioController';
-import { PoseStudio } from './pose/components/PoseStudio';
 import './styles.css';
 import './styles/quiet-tokens.css';
 import './styles/quiet-controls.css';
@@ -40,7 +38,7 @@ export default function App() {
   const shell = useAppShell();
   const { panels, sceneNameVisible, lastPointerRef } = shell;
   const photoshopVersionPreviewDropRef = useRef<InternalImageDropHandler>(async () => false);
-  const beforeProjectChangeRef = useRef<() => Promise<boolean>>(async () => true);
+  const beforeProjectChangeRef = useRef<() => void>(() => undefined);
   const drawingCollaborationModeRef = useRef(false);
   const onWindowLockedRef = useRef<() => void>(() => undefined);
   const api = window.refCanvas;
@@ -96,9 +94,6 @@ export default function App() {
     setGroupActionMenu,
     zoomBy,
   } = workspace;
-  const pose = usePoseStudioController({
-    api, history, lastPointerRef, setSelectedIds, setSelectedGroupId, setStatus,
-  });
   const visualNotes = useVisualNotes({
     notes: history.scene.visualNotes,
     projectEpoch: history.projectEpoch,
@@ -137,11 +132,9 @@ export default function App() {
     setStatus,
   });
   useEffect(() => api?.onCloseRequested(() => {
-    void beforeProjectChangeRef.current().then((allowed) => {
-      if (!allowed) { api.respondToClose(false); return; }
-      setCloseSaving(false);
-      setClosePromptOpen(true);
-    });
+    beforeProjectChangeRef.current();
+    setCloseSaving(false);
+    setClosePromptOpen(true);
   }), [api]);
   const cancelClose = () => {
     if (closeSaving) return;
@@ -219,12 +212,7 @@ export default function App() {
     placePhotoshopVersionPreview,
     closeVersionComparison,
   } = versions;
-  beforeProjectChangeRef.current = async () => {
-    if (pose.session && !window.confirm('当前姿势尚未应用。放弃草稿并继续？')) return false;
-    if (pose.session) pose.close();
-    closeVersionComparison();
-    return true;
-  };
+  beforeProjectChangeRef.current = closeVersionComparison;
   photoshopVersionPreviewDropRef.current = async (versionId, placement) => {
     const version = photoshopMetadataRef.current.versions.find((value) => value.id === versionId);
     if (!version) return false;
@@ -243,7 +231,6 @@ export default function App() {
     delivery,
     versions,
     context,
-    pose,
     panels,
     window: {
       mode: windowMode,
@@ -268,7 +255,6 @@ export default function App() {
       panels={panels}
       context={context}
       photoshopDocumentBlocked={photoshopDocumentBlocked}
-      pose={pose}
     />
     <AppOverlays
       api={api}
@@ -287,9 +273,6 @@ export default function App() {
       sceneNameVisible={sceneNameVisible}
       photoshopDocumentBlocked={photoshopDocumentBlocked}
     />
-    {pose.session && <PoseStudio key={pose.session.itemId} initial={pose.session.draft}
-      isNew={pose.session.isNew} readOnly={pose.session.readOnly} submitting={pose.submitting}
-      onCancel={pose.close} onApply={pose.apply} />}
     <AppUpdateNotice updater={updater} />
     <UnsavedChangesDialog
       open={closePromptOpen}

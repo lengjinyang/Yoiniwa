@@ -27,6 +27,8 @@ export function migrateProjectScene(input: unknown): Scene | undefined {
   migrated.items = Array.isArray(migrated.items) ? migrated.items.map((value) => {
     const item = record(value) ?? {};
     delete item.comment;
+    delete item.contentKind;
+    delete item.pose;
     return { rotation: 0, flipX: false, flipY: false, opacity: 1, zIndex: 0, locked: false,
       crop: { x: 0, y: 0, width: Number(item.naturalWidth) || 1, height: Number(item.naturalHeight) || 1 }, ...item };
   }) : [];

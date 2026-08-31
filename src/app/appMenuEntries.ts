@@ -84,10 +84,6 @@ interface BuildAppMenuEntriesOptions {
     newScene(): void;
     close(): void;
   };
-  pose: {
-    create(): void;
-    edit(): void;
-  };
 }
 
 export function buildAppMenuEntries({
@@ -106,7 +102,6 @@ export function buildAppMenuEntries({
   window,
   export: exportActions,
   application,
-  pose,
 }: BuildAppMenuEntriesOptions): ContextMenuEntry[] {
   const displayShortcut = (id: keyof ShortcutPreferences) => shortcutDisplayName(shortcuts[id]);
   const hasSelection = selection.selectedIds.length > 0;
@@ -132,8 +127,6 @@ export function buildAppMenuEntries({
   const duplicateCommand = appCommand(commands, 'edit.duplicate');
   const deleteCommand = appCommand(commands, 'edit.delete');
   const createGroupCommand = appCommand(commands, 'group.create');
-  const createPoseCommand = appCommand(commands, 'pose.create');
-  const editPoseCommand = appCommand(commands, 'pose.edit');
   const grayscale = Boolean(selection.primary?.grayscale);
   const grayscaleContrast = selection.primary ? imageGrayscaleContrast(selection.primary) : 1;
   const primaryIsVideo = selection.primary ? isVideoItem(selection.primary, scene.assets) : false;
@@ -142,11 +135,6 @@ export function buildAppMenuEntries({
   return [
     { type: 'item', label: `${scene.name}${dirty ? '  • 未保存' : ''}`, disabled: true },
     { type: 'separator' },
-    {
-      type: 'item', label: '添加', children: [
-        { type: 'item', label: '3D Pose Studio', disabled: !createPoseCommand.enabled, action: pose.create },
-      ],
-    },
     { type: 'item', label: '大纲视图', checked: panels.outlineOpen, action: panels.toggleOutline },
     { type: 'item', label: '版本视图', checked: panels.versionsOpen, action: panels.toggleVersions },
     { type: 'separator' },
@@ -198,10 +186,6 @@ export function buildAppMenuEntries({
     },
     {
       type: 'item', label: '图片', disabled: !hasImageSelection, children: hasImageSelection ? [
-        ...(editPoseCommand.enabled ? [
-          { type: 'item' as const, label: '编辑 3D Pose Studio…', action: pose.edit },
-          { type: 'separator' as const },
-        ] : []),
         { type: 'item', label: '加入组', disabled: joinGroupEntries.length === 0, children: joinGroupEntries },
         { type: 'item', label: '从组中移出', shortcut: displayShortcut('detachGroup'), disabled: selectedGroupedImageIds.length === 0, action: groups.detachSelected },
         { type: 'separator' },

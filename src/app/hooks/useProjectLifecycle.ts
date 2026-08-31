@@ -22,7 +22,7 @@ interface ProjectHistory {
 interface UseProjectLifecycleOptions {
   api: Window['refCanvas'];
   history: ProjectHistory;
-  beforeProjectChangeRef: { current: () => Promise<boolean> };
+  beforeProjectChangeRef: { current: () => void };
   setSelectedIds(ids: string[]): void;
   setSelectedGroupId(id?: string): void;
   setStatus(message: string): void;
@@ -180,7 +180,7 @@ export function useProjectLifecycle({
     setSelectedIds, settleOperation]);
 
   const open = useCallback(async (path?: string) => {
-    if (!await beforeProjectChangeRef.current()) return;
+    beforeProjectChangeRef.current();
     if (history.dirty) {
       setPendingChange({ kind: 'open', path });
       return;
@@ -249,7 +249,7 @@ export function useProjectLifecycle({
   }, [api, history, setSelectedGroupId, setSelectedIds, setStatus]);
 
   const newScene = useCallback(async () => {
-    if (!await beforeProjectChangeRef.current()) return;
+    beforeProjectChangeRef.current();
     if (history.dirty) {
       setPendingChange({ kind: 'new' });
       return;

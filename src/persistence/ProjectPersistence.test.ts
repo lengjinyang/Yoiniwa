@@ -51,8 +51,18 @@ describe('project persistence boundary', () => {
   });
 
   it('migrates a version-one scene and rejects malformed viewport state', () => {
-    expect(loadProjectScene({ ...scene, version: 1 })?.version).toBe(3);
+    expect(loadProjectScene({ ...scene, version: 1 })?.version).toBe(4);
     expect(loadProjectScene({ ...scene, viewport: { x: 0, y: 0, scale: 0 } })).toBeUndefined();
+  });
+
+  it('keeps legacy pose renders as ordinary images', () => {
+    const legacy = JSON.parse(JSON.stringify(scene));
+    legacy.items[0].contentKind = 'pose';
+    legacy.items[0].pose = { schemaVersion: 1 };
+    const loaded = loadProjectScene(legacy);
+    expect(loaded?.items[0]).toMatchObject({ id: 'image', assetId: 'missing', mediaKind: 'image' });
+    expect(loaded?.items[0]).not.toHaveProperty('contentKind');
+    expect(loaded?.items[0]).not.toHaveProperty('pose');
   });
 
   it('autosaves only the latest settled revision', async () => {

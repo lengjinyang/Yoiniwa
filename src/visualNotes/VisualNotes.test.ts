@@ -70,8 +70,9 @@ describe('visual note persistence lifecycle', () => {
   it('migrates v2 to v3 and intentionally drops legacy annotations', () => {
     const migrated = migrateProjectScene({ format: 'refcanvas', version: 2, annotations: [{ id: 'legacy' }],
       name: 'old', savedAt: '', viewport: { x: 0, y: 0, scale: 1 }, canvas: {}, assets: {}, items: [], groups: [] });
-    expect(migrated?.version).toBe(3);
+    expect(migrated?.version).toBe(4);
     expect(migrated?.visualNotes).toEqual({ visible: true, nextNumber: 1, marks: [] });
+
     expect('annotations' in (migrated as unknown as Record<string, unknown>)).toBe(false);
   });
 

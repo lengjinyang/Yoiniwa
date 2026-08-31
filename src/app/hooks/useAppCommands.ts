@@ -12,7 +12,6 @@ import type { useProjectLifecycle } from './useProjectLifecycle';
 import type { useSceneDelivery } from './useSceneDelivery';
 import type { useSceneWorkspaceController } from './useSceneWorkspaceController';
 import type { useVisualNotes } from './useVisualNotes';
-import type { PoseStudioController } from './usePoseStudioController';
 import { createAppShortcutCommandRegistry, useAppShortcutRegistry, useAppShortcuts } from './useAppShortcuts';
 
 interface UseAppCommandsOptions {
@@ -26,7 +25,6 @@ interface UseAppCommandsOptions {
   delivery: ReturnType<typeof useSceneDelivery>;
   versions: ReturnType<typeof usePhotoshopVersionController>;
   context: ReturnType<typeof useContextMenu>;
-  pose: PoseStudioController;
   panels: {
     propertiesOpen: boolean;
     setPropertiesOpen: Dispatch<SetStateAction<boolean>>;
@@ -55,7 +53,6 @@ export function useAppCommands({
   delivery,
   versions,
   context,
-  pose,
   panels,
   window: windowController,
   photoshopDocumentBlocked,
@@ -87,10 +84,7 @@ export function useAppCommands({
       execute: () => workspace.selectedGroup ? workspace.deleteGroup(false) : workspace.deleteSelected(),
     },
     { id: 'group.create', enabled: workspace.selectedIds.length >= 2, execute: workspace.createGroup },
-    { id: 'pose.create', enabled: !pose.session, execute: pose.openNew },
-    { id: 'pose.edit', enabled: !pose.session && workspace.primary?.contentKind === 'pose',
-      execute: () => { if (workspace.primary) pose.openItem(workspace.primary); } },
-  ]), [history.canRedo, history.canUndo, history.redo, history.undo, pose, workspace]);
+  ]), [history.canRedo, history.canUndo, history.redo, history.undo, workspace]);
 
   const shortcutCommands = createAppShortcutCommandRegistry([
     { id: 'colorPicker.press', execute: () => setColorPickerHeld(true) },
@@ -300,6 +294,5 @@ export function useAppCommands({
       copyOriginal: () => { void delivery.copyPrimaryOriginal(); },
     },
     application: { newScene: project.newScene, close: () => api?.close() },
-    pose: { create: pose.openNew, edit: () => { if (workspace.primary) pose.openItem(workspace.primary); } },
   });
 }

@@ -55,7 +55,6 @@ interface CanvasColorPickerProps {
 
 interface CanvasWindowInteractionProps {
   drawingCollaborationMode: boolean;
-  interactionSuspended: boolean;
   onContextMenu(position: { x: number; y: number }): void;
   onExternalImageDrag?(items: SceneItem[]): (() => void) | undefined;
   windowLocked: boolean;
@@ -110,7 +109,6 @@ export function CanvasView({
   const { colorPickerHeld, colorPickerShortcut, onColorPicked } = colorPicker;
   const {
     drawingCollaborationMode,
-    interactionSuspended,
     onContextMenu,
     onExternalImageDrag,
     windowLocked,
@@ -143,7 +141,7 @@ export function CanvasView({
   });
   const runtimeStateRef = useRef({
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, interactionSuspended,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   });
   const viewportCommitRef = useRef(onViewportCommit);
@@ -182,7 +180,7 @@ export function CanvasView({
   visualNoteSelectionRef.current = visualNotes.onSelectionChange;
   runtimeStateRef.current = {
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
-    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode, interactionSuspended,
+    colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   };
 
@@ -229,7 +227,6 @@ export function CanvasView({
       runtime.setColorPickerShortcut(state.colorPickerShortcut);
       runtime.setWindowLocked(state.windowLocked);
       runtime.setDrawingCollaborationMode(state.drawingCollaborationMode);
-      runtime.setInteractionSuspended(state.interactionSuspended);
       runtime.setVisualNotesState(state.visualNotesState);
       runtime.setVisualNotesTemporaryHidden(state.visualNotesTemporaryHidden);
       runtime.setBackground(state.background, state.backgroundOpacity);
@@ -253,8 +250,6 @@ export function CanvasView({
     // rebuild the Pixi renderer whenever any of the seeded values changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeAttempt]);
-
-  useEffect(() => runtimeRef.current?.setInteractionSuspended(interactionSuspended), [interactionSuspended]);
 
   useEffect(() => {
     const videoId = selectedVideo?.id;

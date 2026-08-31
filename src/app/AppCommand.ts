@@ -6,9 +6,7 @@ export type AppCommandId =
   | 'edit.paste'
   | 'edit.duplicate'
   | 'edit.delete'
-  | 'group.create'
-  | 'pose.create'
-  | 'pose.edit';
+  | 'group.create';
 
 export interface AppCommand {
   id: AppCommandId;
