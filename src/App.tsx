@@ -47,10 +47,7 @@ export default function App() {
   const context = useContextMenu();
   const { close: closeContextMenu } = context;
   const preferences = useAppPreferences({ api, drawingCollaborationModeRef, setStatus });
-  const {
-    colorPickerShortcut,
-    shortcuts,
-  } = preferences;
+  const { shortcuts } = preferences;
   const windowController = useWindowCollaborationController({
     api,
     collaborationShortcut: shortcuts.collaboration,
@@ -68,15 +65,12 @@ export default function App() {
   drawingCollaborationModeRef.current = drawingCollaborationMode;
   const colorPicker = useColorPickerController({
     api,
-    colorPickerShortcut,
+    colorPickerShortcut: preferences.colorPickerShortcut,
     autoPhotoshopRoundTrip,
     drawingCollaborationMode,
     windowLocked: windowMode.locked,
     setStatus,
   });
-  const {
-    setHeld: setColorPickerHeld,
-  } = colorPicker;
   const workspace = useSceneWorkspaceController({
     api,
     history,
@@ -105,6 +99,7 @@ export default function App() {
   const imageImport = useImageImport({
     api,
     scene: history.scene,
+    defaultVideoSoundEnabled: preferences.defaultVideoSoundEnabled,
     commit: history.commit,
     setSelectedIds,
     setSelectedGroupId,
@@ -113,7 +108,6 @@ export default function App() {
     internalDropHandlerRef: photoshopVersionPreviewDropRef,
     lastPointerRef,
   });
-  const { prepareAndAddImages } = imageImport;
   const project = useProjectLifecycle({
     api,
     history,
@@ -194,7 +188,7 @@ export default function App() {
   const versions = usePhotoshopVersionController({
     api,
     metadata: photoshopMetadata,
-    metadataRef: photoshopMetadataRef,
+    captureProjectSave: project.captureProjectSave,
     onMetadataChange: setPhotoshopMetadata,
     projectSessionIdRef,
     liveViewportRef,
@@ -202,7 +196,7 @@ export default function App() {
     documentBlocked: photoshopDocumentBlocked,
     flushViewport: history.flushViewport,
     markSaved: history.markSaved,
-    prepareAndAddImages,
+    prepareAndAddImages: imageImport.prepareAndAddImages,
     beginOperation,
     settleOperation: settleCurrentOperation,
     clearOperation: clearCurrentOperation,
@@ -239,7 +233,7 @@ export default function App() {
       toggleDrawingCollaborationMode,
     },
     photoshopDocumentBlocked,
-    setColorPickerHeld,
+    setColorPickerHeld: colorPicker.setHeld,
     setStatus,
   });
   return <main className="app-shell">

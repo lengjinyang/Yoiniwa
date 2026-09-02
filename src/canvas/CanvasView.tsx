@@ -144,40 +144,20 @@ export function CanvasView({
     colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
     visualNotesState: visualNotes.state, visualNotesTemporaryHidden: visualNotes.temporaryHidden,
   });
-  const viewportCommitRef = useRef(onViewportCommit);
-  const selectionChangeRef = useRef(onSelectionChange);
-  const lassoSelectionChangeRef = useRef(onLassoSelectionChange);
-  const itemsChangedRef = useRef(onItemsChanged);
-  const groupSelectionRef = useRef(onGroupSelectionChange);
-  const groupMovedRef = useRef(onGroupMoved);
-  const groupResizedRef = useRef(onGroupResized);
-  const renameGroupRef = useRef(onRenameGroup);
-  const openGroupMenuRef = useRef(onOpenGroupMenu);
-  const expandGroupRef = useRef(onExpandGroup);
-  const groupPreviewAnchorRef = useRef(onGroupPreviewAnchor);
-  const colorPickedRef = useRef(onColorPicked);
-  const activateItemRef = useRef(onActivateItem); const contextMenuRef = useRef(onContextMenu);
-  const externalImageDragRef = useRef(onExternalImageDrag);
-  const windowMoveStartRef = useRef(onWindowMoveStart); const windowMoveRef = useRef(onWindowMove); const windowMoveEndRef = useRef(onWindowMoveEnd);
-  const visualNotesChangedRef = useRef(visualNotes.onChanged);
-  const visualNoteSelectionRef = useRef(visualNotes.onSelectionChange);
-  viewportCommitRef.current = onViewportCommit;
-  selectionChangeRef.current = onSelectionChange;
-  lassoSelectionChangeRef.current = onLassoSelectionChange;
-  itemsChangedRef.current = onItemsChanged;
-  groupSelectionRef.current = onGroupSelectionChange;
-  groupMovedRef.current = onGroupMoved;
-  groupResizedRef.current = onGroupResized;
-  renameGroupRef.current = onRenameGroup;
-  openGroupMenuRef.current = onOpenGroupMenu;
-  expandGroupRef.current = onExpandGroup;
-  groupPreviewAnchorRef.current = onGroupPreviewAnchor;
-  colorPickedRef.current = onColorPicked;
-  activateItemRef.current = onActivateItem; contextMenuRef.current = onContextMenu;
-  externalImageDragRef.current = onExternalImageDrag;
-  windowMoveStartRef.current = onWindowMoveStart; windowMoveRef.current = onWindowMove; windowMoveEndRef.current = onWindowMoveEnd;
-  visualNotesChangedRef.current = visualNotes.onChanged;
-  visualNoteSelectionRef.current = visualNotes.onSelectionChange;
+  const callbacksRef = useRef({
+    onViewportCommit, onSelectionChange, onLassoSelectionChange, onItemsChanged, onGroupSelectionChange,
+    onGroupMoved, onGroupResized, onRenameGroup, onOpenGroupMenu, onExpandGroup, onGroupPreviewAnchor,
+    onColorPicked, onActivateItem, onContextMenu, onExternalImageDrag, onWindowMoveStart, onWindowMove,
+    onWindowMoveEnd, onVisualNotesChanged: visualNotes.onChanged,
+    onVisualNoteSelectionChange: visualNotes.onSelectionChange,
+  });
+  callbacksRef.current = {
+    onViewportCommit, onSelectionChange, onLassoSelectionChange, onItemsChanged, onGroupSelectionChange,
+    onGroupMoved, onGroupResized, onRenameGroup, onOpenGroupMenu, onExpandGroup, onGroupPreviewAnchor,
+    onColorPicked, onActivateItem, onContextMenu, onExternalImageDrag, onWindowMoveStart, onWindowMove,
+    onWindowMoveEnd, onVisualNotesChanged: visualNotes.onChanged,
+    onVisualNoteSelectionChange: visualNotes.onSelectionChange,
+  };
   runtimeStateRef.current = {
     background, backgroundOpacity, scene, viewport, selectedIds, selectedGroupId, groupMenuOpen, projectEpoch,
     colorPickerHeld, colorPickerShortcut, windowLocked, drawingCollaborationMode,
@@ -190,24 +170,26 @@ export function CanvasView({
     let active = true;
     const runtime = new CanvasRuntime(container, {
       ...initialOptionsRef.current,
-      onViewportCommit: (nextViewport) => viewportCommitRef.current?.(nextViewport),
-      onSelectionChange: (ids, source) => selectionChangeRef.current(ids, source),
-      onLassoSelectionChange: (points) => lassoSelectionChangeRef.current(points),
-      onGroupSelectionChange: (id) => groupSelectionRef.current(id),
-      onItemsChanged: (changes, snap) => itemsChangedRef.current(changes, snap),
-      onGroupMoved: (id, deltaX, deltaY) => groupMovedRef.current(id, deltaX, deltaY),
-      onGroupResized: (id, bounds) => groupResizedRef.current(id, bounds),
-      onRenameGroup: (id) => renameGroupRef.current(id),
-      onOpenGroupMenu: (id, position) => openGroupMenuRef.current(id, position),
-      onExpandGroup: (id) => expandGroupRef.current(id),
-      onGroupPreviewAnchor: (id, position) => groupPreviewAnchorRef.current(id, position),
-      onColorPicked: (color) => colorPickedRef.current(color), onActivateItem: (item) => activateItemRef.current(item),
-      onContextMenu: (position) => contextMenuRef.current(position),
-      onExternalImageDrag: (items) => externalImageDragRef.current?.(items),
-      onWindowMoveStart: () => windowMoveStartRef.current(), onWindowMove: () => windowMoveRef.current(),
-      onWindowMoveEnd: () => windowMoveEndRef.current(),
-      onVisualNotesChanged: (notes) => visualNotesChangedRef.current(notes),
-      onVisualNoteSelectionChange: (id) => visualNoteSelectionRef.current(id),
+      onViewportCommit: (nextViewport) => callbacksRef.current.onViewportCommit?.(nextViewport),
+      onSelectionChange: (ids, source) => callbacksRef.current.onSelectionChange(ids, source),
+      onLassoSelectionChange: (points) => callbacksRef.current.onLassoSelectionChange(points),
+      onGroupSelectionChange: (id) => callbacksRef.current.onGroupSelectionChange(id),
+      onItemsChanged: (changes, snap) => callbacksRef.current.onItemsChanged(changes, snap),
+      onGroupMoved: (id, deltaX, deltaY) => callbacksRef.current.onGroupMoved(id, deltaX, deltaY),
+      onGroupResized: (id, bounds) => callbacksRef.current.onGroupResized(id, bounds),
+      onRenameGroup: (id) => callbacksRef.current.onRenameGroup(id),
+      onOpenGroupMenu: (id, position) => callbacksRef.current.onOpenGroupMenu(id, position),
+      onExpandGroup: (id) => callbacksRef.current.onExpandGroup(id),
+      onGroupPreviewAnchor: (id, position) => callbacksRef.current.onGroupPreviewAnchor(id, position),
+      onColorPicked: (color) => callbacksRef.current.onColorPicked(color),
+      onActivateItem: (item) => callbacksRef.current.onActivateItem(item),
+      onContextMenu: (position) => callbacksRef.current.onContextMenu(position),
+      onExternalImageDrag: (items) => callbacksRef.current.onExternalImageDrag?.(items),
+      onWindowMoveStart: () => callbacksRef.current.onWindowMoveStart(),
+      onWindowMove: () => callbacksRef.current.onWindowMove(),
+      onWindowMoveEnd: () => callbacksRef.current.onWindowMoveEnd(),
+      onVisualNotesChanged: (notes) => callbacksRef.current.onVisualNotesChanged(notes),
+      onVisualNoteSelectionChange: (id) => callbacksRef.current.onVisualNoteSelectionChange(id),
       videoPlayback,
       boostImageResource,
       isSpaceDown,
@@ -353,7 +335,7 @@ export function CanvasView({
       const next = (event as CustomEvent<Viewport>).detail;
       if (!next || !Number.isFinite(next.x) || !Number.isFinite(next.y) || !Number.isFinite(next.scale)) return;
       runtimeRef.current?.setViewport(next);
-      viewportCommitRef.current?.(next);
+      callbacksRef.current.onViewportCommit?.(next);
     };
     window.addEventListener('refcanvas-stress-viewport', setBenchmarkViewport);
     return () => window.removeEventListener('refcanvas-stress-viewport', setBenchmarkViewport);

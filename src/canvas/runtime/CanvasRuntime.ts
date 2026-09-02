@@ -3,6 +3,7 @@ import { Camera } from '../camera/Camera';
 import { CameraController } from '../camera/CameraController';
 import { PixiRenderer } from '../renderer/PixiRenderer';
 import { FrameScheduler } from './FrameScheduler';
+import { CAMERA_SETTLE_MS } from './CanvasConfig';
 import { RuntimeLifecycle } from './RuntimeLifecycle';
 import { InputRouter } from '../interaction/InputRouter';
 import { SceneStore } from '../scene/SceneStore';
@@ -380,7 +381,6 @@ export class CanvasRuntime {
     if (!state.enabled || state.tool !== 'eraser') this.renderer.setVisualNoteEraserCursor();
   }
   setVisualNotesTemporaryHidden(hidden: boolean) { this.renderer.setVisualNotesTemporaryHidden(hidden); }
-  cancelVisualNotesGesture() { this.visualNotesController?.cancel(); return this.visualNotesController?.active() ?? false; }
   setWindowLocked(locked: boolean) {
     this.windowLocked = locked;
     this.container.classList.toggle('canvas-content-locked', locked);
@@ -411,11 +411,8 @@ export class CanvasRuntime {
   onVideoTransportChange(listener?: (state: VideoTransportState) => void) {
     this.renderer.onVideoTransportChange(listener);
   }
-  playVideo(id: string) { return this.renderer.playVideo(id); }
-  pauseVideo(id: string) { return this.renderer.pauseVideo(id); }
   toggleVideoPlayback(id: string) { return this.renderer.toggleVideoPlayback(id); }
   beginVideoTimelineSeek(id: string) { return this.renderer.beginVideoTimelineSeek(id); }
-  seekVideoTimeline(id: string, time: number) { return this.renderer.seekVideoTimeline(id, time); }
   seekVideoTimelineFrame(id: string, frame: number) { return this.renderer.seekVideoTimelineFrame(id, frame); }
   endVideoTimelineSeek(id: string) { return this.renderer.endVideoTimelineSeek(id); }
   beginCanvasVideoJog(id: string) { return this.renderer.beginCanvasVideoJog(id); }
@@ -686,7 +683,7 @@ export class CanvasRuntime {
       performanceMonitor.recordSpatialQuery(performance.now() - queryStartedAt);
       this.renderer.render(viewport, {
         visible, prefetch, visibleBounds, prefetchBounds,
-        cameraMoving: now - this.cameraChangedAt < 160, now,
+        cameraMoving: now - this.cameraChangedAt < CAMERA_SETTLE_MS, now,
       });
     });
   }

@@ -2,7 +2,7 @@ import { useMemo, type Dispatch, type SetStateAction } from 'react';
 import { resetImageTransform } from '../../domain/scene';
 import type { WindowState } from '../../types';
 import type { useSceneHistory } from './useSceneHistory';
-import { appCommand, createAppCommandRegistry } from '../AppCommand';
+import type { AppCommandRegistry } from '../AppCommand';
 import { buildAppMenuEntries } from '../appMenuEntries';
 import type { useAppPreferences } from './useAppPreferences';
 import type { useContextMenu } from './useContextMenu';
@@ -59,32 +59,28 @@ export function useAppCommands({
   setColorPickerHeld,
   setStatus,
 }: UseAppCommandsOptions) {
-  const commands = useMemo(() => createAppCommandRegistry([
-    { id: 'edit.undo', enabled: history.canUndo, execute: history.undo },
-    { id: 'edit.redo', enabled: history.canRedo, execute: history.redo },
-    {
-      id: 'edit.copy',
+  const commands = useMemo<AppCommandRegistry>(() => ({
+    'edit.undo': { enabled: history.canUndo, execute: history.undo },
+    'edit.redo': { enabled: history.canRedo, execute: history.redo },
+    'edit.copy': {
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
       execute: workspace.copySelection,
     },
-    {
-      id: 'edit.cut',
+    'edit.cut': {
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
       execute: workspace.cutSelection,
     },
-    { id: 'edit.paste', enabled: workspace.hasClipboard, execute: workspace.pasteClipboard },
-    {
-      id: 'edit.duplicate',
+    'edit.paste': { enabled: workspace.hasClipboard, execute: workspace.pasteClipboard },
+    'edit.duplicate': {
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
       execute: workspace.duplicate,
     },
-    {
-      id: 'edit.delete',
+    'edit.delete': {
       enabled: workspace.selectedIds.length > 0 || Boolean(workspace.selectedGroup),
       execute: () => workspace.selectedGroup ? workspace.deleteGroup(false) : workspace.deleteSelected(),
     },
-    { id: 'group.create', enabled: workspace.selectedIds.length >= 2, execute: workspace.createGroup },
-  ]), [history.canRedo, history.canUndo, history.redo, history.undo, workspace]);
+    'group.create': { enabled: workspace.selectedIds.length >= 2, execute: workspace.createGroup },
+  }), [history.canRedo, history.canUndo, history.redo, history.undo, workspace]);
 
   const shortcutCommands = createAppShortcutCommandRegistry([
     { id: 'colorPicker.press', execute: () => setColorPickerHeld(true) },
@@ -110,20 +106,20 @@ export function useAppCommands({
     },
     { id: 'file.export', execute: () => { void delivery.exportItems(false); } },
     { id: 'file.exportSelected', execute: () => { void delivery.exportItems(true); } },
-    { id: 'edit.undo', execute: appCommand(commands, 'edit.undo').execute },
-    { id: 'edit.redo', execute: appCommand(commands, 'edit.redo').execute },
-    { id: 'edit.copy', execute: appCommand(commands, 'edit.copy').execute },
-    { id: 'edit.cut', execute: appCommand(commands, 'edit.cut').execute },
-    { id: 'edit.paste', execute: appCommand(commands, 'edit.paste').execute },
-    { id: 'edit.duplicate', execute: appCommand(commands, 'edit.duplicate').execute },
+    { id: 'edit.undo', execute: commands['edit.undo'].execute },
+    { id: 'edit.redo', execute: commands['edit.redo'].execute },
+    { id: 'edit.copy', execute: commands['edit.copy'].execute },
+    { id: 'edit.cut', execute: commands['edit.cut'].execute },
+    { id: 'edit.paste', execute: commands['edit.paste'].execute },
+    { id: 'edit.duplicate', execute: commands['edit.duplicate'].execute },
     {
       id: 'edit.delete',
       execute: () => {
-        if (!visualNotes.deleteSelectedMark()) appCommand(commands, 'edit.delete').execute();
+        if (!visualNotes.deleteSelectedMark()) commands['edit.delete'].execute();
       },
     },
     { id: 'edit.selectAll', execute: workspace.selectAll },
-    { id: 'group.create', execute: appCommand(commands, 'group.create').execute },
+    { id: 'group.create', execute: commands['group.create'].execute },
     {
       id: 'group.detachOrUngroup',
       execute: () => {

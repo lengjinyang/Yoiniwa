@@ -1,6 +1,7 @@
 import { groupVisibleBounds, GROUP_TITLE_HEIGHT } from '../domain/scene';
 import type { BoardItem, ImageGroup, VisualNotesState } from '../types';
 import { markWorldPoints } from '../domain/visualNoteGeometry';
+import { cropForResource } from '../domain/media';
 
 interface ExportImage extends BoardItem { resourceUrl: string }
 interface ExportRequest {
@@ -11,6 +12,7 @@ interface ExportRequest {
   offsetY: number;
   background?: string;
   backgroundOpacity?: number;
+  format: 'png' | 'jpg';
   items: ExportImage[];
   groups: ImageGroup[];
   visualNotes?: VisualNotesState;
@@ -84,7 +86,8 @@ async function render(request: ExportRequest) {
         : 'none';
       context.translate(item.x + item.width / 2, item.y + item.height / 2);
       context.rotate(item.rotation * Math.PI / 180); context.scale(item.flipX ? -1 : 1, item.flipY ? -1 : 1);
-      context.drawImage(bitmap, item.crop.x, item.crop.y, item.crop.width, item.crop.height,
+      const crop = cropForResource(item, bitmap.width, bitmap.height);
+      context.drawImage(bitmap, crop.x, crop.y, crop.width, crop.height,
         -item.width / 2, -item.height / 2, item.width, item.height);
       context.restore();
     } finally { bitmap.close(); }
@@ -100,7 +103,7 @@ async function render(request: ExportRequest) {
     context.clip(); context.fillText(`${group.collapsed ? '▸' : '▾'}  ${group.name}`, group.x + 10, headerY + GROUP_TITLE_HEIGHT / 2);
     context.restore();
   }
-  return (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer();
+  return (await canvas.convertToBlob({ type: request.format === 'jpg' ? 'image/jpeg' : 'image/png' })).arrayBuffer();
 }
 
 self.onmessage = (event: MessageEvent<ExportRequest>) => {

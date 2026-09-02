@@ -133,17 +133,6 @@ function useSettledVariant(variant: ImageVariant) {
   return settledVariant;
 }
 
-export function cropForResource(item: Pick<BoardItem, 'crop' | 'naturalWidth' | 'naturalHeight'>, resourceWidth: number, resourceHeight: number) {
-  const scaleX = resourceWidth / Math.max(1, item.naturalWidth);
-  const scaleY = resourceHeight / Math.max(1, item.naturalHeight);
-  return {
-    x: item.crop.x * scaleX,
-    y: item.crop.y * scaleY,
-    width: item.crop.width * scaleX,
-    height: item.crop.height * scaleY,
-  };
-}
-
 /**
  * Pick the least-recently-used unreferenced entries to drop until the unused
  * bytes fit the budget. Retained entries are deliberately excluded from the

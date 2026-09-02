@@ -49,6 +49,7 @@ export function useSceneDelivery({
         onlySelected ? [] : scene.groups,
         scene.canvas.backgroundOpacity ?? 1,
         notes,
+        { format },
       );
       if (copy) {
         await api.copyImage(imageData);

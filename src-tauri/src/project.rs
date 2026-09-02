@@ -29,6 +29,7 @@ const SUPERBLOCK_OFFSETS: [u64; 2] = [512, 768];
 const SEGMENT_HEADER_SIZE: u64 = 96;
 const MAX_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_DECODED_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_LEGACY_ASSET_BYTES: u64 = 200 * 1024 * 1024;
 const MAX_LEGACY_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_LEGACY_ASSETS: usize = 10_000;
@@ -135,9 +136,10 @@ impl YoiRepository {
         for head in heads {
             let attempt = (|| -> Result<Self> {
                 let compressed = read_segment(&mut file, head.snapshot_offset, head.snapshot_length, SegmentType::Snapshot)?;
-                let mut decoder = Decompressor::new(compressed.as_slice(), 64 * 1024);
+                let decoder = Decompressor::new(compressed.as_slice(), 64 * 1024);
                 let mut decoded = Vec::new();
-                decoder.read_to_end(&mut decoded)?;
+                decoder.take(MAX_DECODED_SNAPSHOT_BYTES as u64 + 1).read_to_end(&mut decoded)?;
+                if decoded.len() > MAX_DECODED_SNAPSHOT_BYTES { return Err(anyhow!("YoiStorage 快照解压后超过大小限制")); }
                 let snapshot: SnapshotEnvelope = serde_json::from_slice(&decoded).context("YoiStorage 快照无效")?;
                 if snapshot.storage_version != STORAGE_VERSION { return Err(anyhow!("YoiStorage 快照版本无效")); }
                 for id in reachable_blob_ids(&snapshot.scene, &snapshot.photoshop_project) {
@@ -315,41 +317,14 @@ impl YoiRepository {
         })
     }
 
-    pub fn recover_tail(&mut self) -> Result<bool> {
-        let current = Self::open(&self.file_path)?;
-        if current.file_id != self.file_id || current.head.generation != self.head.generation || current.head.end_offset != self.head.end_offset {
-            return Err(anyhow!("工程已被其他会话修改，请另存为后继续"));
-        }
-        if fs::metadata(&self.file_path)?.len() <= self.head.end_offset { return Ok(false); }
-        let file = OpenOptions::new().write(true).open(&self.file_path)?;
-        file.set_len(self.head.end_offset)?;
-        file.sync_all()?;
-        Ok(true)
-    }
-
-    pub fn compact(&mut self) -> Result<ProjectStorageStats> {
-        let temporary = PathBuf::from(format!("{}.compact.tmp", self.file_path.display()));
-        let _ = fs::remove_file(&temporary);
-        let sources = self.snapshot.blobs.keys().map(|id| self.blob_source(id)).collect::<Result<Vec<_>>>()?;
-        Self::create(&temporary, CommitInput {
-            scene: self.snapshot.scene.clone(), metadata: self.snapshot.photoshop_project.clone(), revision: self.snapshot.revision,
-            compacted_at_generation: Some(self.head.generation), preview: self.read_preview()?, blob_sources: sources,
-        }, self.head.generation)?;
-        let backup = PathBuf::from(format!("{}.bak", self.file_path.display()));
-        let _ = fs::remove_file(&backup);
-        fs::rename(&self.file_path, &backup)?;
-        if let Err(error) = fs::rename(&temporary, &self.file_path) {
-            let _ = fs::rename(&backup, &self.file_path);
-            return Err(error.into());
-        }
-        let _ = fs::remove_file(&backup);
-        *self = Self::open(&self.file_path)?;
-        self.stats(false, None)
-    }
 }
 
 #[derive(Debug)]
 struct WriteLease { path: PathBuf, token: String }
+
+impl Drop for WriteLease {
+    fn drop(&mut self) { release_lease(self); }
+}
 
 #[derive(Debug)]
 struct ProjectSession {
@@ -358,8 +333,9 @@ struct ProjectSession {
     legacy_path: Option<PathBuf>,
     metadata: PhotoshopProjectMetadata,
     session_id: String,
+    // Renderer counters belong to an open session, not to the persisted snapshot.
+    renderer_revision: Option<u64>,
     recovered: bool,
-    recovery_source: Option<String>,
     read_only: bool,
     lease: Option<WriteLease>,
 }
@@ -376,7 +352,6 @@ impl ProjectService {
     pub fn current_metadata(&self) -> Option<PhotoshopProjectMetadata> { self.current.as_ref().map(|session| session.metadata.clone()) }
 
     pub fn open(&mut self, path: &Path) -> Result<ProjectCommitResult> {
-        self.close(None)?;
         let candidates = find_candidates(path)?;
         if let Some((selected, _, _)) = candidates.first() {
             return self.open_v4(path, selected);
@@ -385,10 +360,12 @@ impl ProjectService {
     }
 
     fn open_v4(&mut self, display_path: &Path, selected_path: &Path) -> Result<ProjectCommitResult> {
-        let lease = acquire_lease(display_path)?;
+        let reuse_lease = self.current.as_ref().is_some_and(|session| session.display_path == display_path && session.lease.is_some());
+        let lease = if reuse_lease { None } else { acquire_lease(display_path)? };
+        let writable = reuse_lease || lease.is_some();
         let mut physical_path = selected_path.to_path_buf();
         let mut recovery_source = None;
-        if selected_path != display_path && lease.is_some() {
+        if selected_path != display_path && writable {
             let temporary = PathBuf::from(format!("{}.{}.recover.tmp", display_path.display(), Uuid::new_v4()));
             fs::copy(selected_path, &temporary)?;
             let _ = YoiRepository::open(&temporary)?;
@@ -405,15 +382,15 @@ impl ProjectService {
         self.register_repository_assets(&repository)?;
         let session_id = Uuid::new_v4().to_string();
         let scene = repository.snapshot.scene.clone();
-        self.retain_scene_assets(&scene);
         let metadata = repository.snapshot.photoshop_project.clone();
         let recovered = repository.recovered || recovery_source.is_some();
         let generation = repository.head.generation;
-        let read_only = lease.is_none();
+        let read_only = !writable;
+        let lease = if reuse_lease { self.current.as_mut().and_then(|session| session.lease.take()) } else { lease };
         self.current = Some(ProjectSession {
             display_path: display_path.to_path_buf(), repository: Some(repository), legacy_path: None,
             metadata: metadata.clone(), session_id: session_id.clone(), recovered,
-            recovery_source: recovery_source.clone(), read_only, lease,
+            read_only, lease, renderer_revision: None,
         });
         Ok(ProjectCommitResult {
             canceled: Some(false), path: Some(display_path.to_string_lossy().into_owned()), session_id: Some(session_id),
@@ -424,12 +401,11 @@ impl ProjectService {
 
     fn open_legacy(&mut self, path: &Path) -> Result<ProjectCommitResult> {
         let (scene, metadata) = read_legacy_project(path, &self.assets)?;
-        self.retain_scene_assets(&scene);
         let session_id = Uuid::new_v4().to_string();
         self.current = Some(ProjectSession {
             display_path: path.to_path_buf(), repository: None, legacy_path: Some(path.to_path_buf()),
             metadata: metadata.clone(), session_id: session_id.clone(), recovered: false,
-            recovery_source: None, read_only: false, lease: None,
+            read_only: false, lease: None, renderer_revision: None,
         });
         Ok(ProjectCommitResult {
             canceled: Some(false), path: Some(path.to_string_lossy().into_owned()), session_id: Some(session_id),
@@ -452,7 +428,7 @@ impl ProjectService {
             None if request.reason == "autosave" => return Ok(ProjectCommitResult { skipped: Some(true), ..Default::default() }),
             None => return Ok(ProjectCommitResult { canceled: Some(false), skipped: Some(true), ..Default::default() }),
         };
-        if request.session_id.as_deref().is_some_and(|id| id != session.session_id) { return Err(anyhow!("画板会话已切换，请重新打开后保存")); }
+        if request.session_id.as_deref() != Some(session.session_id.as_str()) { return Err(anyhow!("画板会话已切换，请重新打开后保存")); }
         if session.read_only { return Err(anyhow!("当前工程由其他实例打开，请另存为")); }
         if session.repository.is_none() {
             if request.reason == "autosave" { return Ok(ProjectCommitResult { skipped: Some(true), session_id: Some(session.session_id.clone()), ..Default::default() }); }
@@ -464,6 +440,19 @@ impl ProjectService {
             result.upgraded = Some(upgraded.into());
             return Ok(result);
         }
+        let repository = session.repository.as_ref().unwrap();
+        if matches!(request.reason.as_str(), "autosave" | "explicit")
+            && request.renderer_revision.zip(session.renderer_revision).is_some_and(|(incoming, saved)| incoming <= saved) {
+            return Ok(ProjectCommitResult {
+                canceled: Some(false), path: Some(session.display_path.to_string_lossy().into_owned()), session_id: Some(session.session_id.clone()),
+                scene: Some(repository.snapshot.scene.clone()), metadata: Some(repository.snapshot.photoshop_project.clone()),
+                generation: Some(repository.head.generation), committed_revision: session.renderer_revision,
+                bytes_appended: Some(0), compaction_scheduled: Some(false), recovered: Some(session.recovered), ..Default::default()
+            });
+        }
+        if request.renderer_revision.zip(session.renderer_revision).is_some_and(|(incoming, saved)| incoming < saved) {
+            return Err(anyhow!("保存请求已过期，请重试"));
+        }
         let path = session.display_path.clone();
         let scene = prepare_scene(request.scene, &request.photoshop_project, &path);
         let repository = session.repository.as_mut().unwrap();
@@ -474,6 +463,7 @@ impl ProjectService {
             compacted_at_generation: None, preview: request.preview, blob_sources: sources,
         })?;
         session.metadata = repository.snapshot.photoshop_project.clone();
+        session.renderer_revision = request.renderer_revision;
         let compaction_scheduled = repository_needs_compaction(repository)?;
         let result = ProjectCommitResult {
             canceled: Some(false), path: Some(path.to_string_lossy().into_owned()), session_id: Some(session.session_id.clone()),
@@ -481,11 +471,11 @@ impl ProjectService {
             committed_revision: request.renderer_revision, bytes_appended: Some(output.bytes_appended),
             compaction_scheduled: Some(compaction_scheduled), recovered: Some(session.recovered), ..Default::default()
         };
-        self.retain_scene_assets(result.scene.as_ref().unwrap());
         Ok(result)
     }
 
     pub fn save_as_to(&mut self, request: ProjectCommitRequest, target: &Path, extra_sources: Vec<BlobSource>) -> Result<ProjectCommitResult> {
+        if request.session_id != self.current_session_id() { return Err(anyhow!("画板会话已切换，请重新打开后保存")); }
         let legacy_path = self.current.as_ref().and_then(|session| session.legacy_path.clone());
         let migration_root = legacy_path.as_ref().map(|_| {
             target.parent().unwrap_or_else(|| Path::new(".")).join(format!(".yoiniwa-migrate-{}", Uuid::new_v4()))
@@ -516,24 +506,21 @@ impl ProjectService {
                 compacted_at_generation: None, preview: request.preview, blob_sources: sources,
             }, 1) {
                 Ok(repository) => repository,
-                Err(error) => { release_lease(&lease); return Err(error); }
+                Err(error) => return Err(error),
             };
             if let Err(error) = install_project_file(&temporary, target, preserve_legacy) {
-                release_lease(&lease);
                 let _ = fs::remove_file(&temporary);
                 return Err(error);
             }
             let repository = YoiRepository::open(target).unwrap_or(repository);
             self.register_repository_assets(&repository)?;
-            self.retain_scene_assets(&scene);
-            if let Some(old) = self.current.take() { if let Some(lease) = old.lease { release_lease(&lease); } }
             let session_id = Uuid::new_v4().to_string();
             let generation = repository.head.generation;
             let bytes = fs::metadata(target)?.len();
             self.current = Some(ProjectSession {
                 display_path: target.to_path_buf(), repository: Some(repository), legacy_path: None,
                 metadata: metadata.clone(), session_id: session_id.clone(), recovered: false,
-                recovery_source: None, read_only: false, lease: Some(lease),
+                read_only: false, lease: Some(lease), renderer_revision: request.renderer_revision,
             });
             Ok(ProjectCommitResult {
                 canceled: Some(false), path: Some(target.to_string_lossy().into_owned()), session_id: Some(session_id),
@@ -547,33 +534,8 @@ impl ProjectService {
 
     pub fn close(&mut self, session_id: Option<&str>) -> Result<()> {
         if self.current.as_ref().is_some_and(|session| session_id.is_some_and(|id| id != session.session_id)) { return Ok(()); }
-        if let Some(session) = self.current.take() { if let Some(lease) = session.lease { release_lease(&lease); } }
-        self.assets.unregister_missing(&HashSet::new());
+        self.current.take();
         Ok(())
-    }
-
-    pub fn stats(&self, session_id: Option<&str>) -> Result<ProjectStorageStats> {
-        let session = self.require_session(session_id)?;
-        match &session.repository {
-            Some(repository) => repository.stats(session.read_only, session.recovery_source.clone()),
-            None => Ok(ProjectStorageStats {
-                generation: 0, file_bytes: 0, live_bytes: 0, stale_bytes: 0, stale_ratio: 0.0,
-                blob_count: 0, read_only: Some(session.read_only), recovered: Some(false), recovery_source: None,
-            }),
-        }
-    }
-
-    pub fn recover(&mut self, session_id: Option<&str>) -> Result<(bool, String)> {
-        let session = self.require_session_mut(session_id)?;
-        if session.read_only { return Err(anyhow!("当前工程为只读，请先另存为")); }
-        let recovered = session.repository.as_mut().map(YoiRepository::recover_tail).transpose()?.unwrap_or(false);
-        Ok((recovered, session.session_id.clone()))
-    }
-
-    pub fn compact(&mut self, session_id: Option<&str>) -> Result<Option<ProjectStorageStats>> {
-        let session = self.require_session_mut(session_id)?;
-        if session.read_only || session.repository.is_none() { return Ok(None); }
-        Ok(Some(session.repository.as_mut().unwrap().compact()?))
     }
 
     pub fn compaction_plan(&self, session_id: &str, generation: u64) -> Result<Option<CompactionPlan>> {
@@ -626,10 +588,6 @@ impl ProjectService {
             }
         }
         Ok(())
-    }
-
-    fn retain_scene_assets(&self, scene: &Scene) {
-        self.assets.unregister_missing(&scene.assets.keys().cloned().collect());
     }
 
     fn require_session(&self, id: Option<&str>) -> Result<&ProjectSession> {
@@ -690,7 +648,8 @@ fn merge_sources(target: &mut Vec<BlobSource>, extras: Vec<BlobSource>) {
 
 fn prepare_scene(mut scene: Scene, metadata: &PhotoshopProjectMetadata, path: &Path) -> Scene {
     for version in &metadata.versions { scene.assets.entry(version.preview_asset_id.clone()).or_insert_with(|| version.preview_asset.clone()); }
-    let used: HashSet<String> = scene.items.iter().filter_map(|item| item.asset_id.clone())
+    let used: HashSet<String> = scene.items.iter()
+        .flat_map(|item| [item.asset_id.clone(), item.poster_asset_id.clone()].into_iter().flatten())
         .chain(metadata.versions.iter().map(|version| version.preview_asset_id.clone())).collect();
     scene.assets.retain(|id, _| used.contains(id));
     for item in &mut scene.items { item.data_url = None; }
@@ -943,9 +902,11 @@ fn extract_legacy_version(path: &Path, version: &crate::types::PhotoshopVersionR
 
 fn find_candidates(path: &Path) -> Result<Vec<(PathBuf, u64, SystemTime)>> {
     let mut values = Vec::new();
+    let primary_file_id = YoiRepository::open(path).ok().map(|repository| repository.file_id);
     for candidate in [path.to_path_buf(), PathBuf::from(format!("{}.bak", path.display())), PathBuf::from(format!("{}.compact.tmp", path.display()))] {
         if !is_v4(&candidate) { continue; }
         if let Ok(repository) = YoiRepository::open(&candidate) {
+            if candidate != path && primary_file_id.as_ref().is_some_and(|id| id != &repository.file_id) { continue; }
             values.push((candidate.clone(), repository.head.generation, fs::metadata(candidate)?.modified().unwrap_or(UNIX_EPOCH)));
         }
     }
@@ -1132,3 +1093,158 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 { u32::from_le_bytes(bytes[offset.
 fn u64_at(bytes: &[u8], offset: usize) -> u64 { u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap()) }
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) { bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes()); }
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) { bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes()); }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use crate::types::AssetRecord;
+
+    fn asset(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "hash": id, "mimeType": "image/png", "byteLength": 1,
+            "naturalWidth": 10, "naturalHeight": 10, "originalName": format!("{id}.png")
+        })
+    }
+
+    fn empty_scene() -> Scene {
+        serde_json::from_value(serde_json::json!({
+            "format": "refcanvas", "version": 4, "name": "test", "savedAt": "",
+            "viewport": { "x": 0, "y": 0, "scale": 1 },
+            "canvas": { "background": "#000", "padding": 20, "snap": true, "includeBackgroundOnExport": true },
+            "assets": {}, "items": [], "groups": [],
+            "visualNotes": { "visible": true, "nextNumber": 1, "marks": [] }
+        })).unwrap()
+    }
+
+    #[test]
+    fn reopened_projects_accept_new_counters_but_reject_stale_sessions() {
+        let root = std::env::temp_dir().join(format!("yoiniwa-session-save-{}", Uuid::new_v4()));
+        let diagnostics = Arc::new(crate::diagnostics::DiagnosticsLog::create(&root));
+        let assets = Arc::new(crate::assets::AssetService::new(
+            root.clone(), crate::image_jobs::ImageJobQueue::new(1), diagnostics,
+        ).unwrap());
+        let mut projects = ProjectService::new(assets.clone());
+        let target = root.join("test.yoi");
+        let request = |session_id, revision, reason: &str, background: &str| {
+            let mut scene = empty_scene();
+            scene.canvas.background = background.into();
+            ProjectCommitRequest {
+                session_id, scene, photoshop_project: PhotoshopProjectMetadata::default(),
+                renderer_revision: Some(revision), preview: None, reason: reason.into(),
+            }
+        };
+        projects.save_as_to(request(None, 50, "explicit", "#000"), &target, Vec::new()).unwrap();
+        let previous_session = projects.current_session_id();
+        projects.close(previous_session.as_deref()).unwrap();
+        let opened = projects.open(&target).unwrap();
+        let session = opened.session_id;
+        assert_ne!(session, previous_session);
+
+        let saved = projects.commit(request(session.clone(), 1, "explicit", "#f00"), Vec::new()).unwrap();
+        assert!(saved.bytes_appended.unwrap() > 0);
+        assert_eq!(saved.committed_revision, Some(1));
+        assert_eq!(YoiRepository::open(&target).unwrap().snapshot.scene.canvas.background, "#f00");
+        for revision in [0, 1] {
+            let stale = projects.commit(request(session.clone(), revision, "autosave", "#000"), Vec::new()).unwrap();
+            assert_eq!(stale.bytes_appended, Some(0));
+            assert_eq!(stale.scene.unwrap().canvas.background, "#f00");
+        }
+        let saved = projects.commit(request(session.clone(), 2, "autosave", "#0f0"), Vec::new()).unwrap();
+        assert!(saved.bytes_appended.unwrap() > 0);
+        let other_target = root.join("other.yoi");
+        for stale_session in [None, previous_session] {
+            assert!(projects.commit(request(stale_session.clone(), 99, "explicit", "#000"), Vec::new()).is_err());
+            assert!(projects.save_as_to(request(stale_session, 99, "explicit", "#000"), &other_target, Vec::new()).is_err());
+        }
+        assert!(!other_target.exists());
+        assert_eq!(projects.current_session_id(), session);
+        assert_eq!(YoiRepository::open(&target).unwrap().snapshot.scene.canvas.background, "#0f0");
+        drop(projects);
+        assets.shutdown();
+        drop(assets);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn saving_does_not_prune_assets_registered_after_the_scene_snapshot() {
+        let root = std::env::temp_dir().join(format!("yoiniwa-save-assets-{}", Uuid::new_v4()));
+        let diagnostics = Arc::new(crate::diagnostics::DiagnosticsLog::create(&root));
+        let assets = Arc::new(crate::assets::AssetService::new(
+            root.clone(), crate::image_jobs::ImageJobQueue::new(1), diagnostics,
+        ).unwrap());
+        let mut projects = ProjectService::new(assets.clone());
+        let target = root.join("test.yoi");
+        let late_id = "a".repeat(64);
+        let late_asset: AssetRecord = serde_json::from_value(asset(&late_id)).unwrap();
+
+        assets.register_existing(late_asset.clone(), root.join("late.png"));
+        projects.save_as_to(ProjectCommitRequest {
+            session_id: None, scene: empty_scene(), photoshop_project: PhotoshopProjectMetadata::default(),
+            renderer_revision: Some(1), preview: None, reason: "save-as".into(),
+        }, &target, Vec::new()).unwrap();
+        assert!(assets.entry(&late_id).is_some());
+
+        assets.register_existing(late_asset, root.join("late.png"));
+        let saved = projects.commit(ProjectCommitRequest {
+            session_id: projects.current_session_id(), scene: empty_scene(), photoshop_project: PhotoshopProjectMetadata::default(),
+            renderer_revision: Some(2), preview: None, reason: "manual".into(),
+        }, Vec::new()).unwrap();
+        assert!(assets.entry(&late_id).is_some());
+
+        let mut stale_scene = empty_scene();
+        stale_scene.canvas.background = "#f00".into();
+        let stale = projects.commit(ProjectCommitRequest {
+            session_id: projects.current_session_id(), scene: stale_scene, photoshop_project: PhotoshopProjectMetadata::default(),
+            renderer_revision: Some(1), preview: None, reason: "autosave".into(),
+        }, Vec::new()).unwrap();
+        assert_eq!(stale.generation, saved.generation);
+        assert_eq!(stale.scene.unwrap().canvas.background, "#000");
+
+        drop(projects);
+        assets.shutdown();
+        drop(assets);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovery_does_not_replace_a_valid_project_with_an_unrelated_backup() {
+        let root = std::env::temp_dir().join(format!("yoiniwa-recovery-id-{}", Uuid::new_v4()));
+        let target = root.join("test.yoi");
+        let backup = PathBuf::from(format!("{}.bak", target.display()));
+        let input = |scene: Scene| CommitInput {
+            scene, metadata: PhotoshopProjectMetadata::default(), revision: Some(1),
+            compacted_at_generation: None, preview: None, blob_sources: Vec::new(),
+        };
+        YoiRepository::create(&target, input(empty_scene()), 1).unwrap();
+        YoiRepository::create(&backup, input(empty_scene()), 50).unwrap();
+
+        let candidates = find_candidates(&target).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0, target);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prepare_scene_keeps_video_poster_assets() {
+        let scene: Scene = serde_json::from_value(serde_json::json!({
+            "format": "refcanvas", "version": 4, "name": "test", "savedAt": "",
+            "viewport": { "x": 0, "y": 0, "scale": 1 },
+            "canvas": { "background": "#000", "padding": 20, "snap": true, "includeBackgroundOnExport": true },
+            "assets": { "video": asset("video"), "poster": asset("poster"), "unused": asset("unused") },
+            "items": [{
+                "id": "item", "name": "clip", "sourceType": "file", "assetId": "video", "posterAssetId": "poster",
+                "mediaKind": "video", "naturalWidth": 10, "naturalHeight": 10, "x": 0, "y": 0, "width": 10,
+                "height": 10, "rotation": 0, "flipX": false, "flipY": false, "opacity": 1, "zIndex": 0,
+                "locked": false, "crop": { "x": 0, "y": 0, "width": 10, "height": 10 }
+            }],
+            "groups": [], "visualNotes": { "visible": true, "nextNumber": 1, "marks": [] }
+        })).unwrap();
+
+        let prepared = prepare_scene(scene, &PhotoshopProjectMetadata::default(), Path::new("board.yoi"));
+        assert!(prepared.assets.contains_key("video"));
+        assert!(prepared.assets.contains_key("poster"));
+        assert!(!prepared.assets.contains_key("unused"));
+    }
+}

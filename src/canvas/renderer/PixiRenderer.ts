@@ -168,19 +168,13 @@ export class PixiRenderer {
     if (toggled) this.requestRender();
     return toggled;
   }
-  isVideoPlaying(id: string) {
-    return this.videos?.isPlaying(id) ?? false;
-  }
   getVideoTransport(id: string) {
     return this.videos?.transportState(id);
   }
   onVideoTransportChange(listener?: (state: VideoTransportState) => void) {
     this.videos?.onTransportChange(listener);
   }
-  playVideo(id: string) { return this.videos?.play(id) ?? Promise.resolve(false); }
-  pauseVideo(id: string) { return this.videos?.pause(id) ?? false; }
   beginVideoTimelineSeek(id: string) { return this.videos?.beginTimelineSeek(id) ?? false; }
-  seekVideoTimeline(id: string, time: number) { return this.videos?.seekTimeline(id, time) ?? false; }
   seekVideoTimelineFrame(id: string, frame: number) { return this.videos?.seekTimelineFrame(id, frame) ?? false; }
   endVideoTimelineSeek(id: string) { return this.videos?.endTimelineSeek(id) ?? false; }
   beginCanvasVideoJog(id: string) { return this.videos?.beginCanvasJog(id) ?? false; }

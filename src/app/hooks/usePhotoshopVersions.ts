@@ -7,10 +7,11 @@ import type {
   Scene,
 } from '../../types';
 import { renderProjectPreview } from '../projectPreview';
+import type { ProjectSaveContext } from './useProjectLifecycle';
 
 interface UsePhotoshopVersionsOptions {
   api: Window['refCanvas'];
-  metadataRef: { current: PhotoshopProjectMetadata };
+  captureProjectSave(exclusive?: boolean): ProjectSaveContext | undefined;
   onMetadataChange(metadata: PhotoshopProjectMetadata): void;
   projectSessionIdRef: { current: string | undefined };
   liveViewportRef: { current: Scene['viewport'] };
@@ -30,7 +31,7 @@ interface UsePhotoshopVersionsOptions {
 
 export function usePhotoshopVersions({
   api,
-  metadataRef,
+  captureProjectSave,
   onMetadataChange,
   projectSessionIdRef,
   liveViewportRef,
@@ -60,20 +61,24 @@ export function usePhotoshopVersions({
     if (!api || documentBlocked) return;
     const name = versionName.trim();
     if (!name) { setStatus('请输入版本名称'); return; }
+    const context = captureProjectSave(true);
+    if (!context) return;
     setSaveDialogOpen(false);
     const flushed = flushViewport(liveViewportRef.current);
     const requestId = beginOperation('photoshop', '正在保存 Photoshop 分层版本…');
     try {
       const preview = await renderProjectPreview(flushed.scene);
+      if (!context.isCurrent()) { clearOperation(requestId); return; }
       const result = await api.createPhotoshopVersion(
-        projectSessionIdRef.current,
+        context.sessionId,
         serializeProjectScene(flushed.scene),
-        metadataRef.current,
+        context.photoshopProject,
         name,
         versionNote,
         flushed.revision,
         preview,
       );
+      if (!context.isCurrent()) { clearOperation(requestId); return; }
       if (result.canceled) { clearOperation(requestId); setSaveDialogOpen(true); return; }
       if (!result.version || !result.metadata) throw new Error(result.message ?? 'Photoshop 版本保存失败');
       if (result.sessionId) projectSessionIdRef.current = result.sessionId;
@@ -84,10 +89,13 @@ export function usePhotoshopVersions({
       setVersionNote('');
       settleOperation(requestId, 'success', `已保存 Photoshop 版本 ${result.version.name}`);
     } catch (error) {
+      if (!context.isCurrent()) { clearOperation(requestId); return; }
       setSaveDialogOpen(true);
       settleOperation(requestId, 'error', `保存 Photoshop 版本失败：${String(error)}`);
+    } finally {
+      context.release();
     }
-  }, [api, beginOperation, clearOperation, documentBlocked, flushViewport, liveViewportRef, markSaved, metadataRef,
+  }, [api, beginOperation, captureProjectSave, clearOperation, documentBlocked, flushViewport, liveViewportRef, markSaved,
     onMetadataChange, projectSessionIdRef, settleOperation, setStatus, versionName, versionNote]);
 
   const openPhotoshopVersionSaveDialog = useCallback(async () => {
@@ -111,21 +119,31 @@ export function usePhotoshopVersions({
   const deletePhotoshopVersion = useCallback(async (version: PhotoshopVersionRecord) => {
     if (!api || documentBlocked
       || !window.confirm(`确定删除版本“${version.name}”？此操作会从 .yoi 中移除完整分层文件。`)) return;
-    const flushed = flushViewport(liveViewportRef.current);
-    const preview = await renderProjectPreview(flushed.scene);
-    const result = await api.deletePhotoshopVersion(
-      projectSessionIdRef.current,
-      serializeProjectScene(flushed.scene),
-      metadataRef.current,
-      version.id,
-      flushed.revision,
-      preview,
-    );
-    if (result.metadata) onMetadataChange(result.metadata);
-    if (result.sessionId) projectSessionIdRef.current = result.sessionId;
-    if (result.scene) markSaved(result.scene, result.committedRevision ?? flushed.revision);
-    setStatus(result.metadata ? `已删除版本 ${version.name}` : (result.message ?? '删除 Photoshop 版本失败'));
-  }, [api, documentBlocked, flushViewport, liveViewportRef, markSaved, metadataRef, onMetadataChange,
+    const context = captureProjectSave(true);
+    if (!context) return;
+    try {
+      const flushed = flushViewport(liveViewportRef.current);
+      const preview = await renderProjectPreview(flushed.scene);
+      if (!context.isCurrent()) return;
+      const result = await api.deletePhotoshopVersion(
+        context.sessionId,
+        serializeProjectScene(flushed.scene),
+        context.photoshopProject,
+        version.id,
+        flushed.revision,
+        preview,
+      );
+      if (!context.isCurrent()) return;
+      if (result.metadata) onMetadataChange(result.metadata);
+      if (result.sessionId) projectSessionIdRef.current = result.sessionId;
+      if (result.scene) markSaved(result.scene, result.committedRevision ?? flushed.revision);
+      setStatus(result.metadata ? `已删除版本 ${version.name}` : (result.message ?? '删除 Photoshop 版本失败'));
+    } catch (error) {
+      if (context.isCurrent()) setStatus(`删除 Photoshop 版本失败：${String(error)}`);
+    } finally {
+      context.release();
+    }
+  }, [api, captureProjectSave, documentBlocked, flushViewport, liveViewportRef, markSaved, onMetadataChange,
     projectSessionIdRef, setStatus]);
 
   const placePhotoshopVersionPreview = useCallback(async (

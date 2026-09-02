@@ -61,7 +61,6 @@ pub struct AssetService {
     user_data: PathBuf,
     cache_override: RwLock<Option<PathBuf>>,
     registry: RwLock<HashMap<String, AssetEntry>>,
-    canceled_prewarm: Mutex<HashSet<String>>,
     stats: Mutex<ImagePipelinePerformanceStats>,
     jobs: Arc<ImageJobQueue>,
     pub(crate) video: VideoJobService,
@@ -92,7 +91,6 @@ impl AssetService {
             user_data,
             cache_override: RwLock::new(cache_override),
             registry: RwLock::new(HashMap::new()),
-            canceled_prewarm: Mutex::new(HashSet::new()),
             stats: Mutex::new(ImagePipelinePerformanceStats::default()),
             jobs,
             video: VideoJobService::new(),
@@ -134,10 +132,6 @@ impl AssetService {
     pub fn register_packaged(&self, record: AssetRecord, source: PackageAssetSource) {
         let cache_path = self.asset_cache_dir().join(format!("{}{}", record.hash, extension_for_mime(&record.mime_type)));
         self.registry.write().insert(record.id.clone(), AssetEntry { record, cache_path, package_source: Some(source) });
-    }
-
-    pub fn unregister_missing(&self, active_ids: &HashSet<String>) {
-        self.registry.write().retain(|id, _| active_ids.contains(id));
     }
 
     pub fn ensure_file(&self, id: &str) -> Result<PathBuf> {
@@ -296,20 +290,32 @@ impl AssetService {
             .timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::limited(6)).build()?;
         let response = client.get(url.clone()).send()?;
         if !response.status().is_success() { return Err(anyhow!("媒体下载失败: HTTP {}", response.status())); }
-        if response.content_length().unwrap_or(0) > MAX_VIDEO_BYTES { return Err(anyhow!("网络媒体超过大小限制")); }
         let content_type = response.headers().get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_string();
-        let bytes = response.bytes()?;
-        if bytes.len() as u64 > MAX_VIDEO_BYTES { return Err(anyhow!("网络媒体超过大小限制")); }
         let mut name = url.path_segments().and_then(|mut segments| segments.next_back()).filter(|value| !value.is_empty())
             .unwrap_or("network-media").to_string();
         if media_mime(Path::new(&name)).is_none() {
             name.push_str(extension_for_mime(&content_type));
         }
+        let max_bytes = if media_mime(Path::new(&name)).is_some_and(is_video_mime) || is_video_mime(&content_type) {
+            MAX_VIDEO_BYTES
+        } else { MAX_IMAGE_BYTES };
+        if response.content_length().unwrap_or(0) > max_bytes { return Err(anyhow!("网络媒体超过大小限制")); }
+        let mut bytes = Vec::new();
+        response.take(max_bytes + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > max_bytes { return Err(anyhow!("网络媒体超过大小限制")); }
         self.register_bytes(name, &bytes, Some(raw_url.to_string()), "drop")
     }
 
     pub fn register_clipboard(&self) -> Result<Vec<ImportedImage>> {
+        #[cfg(target_os = "windows")]
+        {
+            let imported = clipboard_file_paths().into_iter()
+                .filter(|path| media_mime(path).is_some())
+                .map(|path| self.register_path(&path, "clipboard"))
+                .collect::<Result<Vec<_>>>()?;
+            if !imported.is_empty() { return Ok(imported); }
+        }
         let mut clipboard = Clipboard::new().map_err(|error| anyhow!("无法打开剪贴板: {error}"))?;
         let image = match clipboard.get_image() { Ok(image) => image, Err(_) => return Ok(Vec::new()) };
         let mut encoded = Vec::new();
@@ -341,19 +347,11 @@ impl AssetService {
         stats
     }
 
-    pub fn cancel_prewarm(&self, request_id: &str) {
-        self.canceled_prewarm.lock().insert(request_id.to_string());
-        // Drop speculative thumbnail work when import prewarm is canceled.
-        let _ = self.jobs.cancel(|key| key.starts_with("thumbnail:"));
-    }
-
     pub fn prewarm(&self, app: &AppHandle, ids: &[String], request_id: &str) -> Result<serde_json::Value> {
-        self.canceled_prewarm.lock().remove(request_id);
         let mut completed = 0;
         let mut failed = 0;
         let total = ids.len();
         for id in ids {
-            if self.canceled_prewarm.lock().contains(request_id) { break; }
             let is_video = self.entry(id).is_some_and(|entry| is_video_asset(&entry.record));
             let result = if is_video {
                 self.ensure_file(id).map(|_| Vec::new())
@@ -369,8 +367,7 @@ impl AssetService {
                 failed, last_failed_name: failed_name.as_deref(),
             });
         }
-        let canceled = self.canceled_prewarm.lock().remove(request_id);
-        Ok(serde_json::json!({ "canceled": canceled, "completed": completed, "total": total, "failed": failed, "detailFailed": 0 }))
+        Ok(serde_json::json!({ "canceled": false, "completed": completed, "total": total, "failed": failed, "detailFailed": 0 }))
     }
 
     pub fn boost_resource(&self, key: &str, priority: i32) -> usize {
@@ -442,10 +439,8 @@ impl AssetService {
             Err(error) => return immediate_result(Err(error.to_string())),
         };
         let output = self.video_poster_path(id, edge);
-        let asset_id = id.to_string();
         let width = entry.record.natural_width.max(1);
         let height = entry.record.natural_height.max(1);
-        let app = self.app.lock().clone();
         self.jobs.enqueue(format!("video-poster:{id}:{edge}"), priority, move |canceled| {
             if canceled.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("视频海报任务已取消".into());
@@ -455,7 +450,6 @@ impl AssetService {
             }
             let bytes = video_poster::video_poster_png(&source, edge, width, height).map_err(|error| error.to_string())?;
             atomic_write(&output, &bytes).map_err(|error| error.to_string())?;
-            emit_derivative_ready_app(app.as_ref(), &asset_id, "video-poster", Some(edge), None, None, None);
             Ok(bytes)
         })
     }
@@ -574,19 +568,15 @@ impl AssetService {
             Err(error) => return immediate_result(Err(error.to_string())),
         };
         let out = self.image_asset_root(id).join(format!("level-{edge}.webp"));
-        let asset_id = id.to_string();
-        let app = self.app.lock().clone();
         self.jobs.enqueue(format!("mip:{id}:{edge}"), priority, move |canceled| {
             if canceled.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("图像任务已取消".into());
             }
             if let Some(bytes) = fs::read(&out).ok().filter(|bytes| is_webp(bytes)) {
-                emit_derivative_ready_app(app.as_ref(), &asset_id, "mip", Some(edge), None, None, None);
                 return Ok(bytes);
             }
             let bytes = image_pipeline::mip_webp(&source, edge).map_err(|error| error.to_string())?;
             atomic_write(&out, &bytes).map_err(|error| error.to_string())?;
-            emit_derivative_ready_app(app.as_ref(), &asset_id, "mip", Some(edge), None, None, None);
             Ok(bytes)
         })
     }
@@ -641,22 +631,18 @@ impl AssetService {
         let out = self.image_asset_root(id).join(format!("tiles/{level}/{column}-{row}.webp"));
         let natural_width = entry.record.natural_width;
         let natural_height = entry.record.natural_height;
-        let asset_id = id.to_string();
-        let app = self.app.lock().clone();
         // Crop-only: level bytes must already exist (or be the original for level 0).
         self.jobs.enqueue(format!("tile:{id}:{level}:{column}:{row}"), priority, move |canceled| {
             if canceled.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("图像任务已取消".into());
             }
             if let Some(bytes) = fs::read(&out).ok().filter(|bytes| is_webp(bytes)) {
-                emit_derivative_ready_app(app.as_ref(), &asset_id, "tile", None, Some(level), Some(column), Some(row));
                 return Ok(bytes);
             }
             let bytes = image_pipeline::tile_from_level(
                 &level_path, natural_width, natural_height, level, column, row, 512, 1,
             ).map_err(|error| error.to_string())?;
             atomic_write(&out, &bytes).map_err(|error| error.to_string())?;
-            emit_derivative_ready_app(app.as_ref(), &asset_id, "tile", None, Some(level), Some(column), Some(row));
             Ok(bytes)
         })
     }
@@ -889,6 +875,35 @@ fn media_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn clipboard_file_paths() -> Vec<PathBuf> {
+    use windows::Win32::{
+        System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard},
+        System::Ole::CF_HDROP,
+        UI::Shell::{DragQueryFileW, HDROP},
+    };
+
+    struct ClipboardGuard;
+    impl Drop for ClipboardGuard {
+        fn drop(&mut self) { unsafe { let _ = CloseClipboard(); } }
+    }
+
+    unsafe {
+        if OpenClipboard(None).is_err() { return Vec::new(); }
+        let _guard = ClipboardGuard;
+        let Ok(handle) = GetClipboardData(CF_HDROP.0 as u32) else { return Vec::new(); };
+        let drop = HDROP(handle.0);
+        let count = DragQueryFileW(drop, u32::MAX, None);
+        (0..count).filter_map(|index| {
+            let length = DragQueryFileW(drop, index, None);
+            if length == 0 { return None; }
+            let mut buffer = vec![0; length as usize + 1];
+            let written = DragQueryFileW(drop, index, Some(&mut buffer));
+            Some(PathBuf::from(String::from_utf16_lossy(&buffer[..written as usize])))
+        }).collect()
+    }
+}
+
 fn is_video_mime(mime: &str) -> bool {
     mime.starts_with("video/")
 }
@@ -952,12 +967,22 @@ fn materialize_package_asset(source: &PackageAssetSource, target: &Path) -> Resu
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-    let mut file = File::create(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    if path.exists() { fs::remove_file(path)?; }
-    fs::rename(temporary, path)?;
-    Ok(())
+    let result = (|| {
+        let mut file = File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        let backup = path.with_extension(format!("{}.bak", Uuid::new_v4()));
+        let had_original = path.exists();
+        if had_original { fs::rename(path, &backup)?; }
+        if let Err(error) = fs::rename(&temporary, path) {
+            if had_original { let _ = fs::rename(&backup, path); }
+            return Err(error.into());
+        }
+        if had_original { let _ = fs::remove_file(backup); }
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_file(temporary); }
+    result
 }
 
 fn directory_size(path: &Path) -> Result<u64> {
@@ -995,15 +1020,6 @@ fn emit_thumbnail_ready_app(app: Option<&AppHandle>, id: &str, edge: u32) {
         128 => "thumb128", 256 => "thumb256", 512 => "thumb512", 768 => "thumb768", 1024 => "thumb1024", _ => return,
     };
     let _ = app.emit("images:thumbnail-ready", serde_json::json!({ "assetId": id, "variant": variant }));
-}
-
-fn emit_derivative_ready_app(
-    app: Option<&AppHandle>, id: &str, kind: &str, edge: Option<u32>, level: Option<u32>, column: Option<u32>, row: Option<u32>,
-) {
-    let Some(app) = app else { return; };
-    let _ = app.emit("images:derivative-ready", serde_json::json!({
-        "assetId": id, "kind": kind, "edge": edge, "level": level, "column": column, "row": row,
-    }));
 }
 
 fn cache_jobs_idle(image_active: usize, video_active: usize) -> bool {

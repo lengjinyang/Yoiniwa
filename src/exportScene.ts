@@ -20,6 +20,7 @@ export async function renderItems(
   items: SceneItem[], background?: string, groups: ImageGroup[] = [], backgroundOpacity = 1,
   visualNotes?: VisualNotesState, options: {
     margin?: number; maxSide?: number; pixelScale?: number; clipPolygon?: Array<{ x: number; y: number }>;
+    format?: 'png' | 'jpg';
   } = {},
 ): Promise<ArrayBuffer> {
   const visibility = exportVisibility(groups);
@@ -50,6 +51,7 @@ export async function renderItems(
         width: Math.max(1, Math.ceil((bounds.width + margin * 2) * scale)),
         height: Math.max(1, Math.ceil((bounds.height + margin * 2) * scale)),
         scale, offsetX: -bounds.x + margin, offsetY: -bounds.y + margin, background, backgroundOpacity,
+        format: options.format ?? 'png',
         items: [...visibleItems].sort((a, b) => a.zIndex - b.zIndex)
           .map((item) => ({ ...item, resourceUrl: imageSource(item, 'original') })),
         groups: visibleGroups,

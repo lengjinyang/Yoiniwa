@@ -3,7 +3,8 @@ import type { SceneItem, Scene, Viewport } from '../../types';
 import { isVideoItem } from '../../domain/media';
 import { imageRequestKey, IMAGE_WHOLE_TEXTURE_EDGE } from '../../shared/imagePipelineConfig';
 import { resolveCanvasMipUrl } from '../assets/AssetPathResolver';
-import { desiredImageMip, mipWithHysteresis, requiredImageEdge, type MipSelectionState } from '../textures/MipSelector';
+import { desiredImageMip, mipWithHysteresis, MIP_DOWNGRADE_DELAY_MS, requiredImageEdge, type MipSelectionState } from '../textures/MipSelector';
+import { CAMERA_SETTLE_MS } from '../runtime/CanvasConfig';
 import type { GpuTextureEntry } from '../textures/GpuTextureCache';
 import type { TextureManager } from '../textures/TextureManager';
 import { RenderObjectRegistry } from './RenderObjectRegistry';
@@ -58,6 +59,7 @@ export class ImageRenderer {
   private scene?: Scene;
   private readonly items = new Map<string, SceneItem>();
   private readonly tiles: TileRenderer;
+  private qualityRefreshTimer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly layer: Container, private readonly textures: TextureManager, private readonly requestRender: () => void) {
     layer.sortableChildren = true;
@@ -80,6 +82,9 @@ export class ImageRenderer {
     devicePixelRatio: number; cameraMoving: boolean; now: number;
   }) {
     if (!this.scene) return;
+    if (this.qualityRefreshTimer !== undefined) clearTimeout(this.qualityRefreshTimer);
+    this.qualityRefreshTimer = undefined;
+    let refreshDelay = options.cameraMoving ? CAMERA_SETTLE_MS : Infinity;
     this.objects.forEach((object, id) => {
       const item = this.items.get(id);
       if (!item || item.hidden) return;
@@ -114,6 +119,10 @@ export class ImageRenderer {
         cameraMoving: options.cameraMoving,
       });
       object.mipState = { ...selected.state, displayedMip: object.currentMip };
+      if (selected.state.downgradeSince !== undefined) {
+        refreshDelay = Math.min(refreshDelay,
+          Math.max(0, selected.state.downgradeSince + MIP_DOWNGRADE_DELAY_MS - options.now));
+      }
       const tiled = shouldUseTiledImage(item, required);
       // Keep an already displayed whole texture as the stable safety plane.
       // A direct high-zoom entry starts with a bounded 1024px plane while its
@@ -124,6 +133,14 @@ export class ImageRenderer {
       this.requestMip(object, item, wholeMip, isVisible ? 100 : 20);
       this.tiles.update(item, required, isVisible ? options.visibleBounds : options.prefetchBounds, isVisible ? 120 : 15);
     });
+    // The canvas renders on demand: settling and delayed downgrades need their
+    // own wake-up even when no input or texture upload produces another frame.
+    if (Number.isFinite(refreshDelay)) {
+      this.qualityRefreshTimer = setTimeout(() => {
+        this.qualityRefreshTimer = undefined;
+        this.requestRender();
+      }, refreshDelay);
+    }
   }
 
   /** Called immediately before Pixi renders, so a completed upload never swaps mid-frame. */
@@ -233,5 +250,10 @@ export class ImageRenderer {
     this.objects.forEach((object) => this.releaseObjectTextures(object));
   }
 
-  destroy() { this.tiles.destroy(); this.objects.destroy(); }
+  destroy() {
+    if (this.qualityRefreshTimer !== undefined) clearTimeout(this.qualityRefreshTimer);
+    this.qualityRefreshTimer = undefined;
+    this.tiles.destroy();
+    this.objects.destroy();
+  }
 }

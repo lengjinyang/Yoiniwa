@@ -64,11 +64,9 @@ function videoItem(): VideoItem {
 }
 
 describe('VideoRenderer', () => {
-  it('returns empty transport and stats until a video exists, then syncs a paused clip', async () => {
+  it('returns empty transport and stats until a video exists, then syncs a paused clip', () => {
     const textures = new TextureManager({ texture: { initSource: vi.fn() } }, () => undefined);
     const renderer = new VideoRenderer(new Container(), textures, () => undefined);
-    await expect(renderer.play('missing')).resolves.toBe(false);
-    expect(renderer.pause('missing')).toBe(false);
     expect(renderer.beginCanvasJog('missing')).toBe(false);
     expect(renderer.transportState('missing')).toBeUndefined();
     expect(renderer.stats()).toMatchObject({

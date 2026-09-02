@@ -2,6 +2,17 @@ import type { AssetRecord, BoardItem, MediaKind, SceneItem, VideoClipFields, Vid
 
 export const MEDIA_FILE_PATTERN = /\.(png|jpe?g|webp|bmp|gif|mp4|webm|mov|m4v)$/i;
 
+export function cropForResource(item: Pick<BoardItem, 'crop' | 'naturalWidth' | 'naturalHeight'>, resourceWidth: number, resourceHeight: number) {
+  const scaleX = resourceWidth / Math.max(1, item.naturalWidth);
+  const scaleY = resourceHeight / Math.max(1, item.naturalHeight);
+  return {
+    x: item.crop.x * scaleX,
+    y: item.crop.y * scaleY,
+    width: item.crop.width * scaleX,
+    height: item.crop.height * scaleY,
+  };
+}
+
 function isVideoMime(mimeType: string | undefined) {
   return Boolean(mimeType?.toLowerCase().startsWith('video/'));
 }

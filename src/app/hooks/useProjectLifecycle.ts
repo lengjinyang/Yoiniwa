@@ -33,6 +33,13 @@ interface UseProjectLifecycleOptions {
 
 type PendingProjectChange = { kind: 'open'; path?: string } | { kind: 'new' };
 
+export interface ProjectSaveContext {
+  sessionId: string | undefined;
+  photoshopProject: PhotoshopProjectMetadata;
+  isCurrent(): boolean;
+  release(): void;
+}
+
 export function useProjectLifecycle({
   api,
   history,
@@ -52,26 +59,47 @@ export function useProjectLifecycle({
   const projectSessionIdRef = useRef<string | undefined>(undefined);
   const liveViewportRef = useRef(history.scene.viewport);
   const saveInFlightRef = useRef(false);
+  const [projectChanging, setProjectChanging] = useState(false);
+  const projectChangeRef = useRef({ generation: 0, inFlight: false });
   const autosaveExecuteRef = useRef<(scene: Scene, revision: number) => Promise<void>>(async () => undefined);
   const autosaveCoordinatorRef = useRef<AutosaveCoordinator | undefined>(undefined);
   const openRef = useRef<(path?: string) => Promise<void>>(async () => undefined);
   photoshopMetadataRef.current = photoshopMetadata;
+
+  const captureProjectSave = useCallback((exclusive = false): ProjectSaveContext | undefined => {
+    if (projectChangeRef.current.inFlight || (exclusive && saveInFlightRef.current)) return undefined;
+    // User-initiated writes (including first Save As) must finish before a switch.
+    // Background autosaves remain cancelable through the generation check.
+    if (exclusive) saveInFlightRef.current = true;
+    const generation = projectChangeRef.current.generation;
+    const sessionId = projectSessionIdRef.current;
+    return {
+      sessionId,
+      photoshopProject: photoshopMetadataRef.current,
+      isCurrent: () => !projectChangeRef.current.inFlight
+        && generation === projectChangeRef.current.generation && sessionId === projectSessionIdRef.current,
+      release: () => { if (exclusive) saveInFlightRef.current = false; },
+    };
+  }, []);
 
   if (!autosaveCoordinatorRef.current) {
     autosaveCoordinatorRef.current = new AutosaveCoordinator((scene, revision) => autosaveExecuteRef.current(scene, revision));
   }
 
   autosaveExecuteRef.current = async (scene, revision) => {
+    const context = captureProjectSave();
+    if (!context?.sessionId) return;
     const preview = await renderProjectPreview(scene);
+    if (!context.isCurrent()) return;
     const result = await api?.commitProject({
-      sessionId: projectSessionIdRef.current,
+      sessionId: context.sessionId,
       scene: serializeProjectScene(scene),
-      photoshopProject: photoshopMetadataRef.current,
+      photoshopProject: context.photoshopProject,
       rendererRevision: revision,
       preview,
       reason: 'autosave',
     });
-    if (result?.scene) {
+    if (context.isCurrent() && !result?.canceled && !result?.skipped && result?.scene) {
       if (result.sessionId) projectSessionIdRef.current = result.sessionId;
       history.markSaved(result.scene, result.committedRevision ?? revision);
     }
@@ -83,10 +111,10 @@ export function useProjectLifecycle({
 
   useEffect(() => {
     const autosave = autosaveCoordinatorRef.current;
-    if (!history.dirty) autosave?.cancel();
+    if (!history.dirty || projectChanging) autosave?.cancel();
     else autosave?.schedule(history.scene, history.revision);
     return () => autosave?.cancel();
-  }, [history.dirty, history.revision, history.scene]);
+  }, [history.dirty, history.revision, history.scene, projectChanging]);
 
   useEffect(() => () => autosaveCoordinatorRef.current?.destroy(), []);
 
@@ -116,27 +144,29 @@ export function useProjectLifecycle({
 
   const save = useCallback(async (saveAs = false) => {
     if (!api || saveInFlightRef.current) return false;
-    saveInFlightRef.current = true;
+    const context = captureProjectSave(true);
+    if (!context) return false;
     const flushed = history.flushViewport(liveViewportRef.current);
     const saveRevision = flushed.revision;
     const requestId = beginOperation('save', '正在保存…');
     try {
       const preview = await renderProjectPreview(flushed.scene);
+      if (!context.isCurrent()) { clearOperation(requestId); return false; }
       const request = {
-        sessionId: projectSessionIdRef.current,
+        sessionId: context.sessionId,
         scene: serializeProjectScene(flushed.scene),
-        photoshopProject: photoshopMetadataRef.current,
+        photoshopProject: context.photoshopProject,
         rendererRevision: saveRevision,
         preview,
         reason: 'explicit' as const,
       };
-      const result = saveAs || !projectSessionIdRef.current
+      const result = saveAs || !context.sessionId
         ? await api.saveProjectAs(request)
         : await api.commitProject(request);
-      if (!result.canceled) {
+      if (!context.isCurrent()) { clearOperation(requestId); return false; }
+      if (!result.canceled && !result.skipped && result.path && result.scene) {
         if (result.sessionId) projectSessionIdRef.current = result.sessionId;
-        const savedCurrentRevision = result.scene
-          ? history.markSaved(result.scene, result.committedRevision ?? saveRevision) : false;
+        const savedCurrentRevision = history.markSaved(result.scene, result.committedRevision ?? saveRevision);
         if (result.metadata) setPhotoshopMetadata(result.metadata);
         const upgrade = result.upgraded === 'legacy-yoi' ? '（旧 .yoi 已升级并保留 legacy 备份）'
           : result.upgraded === 'refcanvas' ? '（已从 .refcanvas 升级，旧文件保留）' : '';
@@ -145,18 +175,37 @@ export function useProjectLifecycle({
         refreshRecent();
         return savedCurrentRevision;
       }
+      if (result.skipped || (!result.canceled && (!result.path || !result.scene))) {
+        settleOperation(requestId, 'error', '保存未完成：当前工程会话无效，请使用另存为');
+        return false;
+      }
       clearOperation(requestId);
       return false;
     } catch (error) {
       settleOperation(requestId, 'error', `保存失败：${String(error)}`);
       return false;
     } finally {
-      saveInFlightRef.current = false;
+      context.release();
     }
-  }, [api, beginOperation, clearOperation, history, refreshRecent, setStatus, settleOperation]);
+  }, [api, beginOperation, captureProjectSave, clearOperation, history, refreshRecent, setStatus, settleOperation]);
+
+  const beginProjectChange = useCallback(() => {
+    if (projectChangeRef.current.inFlight) return false;
+    if (saveInFlightRef.current) { setStatus('请等待保存完成后再切换画板'); return false; }
+    projectChangeRef.current.generation += 1;
+    projectChangeRef.current.inFlight = true;
+    setProjectChanging(true);
+    autosaveCoordinatorRef.current?.cancel();
+    return true;
+  }, [setStatus]);
+
+  const endProjectChange = useCallback(() => {
+    projectChangeRef.current.inFlight = false;
+    setProjectChanging(false);
+  }, []);
 
   const openNow = useCallback(async (path?: string) => {
-    if (!api) return;
+    if (!api || !beginProjectChange()) return;
     const requestId = beginOperation('open', '正在打开画板…');
     try {
       const result = await api.openProject(path);
@@ -175,8 +224,10 @@ export function useProjectLifecycle({
       else clearOperation(requestId);
     } catch (error) {
       settleOperation(requestId, 'error', `打开失败：${String(error)}`);
+    } finally {
+      endProjectChange();
     }
-  }, [api, beginOperation, clearOperation, history, refreshRecent, setSelectedGroupId,
+  }, [api, beginOperation, beginProjectChange, clearOperation, endProjectChange, history, refreshRecent, setSelectedGroupId,
     setSelectedIds, settleOperation]);
 
   const open = useCallback(async (path?: string) => {
@@ -234,19 +285,21 @@ export function useProjectLifecycle({
   }, [api, beginOperation, clearOperation, history, setSelectedGroupId, setSelectedIds, settleOperation]);
 
   const newSceneNow = useCallback(async () => {
+    if (!beginProjectChange()) return;
     try {
       await api?.closeProject(projectSessionIdRef.current);
+      projectSessionIdRef.current = undefined;
+      history.load(createScene());
+      setPhotoshopMetadata(EMPTY_PHOTOSHOP_PROJECT_METADATA);
+      setSelectedIds([]);
+      setSelectedGroupId(undefined);
+      setStatus('已新建画板');
     } catch (error) {
       setStatus(`无法关闭当前画板：${String(error)}`);
-      return;
+    } finally {
+      endProjectChange();
     }
-    projectSessionIdRef.current = undefined;
-    history.load(createScene());
-    setPhotoshopMetadata(EMPTY_PHOTOSHOP_PROJECT_METADATA);
-    setSelectedIds([]);
-    setSelectedGroupId(undefined);
-    setStatus('已新建画板');
-  }, [api, history, setSelectedGroupId, setSelectedIds, setStatus]);
+  }, [api, beginProjectChange, endProjectChange, history, setSelectedGroupId, setSelectedIds, setStatus]);
 
   const newScene = useCallback(async () => {
     beforeProjectChangeRef.current();
@@ -305,6 +358,7 @@ export function useProjectLifecycle({
     setPhotoshopMetadata,
     photoshopMetadataRef,
     projectSessionIdRef,
+    captureProjectSave,
     liveViewportRef,
     displaySceneName,
     pendingChange,

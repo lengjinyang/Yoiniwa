@@ -19,6 +19,7 @@ import {
 import type { CacheInfo } from '../../types';
 
 const COLOR_PICKER_SHORTCUT_STORAGE_KEY = 'refcanvas.colorPickerShortcut';
+const VIDEO_SOUND_STORAGE_KEY = 'refcanvas.defaultVideoSoundEnabled';
 
 interface UseAppPreferencesOptions {
   api: Window['refCanvas'];
@@ -29,6 +30,15 @@ interface UseAppPreferencesOptions {
 export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus }: UseAppPreferencesOptions) {
   const [cacheInfo, setCacheInfo] = useState<CacheInfo>();
   const [cacheChanging, setCacheChanging] = useState(false);
+  const [defaultVideoSoundEnabled, setVideoSoundState] = useState(() => {
+    try { return localStorage.getItem(VIDEO_SOUND_STORAGE_KEY) !== 'false'; }
+    catch { return true; }
+  });
+  const setDefaultVideoSoundEnabled = useCallback((enabled: boolean) => {
+    setVideoSoundState(enabled);
+    try { localStorage.setItem(VIDEO_SOUND_STORAGE_KEY, String(enabled)); }
+    catch { /* Keep the current preference when storage is unavailable. */ }
+  }, []);
   const [shortcuts, setShortcuts] = useState<ShortcutPreferences>(() => {
     try {
       const raw = localStorage.getItem(SHORTCUT_PREFERENCES_STORAGE_KEY);
@@ -184,6 +194,8 @@ export function useAppPreferences({ api, drawingCollaborationModeRef, setStatus 
   return {
     cacheInfo,
     cacheChanging,
+    defaultVideoSoundEnabled,
+    setDefaultVideoSoundEnabled,
     colorPickerShortcut,
     shortcuts,
     shortcutCaptureId,

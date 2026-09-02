@@ -261,33 +261,8 @@ export class VideoRenderer {
     return true;
   }
 
-  async play(id: string) {
-    const object = this.objects.get(id);
-    const item = this.items.get(id);
-    if (!object || !item) return false;
-    this.startIntent(object, item);
-    return object.intent;
-  }
-
-  pause(id: string) {
-    const object = this.objects.get(id);
-    const item = this.items.get(id);
-    if (!object || !item) return false;
-    this.pauseObject(object, item, true);
-    return true;
-  }
-
   beginTimelineSeek(id: string) {
     return this.beginSeekInteraction(id, 'timeline');
-  }
-
-  seekTimeline(id: string, time: number) {
-    const object = this.objects.get(id);
-    const item = this.items.get(id);
-    if (!object || !item) return false;
-    if (object.seekInteraction?.kind !== 'timeline' && !this.beginSeekInteraction(id, 'timeline')) return false;
-    this.queueInteractionSeek(object, item, time);
-    return true;
   }
 
   seekTimelineFrame(id: string, frame: number) {
@@ -428,8 +403,6 @@ export class VideoRenderer {
     this.emitTransport(id, true);
     return true;
   }
-
-  isPlaying(id: string) { return Boolean(this.objects.get(id)?.intent); }
 
   pauseAll() {
     this.objects.forEach((object, id) => this.pauseObject(object, this.items.get(id), false));

@@ -143,6 +143,8 @@ export function AppWorkspace({
       drawingCollaborationMode={windowController.drawingCollaborationMode}
       cacheInfo={preferences.cacheInfo}
       cacheChanging={preferences.cacheChanging}
+      defaultVideoSoundEnabled={preferences.defaultVideoSoundEnabled}
+      onDefaultVideoSoundChange={preferences.setDefaultVideoSoundEnabled}
       nativeAvailable={Boolean(api)}
       onClose={() => panels.setPropertiesOpen(false)}
       onBeginShortcutCapture={preferences.beginShortcutCapture}

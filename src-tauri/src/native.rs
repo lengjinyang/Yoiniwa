@@ -686,8 +686,7 @@ fn handle_helper_line(shared: &Arc<NativeShared>, diagnostics: &Arc<DiagnosticsL
         Some("KEY") if parts.len() >= 3 => if let Some(sender) = shared.pending_key.lock().remove(parts[1]) { let _ = sender.send(parts[2] == "1"); },
         Some("ZOOM") if parts.len() >= 2 => { let _ = shared.app.emit("window:native-zoom", if parts[1] == "IN" { "in" } else { "out" }); }
         Some("POINTER") if parts.len() >= 8 => emit_helper_pointer(shared, &parts),
-        Some("DONE") | Some("SKIPPED") => { let _ = shared.app.emit("window:move-finished", ()); }
-        Some("APPEARANCE_DONE") | Some("APPEARANCE_SKIPPED") => {}
+        Some("DONE") | Some("SKIPPED") | Some("APPEARANCE_DONE") | Some("APPEARANCE_SKIPPED") => {}
         Some("PICK_CRITICAL") if parts.len() >= 2 => {
             let extra = if parts[1] == "HOLD" {
                 Duration::from_millis(500)

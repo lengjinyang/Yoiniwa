@@ -1,9 +1,13 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createScene } from '../../domain/scene';
 import type { PhotoshopVersionRecord } from '../../types';
 import { usePhotoshopVersions } from './usePhotoshopVersions';
+import { renderProjectPreview } from '../projectPreview';
+
+vi.mock('../projectPreview', () => ({ renderProjectPreview: vi.fn(async () => undefined) }));
+afterEach(() => { vi.unstubAllGlobals(); });
 
 const version: PhotoshopVersionRecord = {
   id: 'version-1',
@@ -44,7 +48,7 @@ function options(api: Partial<NonNullable<Window['refCanvas']>> = {}, documentBl
   const scene = createScene();
   return {
     api: api as Window['refCanvas'],
-    metadataRef: { current: { versions: [version] } },
+    captureProjectSave: () => ({ sessionId: 'session-1', photoshopProject: { versions: [version] }, isCurrent: () => true, release: vi.fn() }),
     onMetadataChange: vi.fn(),
     projectSessionIdRef: { current: 'session-1' },
     liveViewportRef: { current: scene.viewport },
@@ -61,6 +65,35 @@ function options(api: Partial<NonNullable<Window['refCanvas']>> = {}, documentBl
 }
 
 describe('usePhotoshopVersions', () => {
+  it('discards version deletion previews and responses after a project switch', async () => {
+    vi.stubGlobal('window', { confirm: () => true });
+    for (const stage of ['preview', 'commit']) {
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => { release = resolve; });
+      const deletePhotoshopVersion = vi.fn(async () => {
+        if (stage === 'commit') await pending;
+        return { sessionId: 'session-1', scene: createScene(), metadata: { versions: [] } };
+      });
+      const hookOptions = options({ deletePhotoshopVersion });
+      let current = true;
+      const context = { ...hookOptions.captureProjectSave(), isCurrent: () => current };
+      hookOptions.captureProjectSave = () => context;
+      if (stage === 'preview') vi.mocked(renderProjectPreview).mockReturnValueOnce(pending.then(() => undefined));
+      const controller = renderVersions(hookOptions);
+      const deleting = controller.deletePhotoshopVersion(version);
+      await Promise.resolve();
+      current = false;
+      hookOptions.projectSessionIdRef.current = 'session-2';
+      release();
+      await deleting;
+      expect(deletePhotoshopVersion).toHaveBeenCalledTimes(stage === 'preview' ? 0 : 1);
+      expect(hookOptions.markSaved).not.toHaveBeenCalled();
+      expect(hookOptions.onMetadataChange).not.toHaveBeenCalled();
+      expect(hookOptions.projectSessionIdRef.current).toBe('session-2');
+      expect(context.release).toHaveBeenCalledOnce();
+    }
+  });
+
   it('opens a stored version through the current project session', async () => {
     const openPhotoshopVersion = vi.fn(async () => ({ ok: true, status: 'completed' as const, message: 'opened' }));
     const hookOptions = options({ openPhotoshopVersion });

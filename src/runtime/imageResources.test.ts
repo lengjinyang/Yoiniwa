@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { boundedPreviewSize, chooseImageVariant, cropForResource, deleteCacheEntryIfCurrent, imageSource, imageVariantCandidates, releaseCacheEntryReference, selectUnusedEvictions } from './imageResources';
+import { boundedPreviewSize, chooseImageVariant, deleteCacheEntryIfCurrent, imageSource, imageVariantCandidates, releaseCacheEntryReference, selectUnusedEvictions } from './imageResources';
+import { cropForResource } from '../domain/media';
 
 describe('image resource levels', () => {
   it('uses derived resources only for distant images', () => {

@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  ImagePrewarmProgress, ImageThumbnailReady, ImageDerivativeReady, NativePointerInput, RefCanvasAPI,
+  ImagePrewarmProgress, ImageThumbnailReady, NativePointerInput, RefCanvasAPI,
   VideoFrameTimingIndex, VideoPreparationProgress, VideoProxyFailed, VideoProxyReady,
 } from '../types';
 import { createPhotoshopSyncQueue } from '../shared/photoshopSyncQueue';
@@ -9,12 +9,10 @@ import { createPhotoshopSyncQueue } from '../shared/photoshopSyncQueue';
 type EventPayloads = {
   'images:prewarm-progress': ImagePrewarmProgress;
   'images:thumbnail-ready': ImageThumbnailReady;
-  'images:derivative-ready': ImageDerivativeReady;
   'videos:proxy-ready': VideoProxyReady;
   'videos:proxy-failed': VideoProxyFailed;
   'videos:preparation-progress': VideoPreparationProgress;
   'scene:external-open': string;
-  'window:move-finished': void;
   'window:close-requested': void;
   'window:click-through-disabled': void;
   'window:toggle-collaboration-requested': void;
@@ -105,10 +103,8 @@ export function installTauriRefCanvasApi() {
     startImageDrag: (assetIds) => { void command('images_start_native_drag', { assetIds }); },
     prewarmImages: (ids, requestId) => command('images_prewarm', { ids, requestId }),
     boostImageResource: (key, priority) => { void command('images_boost_resource', { key, priority }); },
-    cancelPrewarmImages: (requestId) => { void command('images_cancel_prewarm', { requestId }); },
     onPrewarmProgress: (callback) => onEvent('images:prewarm-progress', callback),
     onThumbnailReady: (callback) => onEvent('images:thumbnail-ready', callback),
-    onDerivativeReady: (callback) => onEvent('images:derivative-ready', callback),
     onFilesDropped,
     pathForFile: (file) => (file as File & { path?: string }).path,
     openProject: (path) => command('project_open', { path }),
@@ -119,9 +115,6 @@ export function installTauriRefCanvasApi() {
       request: { ...request, preview: request.preview ? bytes(request.preview) : undefined },
     }),
     closeProject: (sessionId) => command('project_close', { sessionId }),
-    compactProject: (sessionId) => command('project_compact', { sessionId }),
-    projectStats: (sessionId) => command('project_stats', { sessionId }),
-    recoverProject: (sessionId) => command('project_recover', { sessionId }),
     consumeStartupPath: () => command('scene_startup_path'),
     onExternalOpen: (callback) => onEvent('scene:external-open', callback),
     importScene: () => command('scene_import'),
@@ -135,11 +128,9 @@ export function installTauriRefCanvasApi() {
     clearCache: () => command('cache_clear'),
     getImagePerformanceStats: () => command('images_performance_stats'),
     sampleImagePixel: (assetId, x, y) => command('images_sample_pixel', { assetId, x, y }),
-    recordManualWheelSession: (payload) => command('performance_record_manual_wheel', { payload }),
     writeLogEntries: (entries) => command('logs_write', { entries }),
     openLogsFolder: () => command('logs_open_folder'),
     copyDiagnostics: () => command('logs_copy_diagnostics'),
-    recentLogProblems: (limit) => command('logs_recent_problems', { limit }),
     exportImage: (data, suggestedName) => rawCommand('image_export', data, { 'x-yoiniwa-name': encodedHeader(suggestedName) }),
     exportOriginalImages: (items) => command('image_export_originals', { items }),
     copyImage: (data) => rawCommand('image_copy', data),
@@ -149,7 +140,6 @@ export function installTauriRefCanvasApi() {
       color,
       returnFocus: returnFocus ?? false,
     }),
-    placeRenderedInPhotoshop: (data, name) => rawCommand('photoshop_place_rendered', data, { 'x-yoiniwa-name': encodedHeader(name) }),
     placeRenderedLayersInPhotoshop: (images) => rawCommand('photoshop_place_rendered_layers', renderedLayersFrame(images)),
     openRenderedInPhotoshop: (data, name) => rawCommand('photoshop_open_rendered', data, { 'x-yoiniwa-name': encodedHeader(name) }),
     getPhotoshopDocumentInfo: () => command('photoshop_get_document_info'),
@@ -181,7 +171,6 @@ export function installTauriRefCanvasApi() {
     beginWindowMove: () => { void command('window_move_start'); },
     updateWindowMove: () => { void command('window_move_update'); },
     endWindowMove: () => { void command('window_move_end'); },
-    onWindowMoveFinished: (callback) => onEvent('window:move-finished', callback),
     close: () => { void command('window_close'); },
     respondToClose: (shouldClose) => { void command('window_close_response', { shouldClose }); },
     onCloseRequested: (callback) => onEvent('window:close-requested', callback),

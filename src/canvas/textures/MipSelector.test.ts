@@ -10,9 +10,10 @@ describe('V2 mip selection', () => {
     expect(desiredImageMip(item, { x: 0, y: 0, scale: 1 }, 2)).toBe(1024);
   });
 
-  it('holds the current mip while the camera moves, then upgrades and delays downgrade', () => {
-    expect(mipWithHysteresis({ desired: 2048, required: 1300, state: { displayedMip: 1024 }, now: 0, cameraMoving: true }).mip).toBe(1024);
+  it('upgrades immediately during motion and delays downgrades until rest', () => {
+    expect(mipWithHysteresis({ desired: 2048, required: 1300, state: { displayedMip: 1024 }, now: 0, cameraMoving: true }).mip).toBe(2048);
     expect(mipWithHysteresis({ desired: 2048, required: 1300, state: { displayedMip: 1024 }, now: 0, cameraMoving: false }).mip).toBe(2048);
+    expect(mipWithHysteresis({ desired: 512, required: 400, state: { displayedMip: 2048 }, now: 0, cameraMoving: true }).mip).toBe(2048);
     const waiting = mipWithHysteresis({ desired: 512, required: 400, state: { displayedMip: 1024 }, now: 0, cameraMoving: false });
     expect(waiting.mip).toBe(1024);
     expect(mipWithHysteresis({ desired: 512, required: 400, state: waiting.state, now: 301, cameraMoving: false }).mip).toBe(512);

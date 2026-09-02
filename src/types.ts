@@ -124,18 +124,6 @@ interface ProjectOpenResult extends ProjectCommitResult {
   readOnly?: boolean;
 }
 
-interface ProjectStorageStats {
-  generation: number;
-  fileBytes: number;
-  liveBytes: number;
-  staleBytes: number;
-  staleRatio: number;
-  blobCount: number;
-  readOnly?: boolean;
-  recovered?: boolean;
-  recoverySource?: string;
-}
-
 export interface RecentScene { path: string; name: string; openedAt: string; assetIds?: string[] }
 
 export interface AppUpdateInfo {
@@ -183,15 +171,6 @@ export interface ImagePrewarmProgress {
 export interface ImageThumbnailReady {
   assetId: string;
   variant: 'thumb128' | 'thumb256' | 'thumb512' | 'thumb768' | 'thumb1024';
-}
-
-export interface ImageDerivativeReady {
-  assetId: string;
-  kind: 'mip' | 'tile' | 'thumb' | 'video-poster';
-  edge?: number;
-  level?: number;
-  column?: number;
-  row?: number;
 }
 
 export interface WindowState {
@@ -272,19 +251,14 @@ export interface RefCanvasAPI {
   startImageDrag(assetIds: string[]): void;
   prewarmImages(ids: string[], requestId: string): Promise<{ canceled: boolean; completed: number; total: number; failed: number; detailFailed?: number }>;
   boostImageResource(key: string, priority: number): void;
-  cancelPrewarmImages(requestId: string): void;
   onPrewarmProgress(callback: (progress: ImagePrewarmProgress) => void): () => void;
   onThumbnailReady(callback: (thumbnail: ImageThumbnailReady) => void): () => void;
-  onDerivativeReady?(callback: (derivative: ImageDerivativeReady) => void): () => void;
   onFilesDropped(callback: (drop: { paths: string[]; clientX: number; clientY: number }) => void): () => void;
   pathForFile(file: File): string | undefined;
   openProject(path?: string): Promise<ProjectOpenResult>;
   commitProject(request: ProjectCommitRequest): Promise<ProjectCommitResult>;
   saveProjectAs(request: ProjectCommitRequest): Promise<ProjectCommitResult>;
   closeProject(sessionId?: string): Promise<void>;
-  compactProject(sessionId?: string): Promise<ProjectStorageStats | { skipped: true; message?: string }>;
-  projectStats(sessionId?: string): Promise<ProjectStorageStats>;
-  recoverProject(sessionId?: string): Promise<{ recovered: boolean; sessionId: string }>;
   consumeStartupPath(): Promise<string | null>;
   onExternalOpen(callback: (path: string) => void): () => void;
   importScene(): Promise<{ canceled: boolean; path?: string; scene?: Scene }>;
@@ -298,11 +272,9 @@ export interface RefCanvasAPI {
   clearCache(): Promise<CacheInfo>;
   getImagePerformanceStats(): Promise<ImagePipelinePerformanceStats>;
   sampleImagePixel(assetId: string, x: number, y: number): Promise<{ r: number; g: number; b: number; a: number }>;
-  recordManualWheelSession(payload: unknown): Promise<{ path: string }>;
   writeLogEntries(entries: Array<{ level: string; event: string; data?: unknown }>): Promise<void>;
   openLogsFolder(): Promise<{ path: string }>;
   copyDiagnostics(): Promise<{ sessionId: string; path?: string; mirrorPath?: string; problemCount?: number }>;
-  recentLogProblems?(limit?: number): Promise<{ sessionId: string; path: string; mirrorPath?: string; problems: unknown[] }>;
   exportImage(data: ArrayBuffer, suggestedName: string): Promise<{ canceled: boolean; path?: string }>;
   exportOriginalImages(items: Array<{ assetId: string; suggestedName: string }>): Promise<{
     canceled: boolean; path?: string; count?: number;
@@ -314,7 +286,6 @@ export interface RefCanvasAPI {
     color: Pick<PickedColor, 'r' | 'g' | 'b' | 'hex'>,
     returnFocus?: boolean,
   ): Promise<PhotoshopColorSyncResult>;
-  placeRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
   placeRenderedLayersInPhotoshop(images: Array<{ data: ArrayBuffer; name: string }>): Promise<PhotoshopDocumentResult>;
   openRenderedInPhotoshop(data: ArrayBuffer, name: string): Promise<PhotoshopDocumentResult>;
   getPhotoshopDocumentInfo(): Promise<PhotoshopDocumentInfoResult>;
@@ -340,7 +311,6 @@ export interface RefCanvasAPI {
   beginWindowMove(): void;
   updateWindowMove(): void;
   endWindowMove(): void;
-  onWindowMoveFinished(callback: () => void): () => void;
   close(): void;
   respondToClose(shouldClose: boolean): void;
   onCloseRequested(callback: () => void): () => void;

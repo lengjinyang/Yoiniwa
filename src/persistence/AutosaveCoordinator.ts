@@ -13,7 +13,7 @@ export class AutosaveCoordinator {
     const snapshot = serializeProjectScene(scene);
     this.timer = globalThis.setTimeout(() => {
       this.timer = undefined;
-      if (generation === this.generation) void this.save(snapshot, revision);
+      if (generation === this.generation) void this.save(snapshot, revision).catch(() => undefined);
     }, this.delayMs);
   }
   cancel() { this.generation += 1; this.cancelTimer(); }

@@ -2,11 +2,12 @@ import { useCallback } from 'react';
 import type { ImportedImage, PhotoshopProjectMetadata, PhotoshopVersionRecord, Scene } from '../../types';
 import { usePhotoshopVersions } from './usePhotoshopVersions';
 import { useVersionComparison } from './useVersionComparison';
+import type { ProjectSaveContext } from './useProjectLifecycle';
 
 interface UsePhotoshopVersionControllerOptions {
   api: Window['refCanvas'];
   metadata: PhotoshopProjectMetadata;
-  metadataRef: { current: PhotoshopProjectMetadata };
+  captureProjectSave(exclusive?: boolean): ProjectSaveContext | undefined;
   onMetadataChange(metadata: PhotoshopProjectMetadata): void;
   projectSessionIdRef: { current: string | undefined };
   liveViewportRef: { current: Scene['viewport'] };
@@ -33,7 +34,7 @@ export function usePhotoshopVersionController(options: UsePhotoshopVersionContro
   });
   const versions = usePhotoshopVersions({
     api: options.api,
-    metadataRef: options.metadataRef,
+    captureProjectSave: options.captureProjectSave,
     onMetadataChange: options.onMetadataChange,
     projectSessionIdRef: options.projectSessionIdRef,
     liveViewportRef: options.liveViewportRef,

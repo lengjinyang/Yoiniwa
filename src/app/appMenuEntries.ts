@@ -3,7 +3,7 @@ import type { LayoutAction } from '../domain/layout';
 import type { ImageGroup, SceneItem, RecentScene, Scene, WindowState } from '../types';
 import { shortcutDisplayName, type ShortcutPreferences } from './keyboardShortcuts';
 import { imageGrayscaleContrast, setImageGrayscaleContrast } from '../domain/imageAdjustments';
-import { appCommand, type AppCommandRegistry } from './AppCommand';
+import type { AppCommandRegistry } from './AppCommand';
 import { isVideoItem } from '../domain/media';
 
 interface BuildAppMenuEntriesOptions {
@@ -105,7 +105,6 @@ export function buildAppMenuEntries({
 }: BuildAppMenuEntriesOptions): ContextMenuEntry[] {
   const displayShortcut = (id: keyof ShortcutPreferences) => shortcutDisplayName(shortcuts[id]);
   const hasSelection = selection.selectedIds.length > 0;
-  const hasImageSelection = selection.selectedIds.length > 0;
   const selectedGroupedImageIds = selection.selectedIds.filter((id) => scene.groups.some((group) =>
     group.members.some((member) => member.type === 'image' && member.id === id)));
   const joinGroupEntries: ContextMenuEntry[] = scene.groups.map((group) => {
@@ -119,14 +118,14 @@ export function buildAppMenuEntries({
       action: () => groups.addImages(selection.selectedIds, group.id),
     };
   });
-  const undoCommand = appCommand(commands, 'edit.undo');
-  const redoCommand = appCommand(commands, 'edit.redo');
-  const copyCommand = appCommand(commands, 'edit.copy');
-  const cutCommand = appCommand(commands, 'edit.cut');
-  const pasteCommand = appCommand(commands, 'edit.paste');
-  const duplicateCommand = appCommand(commands, 'edit.duplicate');
-  const deleteCommand = appCommand(commands, 'edit.delete');
-  const createGroupCommand = appCommand(commands, 'group.create');
+  const undoCommand = commands['edit.undo'];
+  const redoCommand = commands['edit.redo'];
+  const copyCommand = commands['edit.copy'];
+  const cutCommand = commands['edit.cut'];
+  const pasteCommand = commands['edit.paste'];
+  const duplicateCommand = commands['edit.duplicate'];
+  const deleteCommand = commands['edit.delete'];
+  const createGroupCommand = commands['group.create'];
   const grayscale = Boolean(selection.primary?.grayscale);
   const grayscaleContrast = selection.primary ? imageGrayscaleContrast(selection.primary) : 1;
   const primaryIsVideo = selection.primary ? isVideoItem(selection.primary, scene.assets) : false;
@@ -171,9 +170,9 @@ export function buildAppMenuEntries({
     },
     {
       type: 'item', label: '分组', disabled: !selection.selectedGroup && !createGroupCommand.enabled
-        && selectedGroupedImageIds.length === 0 && (!hasImageSelection || joinGroupEntries.length === 0), children: [
+        && selectedGroupedImageIds.length === 0 && (!hasSelection || joinGroupEntries.length === 0), children: [
         { type: 'item', label: '创建分组框', shortcut: displayShortcut('createGroup'), disabled: !createGroupCommand.enabled, action: groups.create },
-        { type: 'item', label: '加入组', disabled: !hasImageSelection || joinGroupEntries.length === 0, children: joinGroupEntries },
+        { type: 'item', label: '加入组', disabled: !hasSelection || joinGroupEntries.length === 0, children: joinGroupEntries },
         { type: 'item', label: '将选中图片移出组', shortcut: displayShortcut('detachGroup'), disabled: selectedGroupedImageIds.length === 0, action: groups.detachSelected },
         { type: 'item', label: '重命名…', shortcut: displayShortcut('renameGroup'), disabled: !selection.selectedGroup, action: groups.renameSelected },
         { type: 'separator' },
@@ -185,7 +184,7 @@ export function buildAppMenuEntries({
       ],
     },
     {
-      type: 'item', label: '图片', disabled: !hasImageSelection, children: hasImageSelection ? [
+      type: 'item', label: '图片', disabled: !hasSelection, children: hasSelection ? [
         { type: 'item', label: '加入组', disabled: joinGroupEntries.length === 0, children: joinGroupEntries },
         { type: 'item', label: '从组中移出', shortcut: displayShortcut('detachGroup'), disabled: selectedGroupedImageIds.length === 0, action: groups.detachSelected },
         { type: 'separator' },
@@ -229,9 +228,9 @@ export function buildAppMenuEntries({
     },
     {
       type: 'item', label: '传输', children: [
-        { type: 'item', label: '将选中内容作为图层发送', disabled: !hasImageSelection || photoshop.blocked,
+        { type: 'item', label: '将选中内容作为图层发送', disabled: !hasSelection || photoshop.blocked,
           action: () => photoshop.sendSelected('layer') },
-        { type: 'item', label: '将选中内容作为新图像打开', disabled: !hasImageSelection || photoshop.blocked,
+        { type: 'item', label: '将选中内容作为新图像打开', disabled: !hasSelection || photoshop.blocked,
           action: () => photoshop.sendSelected('image') },
         { type: 'separator' },
         { type: 'item', label: '保存当前 Photoshop 版本…', disabled: photoshop.blocked, action: photoshop.saveVersion },
@@ -283,7 +282,7 @@ export function buildAppMenuEntries({
         { type: 'item', label: '画板为 PNG…', shortcut: displayShortcut('exportBoard'), action: () => exportActions.render(false, false, 'png') },
         { type: 'item', label: '画板为 JPEG…', action: () => exportActions.render(false, false, 'jpg') },
         { type: 'item', label: '导出选中…', shortcut: displayShortcut('exportSelected'), disabled: !hasSelection, action: () => exportActions.render(true) },
-        { type: 'item', label: '导出选中原图…', disabled: !hasImageSelection, action: exportActions.originals },
+        { type: 'item', label: '导出选中原图…', disabled: !hasSelection, action: exportActions.originals },
         { type: 'item', label: '复制合成图', action: () => exportActions.render(hasSelection, true) },
         { type: 'item', label: '复制选中原图', disabled: selection.selectedItems.length !== 1, action: exportActions.copyOriginal },
       ],

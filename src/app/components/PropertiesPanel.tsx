@@ -16,6 +16,8 @@ interface PropertiesPanelProps {
   drawingCollaborationMode: boolean;
   cacheInfo?: CacheInfo;
   cacheChanging: boolean;
+  defaultVideoSoundEnabled: boolean;
+  onDefaultVideoSoundChange(enabled: boolean): void;
   nativeAvailable: boolean;
   onClose(): void;
   onBeginShortcutCapture(id: ShortcutId, label: string): void;
@@ -36,6 +38,7 @@ export function PropertiesPanel({
   onCaptureShortcut, onCaptureShortcutKeyUp,
   onShortcutCaptureBlur, onResetShortcuts, onChooseCacheLocation, onResetCacheLocation,
   onClearCache, onOpenLogsFolder, onCopyDiagnostics,
+  defaultVideoSoundEnabled, onDefaultVideoSoundChange,
 }: PropertiesPanelProps) {
   const [confirmingCacheClear, setConfirmingCacheClear] = useState(false);
   if (!open) return null;
@@ -44,6 +47,17 @@ export function PropertiesPanel({
       setConfirmingCacheClear(false);
       onClose();
     }}><UiIcon name="close" /></button></div>
+    <section>
+      <h3>视频播放</h3>
+      <div className="shortcut-row">
+        <span>默认声音</span>
+        <button type="button" role="switch" aria-label="视频默认声音" aria-checked={defaultVideoSoundEnabled}
+          onClick={() => onDefaultVideoSoundChange(!defaultVideoSoundEnabled)}>
+          {defaultVideoSoundEnabled ? '开启' : '关闭'}
+        </button>
+      </div>
+      <div className="cache-notice">用于新导入的视频。已有视频保留各自的声音设置，也可在播放栏单独切换。</div>
+    </section>
     <section>
       <h3>快捷键</h3>
       <div className="shortcut-list">

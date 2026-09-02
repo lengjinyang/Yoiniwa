@@ -10,6 +10,7 @@ use tauri_plugin_updater::UpdaterExt;
 use uuid::Uuid;
 
 use crate::{
+    assets::atomic_write,
     image_pipeline,
     photoshop::{automation_error, blocked_result},
     photoshop_versions::{self, CreatePhotoshopVersion},
@@ -18,12 +19,17 @@ use crate::{
     types::{
         CacheInfo, ImportedImage, PhotoshopColorSyncResult, PhotoshopDocumentResult,
         PhotoshopProjectMetadata, PickedColor, ProjectCommitRequest,
-        ProjectCommitResult, ProjectStorageStats, RecentScene, Scene, WindowState, WindowStatePatch,
+        ProjectCommitResult, RecentScene, Scene, WindowState, WindowStatePatch,
     },
 };
 
 type CommandResult<T> = std::result::Result<T, String>;
 fn command_result<T>(value: Result<T>) -> CommandResult<T> { value.map_err(|error| error.to_string()) }
+fn update_recent(state: &AppState, path: &Path, asset_ids: Vec<String>) {
+    if let Err(error) = state.add_recent(path, asset_ids) {
+        state.diagnostics.warn("recent.update-failed", serde_json::json!({ "path": path, "message": error.to_string() }));
+    }
+}
 
 #[tauri::command]
 pub async fn app_update_check(app: AppHandle) -> CommandResult<Value> {
@@ -195,8 +201,6 @@ pub async fn images_prewarm(app: AppHandle, state: State<'_, AppState>, ids: Vec
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn images_cancel_prewarm(state: State<'_, AppState>, request_id: String) { state.assets.cancel_prewarm(&request_id); }
-#[tauri::command(rename_all = "camelCase")]
 pub fn images_boost_resource(state: State<'_, AppState>, key: String, priority: f64) {
     let _ = state.assets.boost_resource(&key, priority.round() as i32);
 }
@@ -219,7 +223,7 @@ pub fn project_open(state: State<'_, AppState>, path: Option<String>) -> Command
     command_result((|| {
         let result = state.project.lock().open(&selected)?;
         let asset_ids = result.scene.as_ref().map(|scene| scene.assets.keys().cloned().collect()).unwrap_or_default();
-        state.add_recent(&selected, asset_ids)?; Ok(result)
+        update_recent(&state, &selected, asset_ids); Ok(result)
     })())
 }
 
@@ -227,7 +231,7 @@ pub fn project_open(state: State<'_, AppState>, path: Option<String>) -> Command
 pub fn project_commit(app: AppHandle, state: State<'_, AppState>, request: ProjectCommitRequest) -> CommandResult<ProjectCommitResult> {
     let result = command_result((|| {
         let result = state.project.lock().commit(request, Vec::new())?;
-        if let Some(path) = result.path.as_ref() { state.add_recent(Path::new(path), result.scene.as_ref().map(|scene| scene.assets.keys().cloned().collect()).unwrap_or_default())?; }
+        if let Some(path) = result.path.as_ref() { update_recent(&state, Path::new(path), result.scene.as_ref().map(|scene| scene.assets.keys().cloned().collect()).unwrap_or_default()); }
         Ok(result)
     })())?;
     schedule_background_compaction(&app, &result);
@@ -243,22 +247,12 @@ pub fn project_save_as(state: State<'_, AppState>, request: ProjectCommitRequest
     let target = if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("yoi")) { path } else { path.with_extension("yoi") };
     command_result((|| {
         let result = state.project.lock().save_as_to(request, &target, Vec::new())?;
-        state.add_recent(&target, result.scene.as_ref().map(|scene| scene.assets.keys().cloned().collect()).unwrap_or_default())?; Ok(result)
+        update_recent(&state, &target, result.scene.as_ref().map(|scene| scene.assets.keys().cloned().collect()).unwrap_or_default()); Ok(result)
     })())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn project_close(state: State<'_, AppState>, session_id: Option<String>) -> CommandResult<()> { command_result(state.project.lock().close(session_id.as_deref())) }
-#[tauri::command(rename_all = "camelCase")]
-pub fn project_compact(state: State<'_, AppState>, session_id: Option<String>) -> CommandResult<Value> {
-    command_result(state.project.lock().compact(session_id.as_deref()).map(|result| result.map_or_else(|| serde_json::json!({ "skipped": true }), |stats| serde_json::to_value(stats).unwrap())))
-}
-#[tauri::command(rename_all = "camelCase")]
-pub fn project_stats(state: State<'_, AppState>, session_id: Option<String>) -> CommandResult<ProjectStorageStats> { command_result(state.project.lock().stats(session_id.as_deref())) }
-#[tauri::command(rename_all = "camelCase")]
-pub fn project_recover(state: State<'_, AppState>, session_id: Option<String>) -> CommandResult<Value> {
-    command_result(state.project.lock().recover(session_id.as_deref()).map(|(recovered, session_id)| serde_json::json!({ "recovered": recovered, "sessionId": session_id })))
-}
 
 #[tauri::command]
 pub fn scene_startup_path(state: State<'_, AppState>) -> Option<String> { state.take_startup_path() }
@@ -292,7 +286,7 @@ pub fn image_export(request: Request<'_>) -> CommandResult<Value> {
     let suggested_name = decoded_header(&request, "x-yoiniwa-name")?;
     let extension = Path::new(&suggested_name).extension().and_then(|value| value.to_str()).unwrap_or("png");
     let Some(path) = rfd::FileDialog::new().set_file_name(&suggested_name).add_filter("图片", &[extension]).save_file() else { return Ok(serde_json::json!({ "canceled": true })); };
-    command_result(fs::write(&path, data).map(|_| serde_json::json!({ "canceled": false, "path": path })).map_err(Into::into))
+    command_result(atomic_write(&path, data).map(|_| serde_json::json!({ "canceled": false, "path": path })))
 }
 #[tauri::command]
 pub fn image_copy(request: Request<'_>) -> CommandResult<()> {
@@ -430,11 +424,6 @@ pub async fn photoshop_set_foreground(
 }
 
 #[tauri::command]
-pub fn photoshop_place_rendered(state: State<'_, AppState>, request: Request<'_>) -> CommandResult<PhotoshopDocumentResult> {
-    let name = decoded_header(&request, "x-yoiniwa-name")?;
-    Ok(state.photoshop.rendered_command(raw_body(&request)?, &name, "place-raster", state.native.document_blocked(), &state.temp_dir))
-}
-#[tauri::command]
 pub fn photoshop_place_rendered_layers(state: State<'_, AppState>, request: Request<'_>) -> CommandResult<PhotoshopDocumentResult> {
     let images = decode_rendered_layers(raw_body(&request)?)?;
     Ok(state.photoshop.rendered_layers(&images, state.native.document_blocked(), &state.temp_dir))
@@ -506,13 +495,16 @@ pub fn photoshop_open_version(state: State<'_, AppState>, session_id: Option<Str
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::too_many_arguments)]
 pub fn photoshop_delete_version(
-    app: AppHandle, state: State<'_, AppState>, session_id: Option<String>, scene: Scene, mut metadata: PhotoshopProjectMetadata,
+    app: AppHandle, state: State<'_, AppState>, session_id: Option<String>, scene: Scene, metadata: PhotoshopProjectMetadata,
     version_id: String, revision: Option<u64>, preview: Option<Vec<u8>>,
 ) -> CommandResult<ProjectCommitResult> {
     if state.native.document_blocked() { return Ok(ProjectCommitResult { canceled: Some(false), message: Some("无焦点取色模式期间不能删除 Photoshop 版本，请先退出协作模式或解除锁定置顶".into()), ..Default::default() }); }
+    let mut project = state.project.lock();
+    let mut metadata = project.current_metadata().unwrap_or(metadata);
     if !metadata.versions.iter().any(|version| version.id == version_id) { return Ok(ProjectCommitResult { canceled: Some(false), message: Some("找不到 Photoshop 版本".into()), ..Default::default() }); }
     metadata.versions.retain(|version| version.id != version_id);
-    let result = command_result(state.project.lock().commit(ProjectCommitRequest { session_id, scene, photoshop_project: metadata, renderer_revision: revision, preview, reason: "version-delete".into() }, Vec::new()))?;
+    let result = command_result(project.commit(ProjectCommitRequest { session_id, scene, photoshop_project: metadata, renderer_revision: revision, preview, reason: "version-delete".into() }, Vec::new()))?;
+    drop(project);
     schedule_background_compaction(&app, &result);
     Ok(result)
 }
@@ -590,20 +582,6 @@ pub fn logs_copy_diagnostics(state: State<'_, AppState>) -> CommandResult<Value>
         }))
     })())
 }
-#[tauri::command]
-pub fn logs_recent_problems(state: State<'_, AppState>, limit: Option<usize>) -> Value {
-    serde_json::json!({
-        "sessionId": state.session_id,
-        "path": state.log_path(),
-        "mirrorPath": state.diagnostics.mirror_path(),
-        "problems": state.diagnostics.recent_problems(limit.unwrap_or(50).clamp(1, 200)),
-    })
-}
-#[tauri::command(rename_all = "camelCase")]
-pub fn performance_record_manual_wheel(state: State<'_, AppState>, payload: Value) -> CommandResult<Value> {
-    let root = state.user_data.join("performance-results"); command_result((|| { fs::create_dir_all(&root)?; let path = root.join("manual-wheel-latest.json"); fs::write(&path, serde_json::to_vec_pretty(&payload)?)?; Ok(serde_json::json!({ "path": path })) })())
-}
-
 fn raw_body<'a>(request: &'a Request<'_>) -> CommandResult<&'a [u8]> {
     match request.body() {
         InvokeBody::Raw(bytes) => Ok(bytes),

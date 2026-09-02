@@ -14,6 +14,7 @@ export type InternalImageDropHandler = (
 interface UseImageImportOptions {
   api: Window['refCanvas'];
   scene: Scene;
+  defaultVideoSoundEnabled: boolean;
   commit(updater: (scene: Scene) => void): void;
   setSelectedIds(ids: string[]): void;
   setSelectedGroupId(id?: string): void;
@@ -26,6 +27,7 @@ interface UseImageImportOptions {
 export function useImageImport({
   api,
   scene,
+  defaultVideoSoundEnabled,
   commit,
   setSelectedIds,
   setSelectedGroupId,
@@ -86,7 +88,7 @@ export function useImageImport({
           posterAssetId: enriched.poster?.assetId,
           mediaKind: video ? 'video' : 'image',
           durationSec: enriched.asset.durationSec,
-          muted: video ? true : undefined,
+          muted: video ? !defaultVideoSoundEnabled : undefined,
           loop: video ? true : undefined,
           naturalWidth: dimensions.width,
           naturalHeight: dimensions.height,
@@ -152,7 +154,7 @@ export function useImageImport({
     setStatus(decoded.length === sources.length
       ? label
       : `${label}，${sources.length - decoded.length} 个无法解码`);
-  }, [api, commit, scene, setSelectedGroupId, setSelectedIds, setStatus]);
+  }, [api, commit, defaultVideoSoundEnabled, scene, setSelectedGroupId, setSelectedIds, setStatus]);
 
   const prepareAndAddImages = useCallback(async (
     sources: ImportedImage[],
@@ -305,19 +307,25 @@ export function useImageImport({
     };
     const paste = async (event: ClipboardEvent) => {
       const files = [...(event.clipboardData?.files ?? [])].filter(isSupportedMediaFile);
-      if (files.length && api) try {
+      if (api) try {
         const requestId = crypto.randomUUID();
-        setProgress({ requestId, completed: 0, total: files.length, stage: 'metadata' });
+        if (files.length) setProgress({ requestId, completed: 0, total: files.length, stage: 'metadata' });
         const localPaths = files.map((file) => filePath(file));
-        const sources = localPaths.every((value): value is string => Boolean(value))
+        const sources = files.length && localPaths.every((value): value is string => Boolean(value))
           ? await api.registerImagePaths(localPaths, 'clipboard', requestId)
           : await api.registerClipboardImage();
+        if (!sources.length) {
+          setProgress((current) => current?.requestId === requestId ? undefined : current);
+          return;
+        }
+        event.preventDefault();
         await prepareRef.current(sources, {
           screenX: lastPointerRef.current.x,
           screenY: lastPointerRef.current.y,
-          pack: files.length > 1,
+          pack: sources.length > 1,
         }, requestId);
       } catch (error) {
+        setProgress(undefined);
         setStatusRef.current(`粘贴媒体失败：${error instanceof Error ? error.message : String(error)}`);
       }
     };
