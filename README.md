@@ -1,7 +1,5 @@
 # Yoiniwa · 宵庭
 
-> 接手开发前请先阅读 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 和 [`docs/DEBUGGING.md`](./docs/DEBUGGING.md)。历史性能证据保存在 [`docs/performance/PERFORMANCE_AUDIT.md`](./docs/performance/PERFORMANCE_AUDIT.md)。
-
 Yoiniwa（宵庭）是一款 Windows x64、完全离线的参考图画板。项目使用 Tauri 2、Rust、React、TypeScript 和 PixiJS 构建；新建或保存工程默认使用 `.yoi` 扩展名，并会在 Windows 资源管理器显示画布缩略图。旧 `.refcanvas` 工程仍可打开，下一次保存会迁移为 `.yoi`。
 
 ## 已实现
@@ -35,7 +33,11 @@ npm run build:web
 npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
 ```
 
-Windows 安装包输出到 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`。`npm run dist` 会先重建 Explorer 缩略图提供程序，只有修改该 C++ 组件时才需要使用。
+Windows 安装包输出到 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis`。
+
+`npm run dist` 和上述 `npx tauri build` 都会通过 `beforeBuildCommand` 先运行 `npm run build:thumbnail-provider`，再构建前端。每次打包都会重建 Explorer 缩略图提供程序，即使已有 DLL 也不会跳过。因此，打包机器或 CI 必须安装 Microsoft C++ Build Tools（含 MSVC x64/x86 编译工具和 Windows SDK）；不要求安装完整 Visual Studio IDE。构建脚本通过 Visual Studio Installer 的 `vswhere.exe` 定位工具链。
+
+`npm run build:thumbnail-provider` 也可用于单独重建该 C++ 组件；`npm run build:web` 只构建前端，不会编译它。
 
 ## 常用操作
 

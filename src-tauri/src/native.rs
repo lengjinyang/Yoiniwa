@@ -434,7 +434,7 @@ impl NativeWindowManager {
         *self.shared.state.write() = next.clone();
         *self.shared.pointer_coordinate_space.lock() = None;
         if focusless_next && (!focusless_before || !previous.collaboration_mode && next.collaboration_mode) {
-            let _ = self.shared.app.state::<crate::state::AppState>().photoshop.warm();
+            self.shared.app.state::<crate::state::AppState>().photoshop.warm();
             self.shared.app.state::<crate::state::AppState>().photoshop.capture_focus();
         }
         if focusless_before && !focusless_next { let _ = main.set_focus(); }
@@ -792,7 +792,7 @@ fn focusless(state: &WindowState) -> bool { state.locked && state.always_on_top 
 fn raw_handle(window: &WebviewWindow) -> Result<u64> {
     // Match Electron: operate on the top-level root HWND, not a WebView2 child.
     unsafe {
-        let hwnd = HWND(window.hwnd()?.0 as *mut std::ffi::c_void);
+        let hwnd = HWND(window.hwnd()?.0);
         let root = GetAncestor(hwnd, GA_ROOT);
         let chosen = if root.0.is_null() { hwnd } else { root };
         Ok(chosen.0 as usize as u64)
@@ -809,7 +809,7 @@ fn normalize_helper_script(path: PathBuf) -> PathBuf {
 #[cfg(windows)]
 fn root_hwnd(window: &WebviewWindow) -> Result<HWND> {
     unsafe {
-        let hwnd = HWND(window.hwnd()?.0 as *mut std::ffi::c_void);
+        let hwnd = HWND(window.hwnd()?.0);
         let root = GetAncestor(hwnd, GA_ROOT);
         Ok(if root.0.is_null() { hwnd } else { root })
     }
@@ -916,7 +916,7 @@ fn set_always_on_top_screen_saver(window: &WebviewWindow, enabled: bool) -> Resu
 fn set_window_opacity(window: &WebviewWindow, opacity: f64) -> Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{SetLayeredWindowAttributes, LWA_ALPHA, WS_EX_LAYERED};
     unsafe {
-        let hwnd = HWND(window.hwnd()?.0 as *mut std::ffi::c_void);
+        let hwnd = HWND(window.hwnd()?.0);
         let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, current | WS_EX_LAYERED.0 as isize);
         SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), (opacity * 255.0).round() as u8, LWA_ALPHA)?;

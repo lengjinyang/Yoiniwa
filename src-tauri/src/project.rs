@@ -685,6 +685,22 @@ fn materialize_legacy_metadata(path: &Path, metadata: &mut PhotoshopProjectMetad
     Ok(sources.into_values().collect())
 }
 
+fn legacy_cache_matches(path: &Path, expected: u64, hash: &str) -> bool {
+    let Ok(file) = File::open(path) else { return false; };
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.len() == expected) { return false; }
+    let mut file = file.take(expected + 1);
+    let mut hasher = Sha256::new();
+    let mut copied = 0_u64;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        let Ok(read) = file.read(&mut buffer) else { return false; };
+        if read == 0 { break; }
+        copied += read as u64;
+        hasher.update(&buffer[..read]);
+    }
+    copied == expected && format!("{:x}", hasher.finalize()) == hash
+}
+
 fn read_legacy_project(path: &Path, assets: &SharedAssets) -> Result<(Scene, PhotoshopProjectMetadata)> {
     let file = File::open(path).context("该文件不是 Yoiniwa 画板")?;
     let mut archive = ZipArchive::new(file).context("该文件不是新版 Yoiniwa 画板，旧版场景格式已不受支持")?;
@@ -713,30 +729,39 @@ fn read_legacy_project(path: &Path, assets: &SharedAssets) -> Result<(Scene, Pho
         let mut entry = archive.by_name(&entry_name).with_context(|| format!("场景包缺少资源: {}", record.id))?;
         if entry.size() != record.byte_length { return Err(anyhow!("场景资源大小不匹配: {}", record.id)); }
         let cache_path = assets.asset_cache_dir().join(format!("{}{}", record.id, extension_for_mime(&record.mime_type)));
+        if legacy_cache_matches(&cache_path, record.byte_length, &record.hash) {
+            assets.register_existing(record.clone(), cache_path);
+            continue;
+        }
         let temporary = cache_path.with_extension(format!("{}.tmp", Uuid::new_v4()));
         if let Some(parent) = temporary.parent() { fs::create_dir_all(parent)?; }
-        let mut output = File::create(&temporary)?;
-        let mut hasher = Sha256::new();
-        let mut copied = 0_u64;
-        let mut buffer = vec![0_u8; 1024 * 1024];
-        loop {
-            let read = entry.read(&mut buffer)?;
-            if read == 0 { break; }
-            copied += read as u64;
-            if copied > record.byte_length {
-                drop(output);
-                let _ = fs::remove_file(&temporary);
-                return Err(anyhow!("场景资源大小超过记录: {}", record.id));
+        let extracted = (|| -> Result<()> {
+            let mut output = File::create(&temporary)?;
+            let mut hasher = Sha256::new();
+            let mut copied = 0_u64;
+            let mut buffer = vec![0_u8; 1024 * 1024];
+            loop {
+                let read = entry.read(&mut buffer)?;
+                if read == 0 { break; }
+                copied += read as u64;
+                if copied > record.byte_length { return Err(anyhow!("场景资源大小超过记录: {}", record.id)); }
+                output.write_all(&buffer[..read])?;
+                hasher.update(&buffer[..read]);
             }
-            output.write_all(&buffer[..read])?;
-            hasher.update(&buffer[..read]);
-        }
-        output.sync_all()?;
-        if copied != record.byte_length || format!("{:x}", hasher.finalize()) != record.hash {
-            let _ = fs::remove_file(&temporary); return Err(anyhow!("场景资源校验失败: {}", record.id));
-        }
-        if cache_path.exists() { fs::remove_file(&cache_path)?; }
-        fs::rename(temporary, &cache_path)?;
+            output.sync_all()?;
+            drop(output);
+            if copied != record.byte_length || format!("{:x}", hasher.finalize()) != record.hash {
+                return Err(anyhow!("场景资源校验失败: {}", record.id));
+            }
+            // Replace directly: an occupied destination must not be deleted first.
+            fs::rename(&temporary, &cache_path).with_context(|| format!(
+                "无法写入旧工程资源缓存 {}；文件可能正被占用或没有写入权限，请关闭占用程序或检查缓存目录权限后重试",
+                cache_path.display(),
+            ))?;
+            Ok(())
+        })();
+        if extracted.is_err() { let _ = fs::remove_file(&temporary); }
+        extracted?;
         assets.register_existing(record.clone(), cache_path);
     }
     if metadata.versions.len() > 10_000 { return Err(anyhow!("Photoshop 版本数量超过限制")); }
@@ -907,7 +932,9 @@ fn find_candidates(path: &Path) -> Result<Vec<(PathBuf, u64, SystemTime)>> {
         if !is_v4(&candidate) { continue; }
         if let Ok(repository) = YoiRepository::open(&candidate) {
             if candidate != path && primary_file_id.as_ref().is_some_and(|id| id != &repository.file_id) { continue; }
-            values.push((candidate.clone(), repository.head.generation, fs::metadata(candidate)?.modified().unwrap_or(UNIX_EPOCH)));
+            // Recovery files can disappear between validation and this metadata read.
+            let Ok(metadata) = fs::metadata(&candidate) else { continue; };
+            values.push((candidate, repository.head.generation, metadata.modified().unwrap_or(UNIX_EPOCH)));
         }
     }
     values.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.2.cmp(&left.2)));
@@ -1202,6 +1229,68 @@ mod tests {
         assert_eq!(stale.scene.unwrap().canvas.background, "#000");
 
         drop(projects);
+        assets.shutdown();
+        drop(assets);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn legacy_open_reuses_verified_cache_and_preserves_locked_mismatches() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use zip::{write::SimpleFileOptions, ZipWriter};
+
+        let root = std::env::temp_dir().join(format!("yoiniwa-legacy-cache-{}", Uuid::new_v4()));
+        let diagnostics = Arc::new(crate::diagnostics::DiagnosticsLog::create(&root));
+        let assets = Arc::new(crate::assets::AssetService::new(
+            root.clone(), crate::image_jobs::ImageJobQueue::new(1), diagnostics,
+        ).unwrap());
+        let bytes = b"verified cache";
+        let id = format!("{:x}", Sha256::digest(bytes));
+        let mut record: AssetRecord = serde_json::from_value(asset(&id)).unwrap();
+        record.byte_length = bytes.len() as u64;
+        let mut scene = empty_scene();
+        scene.assets.insert(id.clone(), record);
+        let project_path = root.join("legacy.yoi");
+        let write_project = |payload: &[u8]| {
+            let mut archive = ZipWriter::new(File::create(&project_path).unwrap());
+            archive.start_file("manifest.json", SimpleFileOptions::default()).unwrap();
+            archive.write_all(&serde_json::to_vec(&scene).unwrap()).unwrap();
+            archive.start_file(format!("assets/{id}.png"), SimpleFileOptions::default()).unwrap();
+            archive.write_all(payload).unwrap();
+            archive.finish().unwrap();
+        };
+        write_project(bytes);
+        let cache_path = assets.asset_cache_dir().join(format!("{id}.png"));
+        read_legacy_project(&project_path, &assets).unwrap();
+        assert_eq!(fs::read(&cache_path).unwrap(), bytes);
+
+        // Allow other readers, but deny writes/deletion just like an occupied cache.
+        let occupied = || OpenOptions::new().read(true).share_mode(1).open(&cache_path).unwrap();
+        let locked = occupied();
+        read_legacy_project(&project_path, &assets).unwrap();
+        drop(locked);
+        for invalid in [vec![b'x'], vec![b'x'; bytes.len()]] {
+            fs::write(&cache_path, invalid).unwrap();
+            read_legacy_project(&project_path, &assets).unwrap();
+            assert_eq!(fs::read(&cache_path).unwrap(), bytes);
+        }
+
+        let invalid = vec![b'x'; bytes.len()];
+        fs::write(&cache_path, &invalid).unwrap();
+        let locked = occupied();
+        let error = read_legacy_project(&project_path, &assets).unwrap_err().to_string();
+        assert!(error.contains("缓存") && error.contains("占用"), "{error}");
+        assert_eq!(fs::read(&cache_path).unwrap(), invalid);
+        assert_eq!(fs::read_dir(assets.asset_cache_dir()).unwrap().count(), 1);
+        drop(locked);
+
+        // A corrupt archive must not replace the existing cache or leave a temp file.
+        write_project(&invalid);
+        let error = read_legacy_project(&project_path, &assets).unwrap_err().to_string();
+        assert!(error.contains("校验失败"), "{error}");
+        assert_eq!(fs::read(&cache_path).unwrap(), invalid);
+        assert_eq!(fs::read_dir(assets.asset_cache_dir()).unwrap().count(), 1);
         assets.shutdown();
         drop(assets);
         let _ = fs::remove_dir_all(root);

@@ -1,3 +1,4 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { isVideoAsset } from '../domain/media';
 import type { AssetRecord, ImportedImage } from '../types';
 import { resolveVideoPlaybackUrl, videoPlaybackLookupFromApi } from './videoUrl';
@@ -64,7 +65,6 @@ function loadVideoElement(url: string) {
 async function probeVideoAsset(asset: AssetRecord, api?: Window['refCanvas']): Promise<ProbedVideo> {
   let url = await resolveVideoPlaybackUrl(asset.id, videoPlaybackLookupFromApi(api));
   if (!url && api?.assetFilePath) {
-    const { convertFileSrc } = await import('@tauri-apps/api/core');
     url = convertFileSrc(await api.assetFilePath(asset.id));
   }
   if (!url) throw new Error('视频播放地址尚未就绪');
