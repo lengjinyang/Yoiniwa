@@ -121,7 +121,7 @@ fn shell_thumbnail_png(path: &Path, edge: u32) -> Result<Vec<u8>> {
         let _ = DeleteObject(HGDIOBJ(bitmap.0));
         CoUninitialize();
         if copied == 0 { return Err(anyhow::anyhow!("GetDIBits 失败")); }
-        for chunk in pixels.chunks_exact_mut(4) {
+        for chunk in pixels.as_chunks_mut::<4>().0 {
             chunk.swap(0, 2);
             chunk[3] = 0xff;
         }
