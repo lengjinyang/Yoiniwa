@@ -50,7 +50,15 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: Yoiniwa v__VERSION__
-          releaseBody: Yoiniwa 0.2.1 Windows 安装版，修复启动时出现控制台窗口以及关闭该窗口导致程序退出的问题。
-          releaseDraft: false
+          releaseBody: |
+            Yoiniwa 0.2.2 Windows x64 稳定性更新。
+
+            - 修复打开无效工程后原画板无法保存，以及另存为当前工程被自身文件锁拒绝的问题。
+            - 修复并发导入图片的图层顺序和点击选择不一致，并为损坏图片导入显示失败原因。
+            - 统一画布缩放范围，避免连续缩放后图片消失及极端倍率下空间索引阻塞。
+            - 修复调整、删除和切换选择交错时的撤销历史污染，并合并同一 Windows 工程的重复最近记录。
+
+            下载下方 x64-setup.exe 安装；已有版本也可通过应用内更新升级。
+          releaseDraft: true
           uploadUpdaterJson: true
           args: --target x86_64-pc-windows-msvc --bundles nsis
