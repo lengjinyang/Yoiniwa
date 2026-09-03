@@ -4,6 +4,7 @@
   "version": "0.2.1",
   "identifier": "com.yoiniwa.app",
   "build": {
+    "additionalWatchFolders": ["../build"],
     "beforeDevCommand": "vite --strictPort",
     "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build:thumbnail-provider && npm run build:web",

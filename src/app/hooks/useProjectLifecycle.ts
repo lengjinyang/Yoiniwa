@@ -33,10 +33,11 @@ interface UseProjectLifecycleOptions {
 
 type PendingProjectChange = { kind: 'open'; path?: string } | { kind: 'new' };
 
-export interface ProjectSaveContext {
+export interface ProjectContext { isCurrent(): boolean }
+
+export interface ProjectSaveContext extends ProjectContext {
   sessionId: string | undefined;
   photoshopProject: PhotoshopProjectMetadata;
-  isCurrent(): boolean;
   release(): void;
 }
 
@@ -66,21 +67,26 @@ export function useProjectLifecycle({
   const openRef = useRef<(path?: string) => Promise<void>>(async () => undefined);
   photoshopMetadataRef.current = photoshopMetadata;
 
+  const captureProjectContext = useCallback((): ProjectContext | undefined => {
+    if (projectChangeRef.current.inFlight) return undefined;
+    const generation = projectChangeRef.current.generation;
+    return { isCurrent: () => !projectChangeRef.current.inFlight && generation === projectChangeRef.current.generation };
+  }, []);
+
   const captureProjectSave = useCallback((exclusive = false): ProjectSaveContext | undefined => {
-    if (projectChangeRef.current.inFlight || (exclusive && saveInFlightRef.current)) return undefined;
+    const context = captureProjectContext();
+    if (!context || (exclusive && saveInFlightRef.current)) return undefined;
     // User-initiated writes (including first Save As) must finish before a switch.
     // Background autosaves remain cancelable through the generation check.
     if (exclusive) saveInFlightRef.current = true;
-    const generation = projectChangeRef.current.generation;
     const sessionId = projectSessionIdRef.current;
     return {
       sessionId,
       photoshopProject: photoshopMetadataRef.current,
-      isCurrent: () => !projectChangeRef.current.inFlight
-        && generation === projectChangeRef.current.generation && sessionId === projectSessionIdRef.current,
+      isCurrent: () => context.isCurrent() && sessionId === projectSessionIdRef.current,
       release: () => { if (exclusive) saveInFlightRef.current = false; },
     };
-  }, []);
+  }, [captureProjectContext]);
 
   if (!autosaveCoordinatorRef.current) {
     autosaveCoordinatorRef.current = new AutosaveCoordinator((scene, revision) => autosaveExecuteRef.current(scene, revision));
@@ -255,9 +261,12 @@ export function useProjectLifecycle({
 
   const importScene = useCallback(async () => {
     if (!api) return;
+    const context = captureProjectContext();
+    if (!context) return;
     const requestId = beginOperation('import', '正在导入画板…');
     try {
       const result = await api.importScene();
+      if (!context.isCurrent()) { clearOperation(requestId); return; }
       if (result.canceled || !result.scene) {
         clearOperation(requestId);
         return;
@@ -280,9 +289,10 @@ export function useProjectLifecycle({
       const count = (merged?.imageIds.length ?? 0) + (merged?.groupIds.length ?? 0);
       settleOperation(requestId, 'success', `已导入 ${count} 个对象`);
     } catch (error) {
+      if (!context.isCurrent()) { clearOperation(requestId); return; }
       settleOperation(requestId, 'error', `导入画板失败：${String(error)}`);
     }
-  }, [api, beginOperation, clearOperation, history, setSelectedGroupId, setSelectedIds, settleOperation]);
+  }, [api, beginOperation, captureProjectContext, clearOperation, history, setSelectedGroupId, setSelectedIds, settleOperation]);
 
   const newSceneNow = useCallback(async () => {
     if (!beginProjectChange()) return;
@@ -358,6 +368,7 @@ export function useProjectLifecycle({
     setPhotoshopMetadata,
     photoshopMetadataRef,
     projectSessionIdRef,
+    captureProjectContext,
     captureProjectSave,
     liveViewportRef,
     displaySceneName,

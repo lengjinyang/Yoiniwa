@@ -35,6 +35,7 @@ export function useVisualNotes({
   const [eraserSize, setEraserSize] = useState<EraserSize>('medium');
   const [temporaryHidden, setTemporaryHidden] = useState(false);
   const [selectedMarkId, setSelectedMarkId] = useState<string>();
+  useEffect(() => { commitTransaction(); }, [commitTransaction, selectedMarkId]);
 
   useEffect(() => {
     setSelectedMarkId(undefined);
@@ -137,8 +138,8 @@ export function useVisualNotes({
     });
   }, [preview, selectedMarkId]);
   const endOpacityInteraction = useCallback(() => {
-    if (selectedMarkId) commitTransaction();
-  }, [commitTransaction, selectedMarkId]);
+    commitTransaction();
+  }, [commitTransaction]);
   const toggleNotesVisible = useCallback(() => {
     commit((scene) => { scene.visualNotes.visible = !scene.visualNotes.visible; });
   }, [commit]);

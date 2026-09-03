@@ -96,18 +96,6 @@ export default function App() {
     beginTransaction: history.beginTransaction,
     commitTransaction: history.commitTransaction,
   });
-  const imageImport = useImageImport({
-    api,
-    scene: history.scene,
-    defaultVideoSoundEnabled: preferences.defaultVideoSoundEnabled,
-    commit: history.commit,
-    setSelectedIds,
-    setSelectedGroupId,
-    setStatus,
-    internalDropMime: PHOTOSHOP_VERSION_PREVIEW_MIME,
-    internalDropHandlerRef: photoshopVersionPreviewDropRef,
-    lastPointerRef,
-  });
   const project = useProjectLifecycle({
     api,
     history,
@@ -118,6 +106,19 @@ export default function App() {
     beginOperation,
     settleOperation: settleCurrentOperation,
     clearOperation: clearCurrentOperation,
+  });
+  const imageImport = useImageImport({
+    api,
+    scene: history.scene,
+    captureProjectContext: project.captureProjectContext,
+    defaultVideoSoundEnabled: preferences.defaultVideoSoundEnabled,
+    commit: history.commit,
+    setSelectedIds,
+    setSelectedGroupId,
+    setStatus,
+    internalDropMime: PHOTOSHOP_VERSION_PREVIEW_MIME,
+    internalDropHandlerRef: photoshopVersionPreviewDropRef,
+    lastPointerRef,
   });
   const updater = useAppUpdater({
     api,

@@ -68,20 +68,29 @@ pub async fn app_update_install(app: AppHandle, state: State<'_, AppState>) -> C
     app.restart();
 }
 
+#[derive(Default, serde::Serialize)]
+pub struct ImageImportResult {
+    images: Vec<ImportedImage>,
+    failures: Vec<String>,
+}
+
 #[tauri::command(rename_all = "camelCase")]
-pub async fn images_import(app: AppHandle, state: State<'_, AppState>, request_id: Option<String>) -> CommandResult<Vec<ImportedImage>> {
+pub async fn images_import(app: AppHandle, state: State<'_, AppState>, request_id: Option<String>) -> CommandResult<ImageImportResult> {
     let Some(paths) = rfd::AsyncFileDialog::new()
         .add_filter("图片与视频", &["png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "webm", "mov", "m4v"])
         .add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp", "gif"])
         .add_filter("视频", &["mp4", "webm", "mov", "m4v"])
-        .pick_files().await else { return Ok(Vec::new()); };
+        .pick_files().await else { return Ok(ImageImportResult::default()); };
     let assets = state.assets.clone();
     let app_handle = app.clone();
     let raw_paths = paths.into_iter().map(|file| file.path().to_path_buf()).collect::<Vec<_>>();
     tauri::async_runtime::spawn_blocking(move || {
-        let total = raw_paths.len(); let mut imported = Vec::new();
+        let total = raw_paths.len(); let mut result = ImageImportResult::default();
         for (index, path) in raw_paths.iter().enumerate() {
-            if let Ok(image) = assets.register_path(path, "file") { imported.push(image); }
+            match assets.register_path(path, "file") {
+                Ok(image) => result.images.push(image),
+                Err(error) => result.failures.push(format!("{}: {error}", path.display())),
+            }
             if let Some(request_id) = request_id.as_deref() {
                 let _ = tauri::Emitter::emit(&app_handle, "images:prewarm-progress", serde_json::json!({
                     "requestId": request_id, "completed": index + 1, "total": total, "stage": "metadata",
@@ -89,7 +98,7 @@ pub async fn images_import(app: AppHandle, state: State<'_, AppState>, request_i
                 }));
             }
         }
-        Ok(imported)
+        Ok(result)
     }).await.map_err(|error| error.to_string())?.map_err(|error: anyhow::Error| error.to_string())
 }
 
@@ -202,7 +211,9 @@ pub async fn images_prewarm(app: AppHandle, state: State<'_, AppState>, ids: Vec
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn images_boost_resource(state: State<'_, AppState>, key: String, priority: f64) {
-    let _ = state.assets.boost_resource(&key, priority.round() as i32);
+    let assets = state.assets.clone();
+    // This notification may read cached pyramid files; keep it off the command thread.
+    tauri::async_runtime::spawn_blocking(move || assets.boost_resource(&key, priority.round() as i32));
 }
 #[tauri::command]
 pub fn images_performance_stats(state: State<'_, AppState>) -> crate::types::ImagePipelinePerformanceStats { state.assets.performance_stats() }

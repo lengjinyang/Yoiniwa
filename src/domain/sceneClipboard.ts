@@ -31,7 +31,8 @@ export function captureSceneSelection(scene: Scene, imageIds: string[], groupId?
   scene.visualNotes.marks.forEach((mark) => {
     if (mark.anchor.type === 'image' && images.has(mark.anchor.imageId)) markIds.add(mark.id);
   });
-  const assetIds = new Set(items.flatMap((item) => item.assetId ? [item.assetId] : []));
+  const assetIds = new Set(items.flatMap((item) => [item.assetId, 'posterAssetId' in item ? item.posterAssetId : undefined]
+    .filter((id): id is string => Boolean(id))));
   return structuredClone({
     items,
     groups: scene.groups.filter((group) => groups.has(group.id)),

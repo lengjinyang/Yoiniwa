@@ -54,6 +54,7 @@ export function useSceneClipboard({
       y: (pointer.y - viewport.y) / viewport.scale,
     });
     history.commit((scene) => {
+      scene.assets = next.assets;
       scene.items = next.items;
       scene.groups = next.groups;
       scene.visualNotes = next.visualNotes;

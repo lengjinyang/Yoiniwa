@@ -15,6 +15,13 @@ function scene(ids: string[]): Scene {
 }
 
 describe('SceneStore', () => {
+  it('hits the last rendered image when an older project has equal Z values', () => {
+    const source = scene(['under', 'top']);
+    source.items.forEach((item) => { item.zIndex = 4; });
+    const store = new SceneStore(source);
+    expect(store.images().at(-1)?.id).toBe('top');
+    expect(store.imageAtPoint({ x: 5, y: 5 })?.id).toBe('top');
+  });
   it('provides one indexed scene representation and z-sorted images', () => {
     const store = new SceneStore(scene(['a', 'b']));
     expect(store.node('a')?.kind).toBe('image');

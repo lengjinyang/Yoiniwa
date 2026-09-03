@@ -32,7 +32,18 @@ export function useSceneHistory() {
     return next;
   }, []);
 
+  const commitTransaction = useCallback(() => {
+    if (!transactionStart.current) return;
+    past.current.push(transactionStart.current);
+    if (past.current.length > 200) past.current.shift();
+    transactionStart.current = undefined;
+    future.current = [];
+    setDirty(true);
+    advanceRevision();
+  }, [advanceRevision]);
+
   const commit = useCallback((updater: (draft: Scene) => void) => {
+    commitTransaction();
     setScene((current) => {
       past.current.push(current);
       if (past.current.length > 200) past.current.shift();
@@ -44,7 +55,7 @@ export function useSceneHistory() {
     });
     setDirty(true);
     advanceRevision();
-  }, [advanceRevision]);
+  }, [advanceRevision, commitTransaction]);
 
   const updateViewport = useCallback((viewport: Scene['viewport']) => {
     pendingViewport.current = viewport;
@@ -82,17 +93,8 @@ export function useSceneHistory() {
     });
   }, []);
 
-  const commitTransaction = useCallback(() => {
-    if (!transactionStart.current) return;
-    past.current.push(transactionStart.current);
-    if (past.current.length > 200) past.current.shift();
-    transactionStart.current = undefined;
-    future.current = [];
-    setDirty(true);
-    advanceRevision();
-  }, [advanceRevision]);
-
   const undo = useCallback(() => {
+    commitTransaction();
     setScene((current) => {
       const previous = past.current.pop();
       if (!previous) return current;
@@ -101,9 +103,10 @@ export function useSceneHistory() {
       advanceRevision();
       return previous;
     });
-  }, [advanceRevision]);
+  }, [advanceRevision, commitTransaction]);
 
   const redo = useCallback(() => {
+    commitTransaction();
     setScene((current) => {
       const next = future.current.pop();
       if (!next) return current;
@@ -112,7 +115,7 @@ export function useSceneHistory() {
       advanceRevision();
       return next;
     });
-  }, [advanceRevision]);
+  }, [advanceRevision, commitTransaction]);
 
   const load = useCallback((next: Scene) => {
     if (viewportFrame.current !== undefined) cancelAnimationFrame(viewportFrame.current);

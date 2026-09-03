@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { LassoPoint } from '../../canvas/publicTypes';
 import {
   memberBounds,
@@ -34,6 +34,8 @@ export function useSceneWorkspaceController({
   const [selectedGroupId, setSelectedGroupId] = useState<string>();
   const [lassoPoints, setLassoPoints] = useState<LassoPoint[]>();
   const [lassoClearRequest, setLassoClearRequest] = useState(0);
+  const { commitTransaction } = history;
+  useEffect(() => { commitTransaction(); }, [commitTransaction, selectedIds, selectedGroupId]);
 
   const selectedItems = useMemo(() => selectedIds.flatMap((id) => {
     const item = history.scene.items.find((value) => value.id === id);
@@ -116,8 +118,8 @@ export function useSceneWorkspaceController({
   }, [history, selectedIds.length]);
 
   const commitSelectedAdjustment = useCallback(() => {
-    if (selectedIds.length) history.commitTransaction();
-  }, [history, selectedIds.length]);
+    history.commitTransaction();
+  }, [history]);
 
   const restoreFullImages = useCallback(() => {
     const cropped = selectedItems.filter((item) => item.crop.x !== 0 || item.crop.y !== 0

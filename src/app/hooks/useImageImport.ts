@@ -5,6 +5,7 @@ import { isSupportedMediaFile, isVideoAsset, MEDIA_FILE_PATTERN, toSceneItem } f
 import { memberBounds, reconcileMemberBounds } from '../../domain/scene';
 import type { ImagePrewarmProgress, ImportedImage, Scene, SceneItem } from '../../types';
 import { enrichImportedMedia, enrichImportedMediaBatch, mapWithConcurrency } from '../../runtime/videoProbe';
+import type { ProjectContext } from './useProjectLifecycle';
 
 export type InternalImageDropHandler = (
   value: string,
@@ -14,6 +15,7 @@ export type InternalImageDropHandler = (
 interface UseImageImportOptions {
   api: Window['refCanvas'];
   scene: Scene;
+  captureProjectContext(): ProjectContext | undefined;
   defaultVideoSoundEnabled: boolean;
   commit(updater: (scene: Scene) => void): void;
   setSelectedIds(ids: string[]): void;
@@ -27,6 +29,7 @@ interface UseImageImportOptions {
 export function useImageImport({
   api,
   scene,
+  captureProjectContext,
   defaultVideoSoundEnabled,
   commit,
   setSelectedIds,
@@ -41,6 +44,7 @@ export function useImageImport({
     sources: ImportedImage[],
     placement?: { screenX: number; screenY: number; pack?: boolean },
     existingRequestId?: string,
+    context?: ProjectContext,
   ) => Promise<void>>(async () => undefined);
   const setStatusRef = useRef(setStatus);
   setStatusRef.current = setStatus;
@@ -54,8 +58,9 @@ export function useImageImport({
   const addImages = useCallback(async (
     sources: ImportedImage[],
     placement?: { screenX: number; screenY: number; pack?: boolean },
+    context?: ProjectContext,
   ) => {
-    if (!sources.length) return;
+    if (!sources.length || !context?.isCurrent()) return;
     const videoCount = sources.filter((source) => isVideoAsset(source.asset)).length;
     const imageCount = sources.length - videoCount;
     setStatus(videoCount && !imageCount
@@ -100,7 +105,7 @@ export function useImageImport({
           flipX: false,
           flipY: false,
           opacity: 1,
-          zIndex: scene.items.length + index,
+          zIndex: index,
           locked: false,
           crop: { x: 0, y: 0, width: dimensions.width, height: dimensions.height },
         });
@@ -109,6 +114,7 @@ export function useImageImport({
         return { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
     });
+    if (!context.isCurrent()) return;
     const decoded = decodedResults.filter(
       (value): value is { ok: true; source: ImportedImage; item: SceneItem } => value.ok,
     );
@@ -131,11 +137,12 @@ export function useImageImport({
       window.innerWidth / Math.max(1, window.innerHeight),
     );
     commit((nextScene) => {
+      const firstZ = nextScene.items.reduce((next, item) => Math.max(next, item.zIndex + 1), 0);
       decoded.forEach(({ item, source }) => {
         nextScene.assets[item.assetId!] = source.asset;
         if (source.poster) nextScene.assets[source.poster.assetId] = source.poster.asset;
       });
-      nextScene.items.push(...placed);
+      nextScene.items.push(...placed.map((item, index) => ({ ...item, zIndex: firstZ + index })));
       placed.forEach((item) => reconcileMemberBounds(
         nextScene,
         { type: 'image', id: item.id },
@@ -160,10 +167,11 @@ export function useImageImport({
     sources: ImportedImage[],
     placement?: { screenX: number; screenY: number; pack?: boolean },
     existingRequestId?: string,
+    context = captureProjectContext(),
   ) => {
-    if (!sources.length) return;
+    if (!sources.length || !context?.isCurrent()) return;
     if (!api) {
-      await addImages(sources, placement);
+      await addImages(sources, placement, context);
       return;
     }
     const requestId = existingRequestId ?? crypto.randomUUID();
@@ -181,6 +189,7 @@ export function useImageImport({
     };
     try {
       const enriched = await enrichImportedMediaBatch(sources, api);
+      if (!context.isCurrent()) return;
       const warmIds = [...new Set(enriched.flatMap((source) => {
         if (isVideoAsset(source.asset)) return [];
         return [source.assetId];
@@ -188,37 +197,44 @@ export function useImageImport({
       const result = warmIds.length
         ? await api.prewarmImages(warmIds, requestId)
         : { canceled: false, completed: 0, total: 0, failed: 0 };
+      if (!context.isCurrent()) return;
       if (result.canceled) {
         setStatus('已取消导入');
         return;
       }
       decodePreviewsInBackground(enriched);
       if (result.failed) setStatus(`${result.failed} 个预览生成失败，将在显示时重试`);
-      await addImages(enriched, placement);
+      await addImages(enriched, placement, context);
     } catch {
+      if (!context.isCurrent()) return;
       // A cache failure must not make a supported image impossible to import.
       decodePreviewsInBackground(sources);
-      await addImages(sources, placement);
+      await addImages(sources, placement, context);
     } finally {
       setProgress((current) => current?.requestId === requestId ? undefined : current);
     }
-  }, [addImages, api, setStatus]);
+  }, [addImages, api, captureProjectContext, setStatus]);
 
   prepareRef.current = prepareAndAddImages;
 
   const importImages = useCallback(async () => {
     if (!api) return;
+    const context = captureProjectContext();
+    if (!context) return;
     const requestId = crypto.randomUUID();
     setProgress({ requestId, completed: 0, total: 1, stage: 'hash', fraction: 0 });
     try {
-      const sources = await api.importImages(requestId);
-      if (sources.length) await prepareAndAddImages(sources, undefined, requestId);
-      else setProgress((current) => current?.requestId === requestId ? undefined : current);
+      const result = await api.importImages(requestId);
+      await prepareAndAddImages(result.images, undefined, requestId, context);
+      if (result.failures.length && context.isCurrent()) {
+        setStatus(`${result.failures.length} 个文件导入失败：${result.failures.join('；')}`);
+      }
     } catch (error) {
+      if (context.isCurrent()) setStatus(`导入失败：${String(error)}`);
+    } finally {
       setProgress((current) => current?.requestId === requestId ? undefined : current);
-      setStatus(`导入失败：${String(error)}`);
     }
-  }, [api, prepareAndAddImages, setStatus]);
+  }, [api, captureProjectContext, prepareAndAddImages, setStatus]);
 
   useEffect(() => {
     const filePath = (file: File) => {
@@ -238,11 +254,14 @@ export function useImageImport({
     const drop = async (event: DragEvent) => {
       event.preventDefault();
       event.stopPropagation();
+      const context = captureProjectContext();
+      if (!context) return;
       const internalValue = event.dataTransfer?.getData(internalDropMime);
       if (internalValue && await internalDropHandlerRef.current(internalValue, {
         screenX: event.clientX,
         screenY: event.clientY,
       })) return;
+      if (!context.isCurrent()) return;
       const files = [...(event.dataTransfer?.files ?? [])].filter(isSupportedMediaFile);
       if (!api) return;
       const requestId = files.length ? crypto.randomUUID() : undefined;
@@ -292,6 +311,7 @@ export function useImageImport({
             return;
           }
         }
+        if (!context.isCurrent()) return;
         if (!sources.length) {
           setStatusRef.current('没有识别到可导入的图片或视频');
           return;
@@ -300,20 +320,25 @@ export function useImageImport({
           screenX: event.clientX,
           screenY: event.clientY,
           pack: sources.length > 1,
-        }, requestId);
+        }, requestId, context);
       } catch (error) {
-        setStatusRef.current(`拖入媒体失败：${error instanceof Error ? error.message : String(error)}`);
+        if (context.isCurrent()) setStatusRef.current(`拖入媒体失败：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        setProgress((current) => current?.requestId === requestId ? undefined : current);
       }
     };
     const paste = async (event: ClipboardEvent) => {
+      const context = captureProjectContext();
+      if (!context) return;
+      const requestId = crypto.randomUUID();
       const files = [...(event.clipboardData?.files ?? [])].filter(isSupportedMediaFile);
       if (api) try {
-        const requestId = crypto.randomUUID();
         if (files.length) setProgress({ requestId, completed: 0, total: files.length, stage: 'metadata' });
         const localPaths = files.map((file) => filePath(file));
         const sources = files.length && localPaths.every((value): value is string => Boolean(value))
           ? await api.registerImagePaths(localPaths, 'clipboard', requestId)
           : await api.registerClipboardImage();
+        if (!context.isCurrent()) return;
         if (!sources.length) {
           setProgress((current) => current?.requestId === requestId ? undefined : current);
           return;
@@ -323,10 +348,11 @@ export function useImageImport({
           screenX: lastPointerRef.current.x,
           screenY: lastPointerRef.current.y,
           pack: sources.length > 1,
-        }, requestId);
+        }, requestId, context);
       } catch (error) {
-        setProgress(undefined);
-        setStatusRef.current(`粘贴媒体失败：${error instanceof Error ? error.message : String(error)}`);
+        if (context.isCurrent()) setStatusRef.current(`粘贴媒体失败：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        setProgress((current) => current?.requestId === requestId ? undefined : current);
       }
     };
     window.addEventListener('dragenter', over, true);
@@ -334,6 +360,8 @@ export function useImageImport({
     window.addEventListener('drop', drop, true);
     window.addEventListener('paste', paste);
     const disposeNativeDrop = api?.onFilesDropped(({ paths, clientX, clientY }) => {
+      const context = captureProjectContext();
+      if (!context) return;
       try {
         const mediaPaths = paths.filter((path) => MEDIA_FILE_PATTERN.test(path));
         if (!mediaPaths.length) {
@@ -349,12 +377,15 @@ export function useImageImport({
         const requestId = crypto.randomUUID();
         setProgress({ requestId, completed: 0, total: mediaPaths.length, stage: 'metadata' });
         void api.registerImagePaths(mediaPaths, 'drop', requestId).then(async (sources) => {
+          if (!context.isCurrent()) return;
           if (!sources.length) {
             setStatusRef.current('媒体注册失败，请确认格式为 png/jpg/webp/mp4/webm/mov');
             return;
           }
-          await prepareRef.current(sources, { screenX: clientX, screenY: clientY, pack: sources.length > 1 }, requestId);
-        }).catch((error) => setStatusRef.current(`拖入媒体失败：${error instanceof Error ? error.message : String(error)}`));
+          await prepareRef.current(sources, { screenX: clientX, screenY: clientY, pack: sources.length > 1 }, requestId, context);
+        }).catch((error) => {
+          if (context.isCurrent()) setStatusRef.current(`拖入媒体失败：${error instanceof Error ? error.message : String(error)}`);
+        }).finally(() => setProgress((current) => current?.requestId === requestId ? undefined : current));
       } catch (error) {
         setStatusRef.current(`拖入媒体失败：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -366,21 +397,25 @@ export function useImageImport({
       window.removeEventListener('paste', paste);
       disposeNativeDrop?.();
     };
-  }, [api, internalDropHandlerRef, internalDropMime, lastPointerRef]);
+  }, [api, captureProjectContext, internalDropHandlerRef, internalDropMime, lastPointerRef]);
 
   useEffect(() => {
     if (!api || new URLSearchParams(window.location.search).get('smoke') !== '1') return undefined;
     const addTestPaths = (event: Event) => {
+      const context = captureProjectContext();
+      if (!context) return;
       const paths = (event as CustomEvent<string[]>).detail;
       void api.registerImagePaths(paths, 'drop').then((sources) => prepareRef.current(sources, {
         screenX: window.innerWidth / 2,
         screenY: window.innerHeight / 2,
         pack: sources.length > 1,
-      })).catch((error) => setStatusRef.current(`冒烟媒体载入失败：${String(error)}`));
+      }, undefined, context)).catch((error) => {
+        if (context.isCurrent()) setStatusRef.current(`冒烟媒体载入失败：${String(error)}`);
+      });
     };
     window.addEventListener('refcanvas-smoke-add-paths', addTestPaths);
     return () => window.removeEventListener('refcanvas-smoke-add-paths', addTestPaths);
-  }, [api]);
+  }, [api, captureProjectContext]);
 
   return { progress, importImages, prepareAndAddImages };
 }

@@ -52,6 +52,7 @@ export function UnsavedChangesDialog({
       <div className="close-confirm-copy">
         <p>{description}</p>
         <small>{warning}</small>
+        {saving && <progress className="save-progress" aria-label="正在保存画板" />}
       </div>
       <footer>
         <button className="close-confirm-cancel" type="button" disabled={saving} onClick={onCancel}>取消</button>

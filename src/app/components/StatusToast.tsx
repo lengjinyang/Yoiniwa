@@ -7,7 +7,9 @@ interface StatusToastProps {
 
 export function StatusToast({ status, operation }: StatusToastProps) {
   if (!operation && !status) return null;
-  return <div className="status-toast no-drag" role={operation?.status === 'error' ? 'alert' : 'status'}>
+  const saving = operation?.kind === 'save' && operation.status === 'running';
+  return <div className={`${saving ? 'import-progress' : 'status-toast'} no-drag`} role={operation?.status === 'error' ? 'alert' : 'status'}>
     {operation?.message ?? status}
+    {saving && <progress className="save-progress" aria-label="正在保存画板" />}
   </div>;
 }

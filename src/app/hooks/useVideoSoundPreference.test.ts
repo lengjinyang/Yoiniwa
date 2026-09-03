@@ -29,6 +29,7 @@ describe('video sound preference', () => {
       preferences = useAppPreferences({ api: undefined, drawingCollaborationModeRef: { current: false }, setStatus });
       importer = useImageImport({
         api: undefined, scene, defaultVideoSoundEnabled: preferences.defaultVideoSoundEnabled,
+        captureProjectContext: () => ({ isCurrent: () => true }),
         commit: (update) => update(scene), setSelectedIds: vi.fn(), setSelectedGroupId: vi.fn(), setStatus,
         internalDropMime: 'test/drop', internalDropHandlerRef: { current: async () => false },
         lastPointerRef: { current: { x: 0, y: 0 } },

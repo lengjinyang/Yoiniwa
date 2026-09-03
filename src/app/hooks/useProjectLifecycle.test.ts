@@ -29,6 +29,7 @@ function setup() {
   const api = {
     openProject: vi.fn(async () => ({ canceled: false, sessionId: 'B', path: 'B.yoi', scene: { ...scene, name: 'B' } })),
     closeProject: vi.fn(async () => undefined),
+    importScene: vi.fn<NonNullable<Window['refCanvas']>['importScene']>(),
     commitProject: vi.fn<NonNullable<Window['refCanvas']>['commitProject']>(async () => ({
       sessionId: 'A', scene, path: 'A.yoi', committedRevision: 20,
     })),
@@ -57,6 +58,22 @@ beforeEach(() => {
 });
 
 describe('project save isolation', () => {
+  it('discards a board import that completes after a project switch', async () => {
+    const { controller, api, history } = setup();
+    const result = deferred<Awaited<ReturnType<typeof api.importScene>>>();
+    const context = controller.captureProjectContext()!;
+    // A save/Save As may replace the storage session without changing the board.
+    controller.projectSessionIdRef.current = 'saved-session';
+    expect(context.isCurrent()).toBe(true);
+    api.importScene.mockReturnValueOnce(result.promise);
+    const importing = controller.importScene();
+    await controller.newScene();
+    expect(context.isCurrent()).toBe(false);
+    result.resolve({ canceled: false, scene: history.scene });
+    await importing;
+    expect(history.commit).not.toHaveBeenCalled();
+  });
+
   it('discards old autosave previews and responses when another project opens', async () => {
     for (const stage of ['preview', 'commit']) {
       const { controller, api, history } = setup();

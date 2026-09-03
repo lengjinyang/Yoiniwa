@@ -9,7 +9,7 @@ import { selectVisibleTiles, shouldUseTiledImage, type TileAddress } from '../te
 import type { TextureManager } from '../textures/TextureManager';
 import { RenderObjectRegistry } from './RenderObjectRegistry';
 
-interface TileSet { signature: string; container: Container; grayscale: ColorMatrixFilter; textureKeys: string[] }
+interface TileSet { signature: string; container: Container; content: Container; grayscale: ColorMatrixFilter; textureKeys: string[] }
 interface PendingTileSet {
   signature: string; token: number; item: SceneItem; levelWidth: number; levelHeight: number;
   tiles: TileAddress[]; entries: GpuTextureEntry[];
@@ -126,39 +126,37 @@ export class TileRenderer {
 
   private createTileSet(pending: PendingTileSet, item: SceneItem): TileSet {
     const container = new Container();
+    const content = new Container();
     const grayscale = new ColorMatrixFilter();
     container.sortableChildren = true;
+    container.addChild(content);
     pending.tiles.forEach((tile, index) => {
       const entry = pending.entries[index];
       const sprite = new Sprite(entry.texture);
       const left = Math.max(0, tile.column * IMAGE_TILE_SIZE - IMAGE_TILE_GUTTER);
       const top = Math.max(0, tile.row * IMAGE_TILE_SIZE - IMAGE_TILE_GUTTER);
-      const sourceX = left / pending.levelWidth * pending.item.naturalWidth;
-      const sourceY = top / pending.levelHeight * pending.item.naturalHeight;
-      const sourceWidth = entry.width / pending.levelWidth * pending.item.naturalWidth;
-      const sourceHeight = entry.height / pending.levelHeight * pending.item.naturalHeight;
-      sprite.position.set(
-        (sourceX - pending.item.crop.x) / pending.item.crop.width * pending.item.width - pending.item.width / 2,
-        (sourceY - pending.item.crop.y) / pending.item.crop.height * pending.item.height - pending.item.height / 2,
-      );
-      sprite.width = sourceWidth / pending.item.crop.width * pending.item.width;
-      sprite.height = sourceHeight / pending.item.crop.height * pending.item.height;
-      container.addChild(sprite);
+      // Source-normalized tiles follow live resize/crop edits without reloading textures.
+      sprite.position.set(left / pending.levelWidth, top / pending.levelHeight);
+      sprite.width = entry.width / pending.levelWidth;
+      sprite.height = entry.height / pending.levelHeight;
+      content.addChild(sprite);
     });
-    const mask = new Graphics().rect(-pending.item.width / 2, -pending.item.height / 2, pending.item.width, pending.item.height).fill(0xffffff);
+    const mask = new Graphics().rect(-0.5, -0.5, 1, 1).fill(0xffffff);
     container.addChild(mask);
     container.mask = mask;
-    const tileSet = { signature: pending.signature, container, grayscale,
+    const tileSet = { signature: pending.signature, container, content, grayscale,
       textureKeys: pending.entries.map((entry) => entry.key) };
     this.updateTileSet(tileSet, item);
     return tileSet;
   }
 
   private updateTileSet(tileSet: TileSet, item: SceneItem) {
-    const { container, grayscale } = tileSet;
+    const { container, content, grayscale } = tileSet;
     container.position.set(item.x + item.width / 2, item.y + item.height / 2);
     container.rotation = item.rotation * Math.PI / 180;
-    container.scale.set(item.flipX ? -1 : 1, item.flipY ? -1 : 1);
+    container.scale.set(item.width * (item.flipX ? -1 : 1), item.height * (item.flipY ? -1 : 1));
+    content.position.set(-item.crop.x / item.crop.width - 0.5, -item.crop.y / item.crop.height - 0.5);
+    content.scale.set(item.naturalWidth / item.crop.width, item.naturalHeight / item.crop.height);
     container.alpha = item.opacity;
     container.visible = !item.hidden;
     container.zIndex = item.zIndex + 0.5;

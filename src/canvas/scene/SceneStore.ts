@@ -33,7 +33,8 @@ export class SceneStore {
       if (this.hiddenImages.has(id)) return;
       const node = this.nodes.get(id);
       if (!node || node.kind !== 'image' || !pointInImage(node.value, point)) return;
-      if (!topmost || node.value.zIndex > topmost.zIndex) topmost = node.value;
+      // Match stable render ordering for legacy projects containing equal Z values.
+      if (!topmost || node.value.zIndex >= topmost.zIndex) topmost = node.value;
     });
     return topmost;
   }

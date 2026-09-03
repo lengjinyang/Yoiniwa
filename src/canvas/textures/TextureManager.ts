@@ -9,13 +9,14 @@ import type { ImageResourceBoost } from './imageResourceBoost';
 
 interface TextureUploadRenderer { texture: { initSource(source: Texture['source']): void } }
 interface TextureRequest { assetId: string; mip: number; tileX?: number; tileY?: number; url: string; priority: number }
+interface InFlightTextureRequest { promise: Promise<GpuTextureEntry>; priority: number }
 
 export class TextureManager {
   readonly requests = new TextureRequestScheduler();
   readonly uploads = new GpuUploadQueue();
   readonly cpu: CpuImageCache;
   readonly gpu: GpuTextureCache;
-  private readonly inFlight = new Map<string, Promise<GpuTextureEntry>>();
+  private readonly inFlight = new Map<string, InFlightTextureRequest>();
   private readonly boostImageResource?: ImageResourceBoost;
   private destroyed = false;
   cacheHits = 0;
@@ -38,18 +39,22 @@ export class TextureManager {
     const cached = this.gpu.pin(key);
     if (cached) { this.cacheHits += 1; return Promise.resolve(cached); }
     this.cacheMisses += 1;
-    this.boostImageResource?.(request.url, request.priority);
-    let pending = this.inFlight.get(key);
-    if (!pending) {
+    let inFlight = this.inFlight.get(key);
+    if (!inFlight) {
+      if (!this.cpu.peek(key)) this.boostImageResource?.(request.url, request.priority);
       const generation = this.requests.currentGeneration;
-      pending = this.requests.request({
+      const pending = this.requests.request({
         key, generation, priority: request.priority,
         run: () => this.decodeAndUpload(key, request, generation),
       }).catch((error: unknown) => { this.lastError = error instanceof Error ? error.message : String(error); throw error; });
-      this.inFlight.set(key, pending);
-      void pending.finally(() => { if (this.inFlight.get(key) === pending) this.inFlight.delete(key); }).catch(() => undefined);
+      inFlight = { promise: pending, priority: request.priority };
+      this.inFlight.set(key, inFlight);
+      void pending.finally(() => { if (this.inFlight.get(key)?.promise === pending) this.inFlight.delete(key); }).catch(() => undefined);
+    } else if (request.priority > inFlight.priority) {
+      inFlight.priority = request.priority;
+      if (!this.cpu.peek(key)) this.boostImageResource?.(request.url, request.priority);
     }
-    return pending.then(() => {
+    return inFlight.promise.then(() => {
       const acquired = this.gpu.pin(key);
       if (!acquired) throw new StaleTextureRequestError('Uploaded texture was evicted before acquisition');
       return acquired;
@@ -100,7 +105,6 @@ export class TextureManager {
   }
 
   private async fetchDerivative(request: TextureRequest) {
-    this.boostImageResource?.(request.url, request.priority);
     // Native protocol waits for mip/tile generation and returns 200 (Electron contract).
     const response = await fetch(request.url);
     if (this.destroyed) throw new StaleTextureRequestError('Texture manager is destroyed');

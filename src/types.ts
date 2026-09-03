@@ -235,7 +235,7 @@ export interface VideoFrameTimingIndex {
 }
 
 export interface RefCanvasAPI {
-  importImages(requestId?: string): Promise<ImportedImage[]>;
+  importImages(requestId?: string): Promise<{ images: ImportedImage[]; failures: string[] }>;
   registerImagePaths(paths: string[], sourceType: ImageItem['sourceType'], requestId?: string): Promise<ImportedImage[]>;
   registerImageUrls(urls: string[]): Promise<ImportedImage[]>;
   registerClipboardImage(): Promise<ImportedImage[]>;

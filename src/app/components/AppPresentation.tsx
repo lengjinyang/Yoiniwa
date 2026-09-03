@@ -421,7 +421,8 @@ export function AppOverlays({
       </section>}
     </div>}
 
-    <ImageImportProgress progress={imageImport.progress} />
-    {!imageImport.progress && <StatusToast status={statusOperations.status} operation={statusOperations.operation} />}
+    {imageImport.progress && !(statusOperations.operation?.kind === 'save' && statusOperations.operation.status === 'running')
+      ? <ImageImportProgress progress={imageImport.progress} />
+      : <StatusToast status={statusOperations.status} operation={statusOperations.operation} />}
   </>;
 }

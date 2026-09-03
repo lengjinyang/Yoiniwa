@@ -12,6 +12,7 @@
     "lint:rust": "cargo clippy --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --all-targets",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc",
     "build:thumbnail-provider": "node scripts/build-thumbnail-provider.mjs",
+    "prepare:icons": "node scripts/prepare-icons.mjs",
     "lint": "eslint src scripts --max-warnings=0",
     "check:dead-code": "knip",
     "check": "npm run typecheck && npm run lint && npm run check:dead-code && npm test",

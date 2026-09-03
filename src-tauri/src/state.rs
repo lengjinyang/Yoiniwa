@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs, collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -89,13 +89,15 @@ impl AppState {
     pub fn recent_scenes(&self) -> Vec<RecentScene> {
         let mut state = self.read_persisted_state();
         let source = state.get("recent").and_then(|value| value.as_array()).cloned().unwrap_or_default();
+        let mut seen = HashSet::new();
         let recent = source.iter().filter_map(|value| {
             Some(RecentScene {
                 path: value.get("path")?.as_str()?.to_string(), name: value.get("name")?.as_str()?.to_string(),
                 opened_at: value.get("openedAt")?.as_str()?.to_string(),
                 asset_ids: value.get("assetIds").and_then(|value| serde_json::from_value(value.clone()).ok()),
             })
-        }).filter(|item| Path::new(&item.path).try_exists().unwrap_or(false)).collect::<Vec<_>>();
+        }).filter(|item| Path::new(&item.path).try_exists().unwrap_or(false)
+            && seen.insert(crate::paths::path_key(Path::new(&item.path)))).collect::<Vec<_>>();
         if recent.len() != source.len() {
             if let Some(object) = state.as_object_mut() {
                 object.insert("recent".into(), serde_json::to_value(&recent).unwrap_or_else(|_| Value::Array(Vec::new())));
@@ -111,7 +113,8 @@ impl AppState {
         let path_string = path.to_string_lossy().into_owned();
         let name = path.file_stem().and_then(|name| name.to_str()).unwrap_or("未命名画板");
         let mut recent = object.get("recent").and_then(|value| value.as_array()).cloned().unwrap_or_default();
-        recent.retain(|item| item.get("path").and_then(|value| value.as_str()) != Some(&path_string));
+        recent.retain(|item| item.get("path").and_then(|value| value.as_str())
+            .is_none_or(|value| !crate::paths::same_path(Path::new(value), path)));
         recent.insert(0, json!({
             "path": path_string, "name": name, "openedAt": chrono::Utc::now().to_rfc3339(), "assetIds": asset_ids,
         }));
@@ -122,7 +125,8 @@ impl AppState {
         let mut state = self.read_persisted_state();
         let object = state.as_object_mut().ok_or_else(|| anyhow!("state.json 格式无效"))?;
         let mut recent = object.get("recent").and_then(|value| value.as_array()).cloned().unwrap_or_default();
-        recent.retain(|item| item.get("path").and_then(|value| value.as_str()).is_none_or(|value| !value.eq_ignore_ascii_case(path)));
+        recent.retain(|item| item.get("path").and_then(|value| value.as_str())
+            .is_none_or(|value| !crate::paths::same_path(Path::new(value), Path::new(path))));
         object.insert("recent".into(), Value::Array(recent));
         self.write_persisted_state(&state)?;
         Ok(self.recent_scenes())

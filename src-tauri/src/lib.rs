@@ -9,6 +9,7 @@ mod diagnostics;
 mod image_jobs;
 mod image_pipeline;
 mod native;
+mod paths;
 mod photoshop;
 mod photoshop_versions;
 mod project;
